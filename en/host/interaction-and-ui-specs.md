@@ -319,16 +319,21 @@ When a session disconnects, dim the terminal canvas and center a disconnection n
 **Structure**:
 - **Header (32px, bottom divider)**: left = `route` (accent) + “Tunnels” + active tunnel count badge; right = `plus` (expand new form) + `x` (close panel).
 - **Tunnel list, one row per tunnel**:
-  - First row: status dot (green = active) + tunnel name, such as `MySQL Forwarding` + type label on the right (`Local` with `accent-dim` / `Remote` with an `info` background / `Dynamic`, extensible).
+  - First row: status dot (green = active) + tunnel name, such as `MySQL Forwarding` + type label on the right (`Local` with `accent-dim` / `Remote` with an `info` background / `Dynamic`, extensible) + an outlined `AUTO` badge when automatic reconnect is on.
   - Detail row (10px muted monospaced): `L 3306 → db-prod-01:3306` / `R 6379 → localhost:6379`.
+  - Status row: uptime while active, otherwise the status text.
+  - **Statistics row** (10px muted monospaced; the description row the `fuXS7` draft reserved): `3 conns · 1.4 MB`, calling out the live count when connections are transferring (`3 conns (2 live) · 1.4 MB`), and “No connections yet” before anything has connected. The byte figure combines both directions.
   - On hover, show actions: enable/disable toggle, edit, delete.
 - **New Tunnel form (`plus` expands, `tunNewForm`)**:
   - Title: `circle-plus` + “New Tunnel”.
   - One row with three fields: **Type** drop-down (Local L / Remote R / Dynamic D, 80px) + **Local Port** input + **Remote Address** input (`host:port`).
+  - Check boxes: “Forward to the server itself” (locks the target to 127.0.0.1) and “Reconnect automatically after a dropout” (**off by default**).
   - Button row, right aligned: `Cancel` (outlined) / `Create` (solid accent, `plus` + “Create”).
 - **Interaction logic**:
   - Attempt to establish forwarding immediately after creation. Success = green dot + increment badge; failure = red dot + error message.
-  - A tunnel follows the lifecycle of its SSH session. When the session disconnects, the tunnel is disabled and paused; after reconnecting, it can be restored with one click.
+  - Local and dynamic forwards run a **local port-occupancy precheck** before binding, reporting “local port 27017 is already in use by another program” instead of a low-level socket error.
+  - A tunnel does **not** follow the lifecycle of a terminal tab: creating or starting one while disconnected opens a background connection dedicated to tunnels, and that connection is dropped once the server's last tunnel is removed.
+  - When the host session drops, its tunnels are marked stopped; those with “reconnect automatically after a dropout” are redialed and rebuilt on their own (failures back off from 10s to 5min), and the rest wait for a one-click start. **A tunnel the user stopped by hand is never brought back up automatically.**
   - Type descriptions: local forwarding (`-L`), remote forwarding (`-R`), dynamic SOCKS (`-D`).
 
 ---
