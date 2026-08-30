@@ -59,7 +59,7 @@ Terminal ANSI palette: `term-red/green/yellow/blue/magenta/cyan/white` = `#FF6B6
 ### 1.3 Shapes and Spacing
 
 - Corner radius: floating panels 6–8, buttons/input fields 3, badges 2, label dots circular.
-- Floating panel shadows: small panel `blur16 / #00000060 / y+4`; large dialog `blur32 / #00000080 / y+8`.
+- Floating panel shadows: **every overlay and self-drawn window card shares one token**, `VelaShadowWindow` (two layers: a near one that firms the edge, a far one that spreads). Dark `0 1 3 #40000000, 0 4 12 #66000000`; light `0 1 3 #1A000000, 0 4 12 #33000000`. **Reach (offsetY + blur) is capped at 16**, matching the card margin — a self-drawn transparent window can only paint its shadow inside the window rectangle, and anything past the margin is cut into a smear by the window edge. Opacity must differ per theme; the same dense black under a light card looks dirty. Values and reasoning live in `DESIGN.md` §4.5 in the code repository.
 - Use **lucide** as the unified icon library, at sizes 11–16.
 - Common row heights: toolbar rows 28–36, list rows 28–38, status bar 24.
 

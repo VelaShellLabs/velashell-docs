@@ -69,5 +69,5 @@
 
 ## Overlays (Later)
 - Command palette `FN5dM`, 560px; transfer component `9Ralg`, 280px; tunnel `fuXS7`, 320px; resource monitor `EP3Gd`, 280px (padding12 gap8); context menu `e6klM`, 200px (padding[4,0]).
-- Small overlays: cornerRadius 6 + `bg-surface` + 1px `border-secondary` (outer) + shadow blur16 #00000060 y+4.
-- Large dialogs: cornerRadius 8 + shadow blur32 #00000080 y+8 (Settings 720, New Connection 500, Password Verification 420).
+- Small overlays: cornerRadius 6 + `bg-surface` + 1px `border-secondary` (outer) + the `VelaShadowWindow` shadow token (see "Floating panel shadows" in the interaction specs). **Corner radius does not clip content by itself**: when a card holds a scrolling list or a solid block that runs to its edge (the unread bar, say), wrap that content in a Border with the inner radius (outer − 1px stroke) and `ClipToBounds=True` — putting `ClipToBounds` on the card itself clips away its own shadow.
+- Large dialogs: cornerRadius 8 + the same `VelaShadowWindow` token (Settings 720, New Connection 500, Password Verification 420). **There is only one shadow language for overlays** — large dialogs do not get their own, or two overlays on screen at once end up disagreeing about depth.
