@@ -41,6 +41,9 @@ zh/                    en/                    内容
 | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | `vela-plugin`、`VelaShell.PluginSdk.Build` |
 | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | `dotnet new velaplugin` 模板 |
 | [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins) | 第一方插件(Redis / S3 / Telnet / Serial) |
+| [velashell-markets](https://github.com/VelaShellLabs/velashell-markets) | 插件市场:上传、审核、检索与分发 |
+| [velashell-identity](https://github.com/joesdu/velashell-identity) | 统一认证服务(OIDC / OpenIddict):生态的信任根,下游只验令牌 |
+| [velashell-feeds](https://github.com/joesdu/velashell-feeds) | 资讯服务:CVE 聚合与公告/广告投放,给消息中心供稿 |
 
 ## 改文档
 

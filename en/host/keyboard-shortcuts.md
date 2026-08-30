@@ -99,6 +99,8 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Select the previous suggestion | `Up` | Only while the suggestion popup is open |
 | Insert the selected suggestion | `Enter` | Only while the suggestion popup is open |
 | Dismiss the suggestion popup | `Esc` | Only while the suggestion popup is open |
+| Dismiss the suggestion popup | `Ctrl+C` | Only while the suggestion popup is open |
+| Dismiss the suggestion popup | `Left Click` | Only while the suggestion popup is open |
 | Fall through to the shell native completion | `Tab` | — |
 | Accept the inline (ghost) suggestion | `Right` | — |
 | Accept the inline (ghost) suggestion | `End` | — |

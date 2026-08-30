@@ -66,7 +66,7 @@ The current Settings Center contains 9 top-level entries and approximately 80 vi
 
 | ID | Priority | Item | Current state | Recommendation | Condition for showing again | Status |
 |---|---|---|---|---|---|---|
-| R-01 | P1 | Check for updates at startup | Disabled, unimplemented | Hide from ordinary settings | Update service and update source integration are complete | ✅ Hidden (the General page retains a comment placeholder explaining the condition for restoration) |
+| R-01 | P1 | Check for updates at startup | Disabled, unimplemented | Hide from ordinary settings | Update service and update source integration are complete | ✅ **Restored (2026-08-30)** — the condition is met: the message center uses it to decide whether to check for a new version at startup, and posts a message that opens the About page when one is found (see [message-center-and-feed.md](message-center-and-feed.md)). The switch previously had no consumer anywhere in the repository |
 | R-02 | P1 | Update channel | Disabled, unimplemented | Hide | Stable and preview update sources are supported | ✅ Hidden (the entire "Updates" group was removed; the About page's "Check for updates" was also changed to honestly say "The update service is not yet connected" instead of pretending that the application is up to date) |
 | R-03 | P1 | Download updates automatically | Disabled, unimplemented | Hide | Automatic download and installation flow is complete | ✅ Hidden |
 | R-04 | P1 | Master password protection | Disabled, unimplemented | Hide | Key derivation, unlocking, and credential migration are fully implemented | ✅ Hidden (a comment explains that current credentials are encrypted with a local machine key) |

@@ -113,7 +113,8 @@ From top to bottom:
    - Quick Connect input (`bg-input`, 32px): enter `user@host[:port]` directly and press Enter to connect.
    - “Recent Connections” group heading + the 3 most recent rows (`user@host` + time). Click fills the input; double-click connects directly.
    - The quick command and recent connection areas can be collapsed and resized vertically. The collapsed state and last expanded height are stored locally and restored at the next startup.
-4. **Bottom user bar (40px, top divider)**: left = current user avatar + `root`; right = settings gear (opens §14 Settings) + theme switch and other icons.
+4. **Bottom user bar (40px, top divider)**: left = current user avatar + `root`; right, in order: `bell` message center, `plug` plugin manager, `settings` gear (opens §14 Settings).
+   - **Message center (`bell`)**: a 6px accent dot appears at the bell's top-right when unread messages exist (24px leaves no room for a number, and a dot says "there is something new" well enough). Clicking toggles a 360px non-modal overlay **anchored bottom-left, next to the bell**. It holds messages worth keeping and revisiting (available updates, announcements and security items from a subscribed feed) and deliberately **excludes runtime alerts** — fingerprint changes and session drops each have their own immediate feedback, and mixing them in would bury what needs reading. See [message-center-and-feed.md](message-center-and-feed.md).
 
 ---
 

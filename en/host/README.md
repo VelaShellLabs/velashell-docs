@@ -21,6 +21,7 @@ Architecture, design specs and research for the VelaShell main application.
 | --- | --- |
 | [xshell-compatible-login.md](xshell-compatible-login.md) | Xshell-compatible external launch for jump servers, and its security model |
 | [tunnel-feature-planning.md](tunnel-feature-planning.md) | Port-forwarding tunnel design |
+| [message-center-and-feed.md](message-center-and-feed.md) | The sidebar bell, the news-feed JSON contract and targeting rules (read this to build the push backend) |
 | [route-tracing-design.md](route-tracing-design.md) | Traceroute and geographic visualisation |
 | [sftp-dual-pane-winscp-gap-analysis.md](sftp-dual-pane-winscp-gap-analysis.md) | Dual-pane SFTP vs WinSCP, item by item |
 | [ftp-client-feasibility-research.md](ftp-client-feasibility-research.md) | Trade-offs behind FTP / FTPS support |
