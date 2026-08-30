@@ -114,7 +114,7 @@ From top to bottom:
    - “Recent Connections” group heading + the 3 most recent rows (`user@host` + time). Click fills the input; double-click connects directly.
    - The quick command and recent connection areas can be collapsed and resized vertically. The collapsed state and last expanded height are stored locally and restored at the next startup.
 4. **Bottom user bar (40px, top divider)**: left = current user avatar + `root`; right, in order: `bell` message center, `plug` plugin manager, `settings` gear (opens §14 Settings).
-   - **Message center (`bell`)**: a 6px accent dot appears at the bell's top-right when unread messages exist (24px leaves no room for a number, and a dot says "there is something new" well enough). Clicking toggles a 360px non-modal overlay **anchored bottom-left, next to the bell**. It holds messages worth keeping and revisiting (available updates, announcements and security items from a subscribed feed) and deliberately **excludes runtime alerts** — fingerprint changes and session drops each have their own immediate feedback, and mixing them in would bury what needs reading. See [message-center-and-feed.md](message-center-and-feed.md).
+   - **Message center (`bell`)**: a 6px accent dot appears at the bell's top-right when unread messages exist (24px leaves no room for a number, and a dot says "there is something new" well enough). Clicking toggles a 360px non-modal overlay **anchored bottom-left, next to the bell**, which can be dragged anywhere in the window by its header (the position is remembered across sessions). It holds messages worth keeping and revisiting (available updates, announcements and security items from a subscribed feed) and deliberately **excludes runtime alerts** — fingerprint changes and session drops each have their own immediate feedback, and mixing them in would bury what needs reading. See [message-center-and-feed.md](message-center-and-feed.md).
 
 ---
 
@@ -472,7 +472,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 1. **Floating panel levels**: Settings/New Connection/Password are **modal dialogs** (centered + overlay); the command palette is **quasi-modal** (overlay, close with Esc); file transfer/Tunnel/Resource Monitor are **non-modal floating panels** (no overlay, can coexist with the main interface).
 2. **Singletons**: the command palette, tunnel panel, resource monitor panel, and file transfer component are each global singletons. Repeated triggers focus the existing instance instead of creating another.
 3. **Screen/window boundary avoidance**: all mouse-following or anchor-following floating panels automatically flip direction at an edge and remain fully visible.
-4. **Position memory**: persist the drag positions of the file transfer component and tunnel panel.
+4. **Position memory**: persist the drag positions of the file transfer component, the message center, and the tunnel panel.
 5. **Theme linkage**: all floating panels follow the global dark/light theme in real time.
 6. **Resource panel hover timing**: start the 400ms timer on entering a tab name and cancel it when the pointer leaves. Close only after leaving the combined panel-and-tab area, with a debounce of ~150ms, to avoid flashing out while moving toward the panel.
 7. **Transfer/tunnel and session lifecycle**: when a session disconnects, pause its tunnels and transfers and show a notice. If an active transfer exists before closing the session, ask for confirmation.

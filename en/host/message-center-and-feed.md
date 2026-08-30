@@ -28,7 +28,10 @@ unread messages exist, a 6px accent dot appears at its top-right — there is on
 little for a number, and "is there anything new" needs no more than a dot.
 
 The panel is a 360px non-modal overlay **anchored bottom-left, next to the bell** (an overlay should
-grow from the button that opens it).
+grow from the button that opens it). **Dragging its header moves it anywhere inside the window**; it
+is clamped back into view when it would leave, and the position is written on mouse-up
+(`ui-layout/notification-panel`) so the next open comes back where you left it — sharing the
+`PanelDragHandler` / `IDraggablePanel` pair with the file-transfer toast rather than a second copy.
 
 - **Header**: bell + "Messages" + unread badge | Unread (toggle) · Mark all read · Clear · Close
 - **Each message**:
@@ -37,7 +40,12 @@ grow from the button that opens it).
   - First line: kind badge (News / Update / Security / Offer; `warning` and `critical` severities
     switch to an outlined warning colour) + relative time
   - Title (wraps), body (two lines max, then ellipsis)
-  - Destination line: action label + `›`, and **external links also show the host name**
+  - Destination line, **justified**: host name pinned left, action label + `›` pinned right, and only
+    **external links carry a host name**. The action sits on the right because the pointer is already
+    there — the per-row delete button and the scrollbar both live on that edge — which makes the trip
+    from seeing it to clicking it the shortest. Host names vary in length (in-app jumps have none at
+    all), so letting one push the other around would leave the action starting at a different x on
+    every row; pinning each to its own edge keeps both columns straight
 - **The whole row is clickable** — it navigates and marks the message read. The click target is a
   transparent button rather than a gesture on a Border, so keyboard Tab reaches it and focus and
   disabled states follow Avalonia's button semantics.
