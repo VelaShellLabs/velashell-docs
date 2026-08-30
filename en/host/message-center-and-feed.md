@@ -73,10 +73,18 @@ neighbouring page.
 > service, with an administrator allow-list). Self-hosted feeds are still fine — the format in this
 > section is the only contract between them.
 
-Set an **https** address under Settings → General → Message center → News feed.
-**Leave it empty and nothing is subscribed — not a single request is sent.** A terminal client quietly
-phoning home on a timer is the kind of thing people get asked about in enterprise environments, so it
-has to be switched on deliberately by the user or the deployment.
+The address lives under Settings → General → Message center → News feed and must be **https**.
+It **ships pointed at the official feed** (`NotificationOptions.OfficialFeedUrl`): a security
+advisory is worth something only if it arrives before the user goes looking for it, and a feed
+that is off by default is one almost nobody ever turns on — the CISA KEV entries, the ones that
+mean "someone is exploiting this right now", would reach no one.
+
+The cost of that default has to be stated rather than hidden: a periodic outbound request now
+happens **by default**, which is why it is written into the "Network connections" list in the
+client's `PRIVACY.md`. **Clear the field and not a single request is sent** — a terminal client
+quietly phoning home on a timer is the kind of thing people get asked about in enterprise
+environments, so that exit has to stay open, and pointing the field at a self-hosted feed is
+equally supported.
 
 Outbound traffic uses the process-wide `HttpClient.DefaultProxy` (installed by `VelaWebProxy`), so it
 automatically honours Settings → Network proxy, on the same path as update checks and Gist sync.
@@ -170,7 +178,7 @@ A "Message center" section was added under Settings → General (`AppSettings.No
 | Setting | Default | Notes |
 | --- | --- | --- |
 | Announce available updates | On | Post "update available" into the message center |
-| News feed | **Empty** | https address; empty means no subscription and no network activity |
+| News feed | **The official feed**, `https://feeds.easilynet.top/feed.json` | https address; swap in your own, or **clear it for no subscription and no network activity** |
 | Fetch interval (hours) | 6 | Minimum 1; the feed is also fetched once at startup |
 | Receive promotional messages | On | Turning it off drops `kind = promotion` items; announcements and security news still arrive |
 
