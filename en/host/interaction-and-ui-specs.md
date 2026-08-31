@@ -409,7 +409,7 @@ The left side contains navigation sections and the right side shows the correspo
 | Page | Frame | Implementation status (2026-07-12) |
 |---|---|---|
 | General | `2BIRD` | Startup/tray/language/connection defaults/session logs/import/export/behavior and automatic reconnect; the unimplemented “Updates” and “Master Password” groups are hidden |
-| Appearance | `ZAbb9` | Theme (dark/light/follow system, live preview), accent color, UI font/size, opacity, terminal colors and color schemes (default follows theme: Dracula for dark / Solarized Light for light) |
+| Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color, UI font/size, opacity, terminal colors and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
 | Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; unimplemented “Load into Agent” is hidden |
 | Keyboard Shortcuts | `YQvri` | **Defined as a read-only “Keyboard Shortcut Reference”** (customization is not supported by product decision), with entries checked one by one against actual bindings |
@@ -421,6 +421,42 @@ The left side contains navigation sections and the right side shows the correspo
 | Support and Donations | — (new) | Alipay/WeChat/Wise donation and contribution guidance |
 
 Common interaction: click on the left to switch; scroll on the right; Appearance provides live preview (save persists changes, cancel rolls them back); “Restore Defaults” and “Clear History” show confirmation dialogs; `Ctrl+,` opens Settings.
+
+### 14.1 Named themes (2026-08-31)
+
+A theme is no longer a dark/light switch — it is a complete palette. Twelve ship in the box — seven dark, five light — plus a
+“follow system” pseudo-theme that resolves to VelaDark / VelaLight by OS appearance. Every theme
+carries a **paired terminal color scheme** whose background equals the UI's terminal-canvas color:
+the terminal and the chrome around it are one plane, and a mismatch shows up as a visible seam.
+
+| Theme | Base | Lineage | Paired terminal scheme |
+| --- | --- | --- | --- |
+| VelaDark (factory default, id `dark`) | dark | Dracula | Dracula |
+| One Dark (`one-dark`) | dark | One Dark | One Dark |
+| Tokyo Night (`tokyo-night`) | dark | Tokyo Night | Tokyo Night |
+| Nord (`nord`) | dark | Nord | Nord |
+| Everforest (`everforest`) | dark | Everforest | Everforest Dark |
+| Obsidian (`obsidian`) | dark | neutral near-black (OLED) | Obsidian |
+| Gruvbox (`gruvbox`) | dark | Gruvbox | Gruvbox Bright |
+| VelaLight (`light`) | light | Alucard | Alucard |
+| One Light (`one-light`) | light | One Light | One Light |
+| Rosé Pine Dawn (`rose-pine-dawn`) | light | Rosé Pine Dawn | Rosé Pine Dawn |
+| GitHub Light (`github-light`) | light | GitHub Light | GitHub Light |
+| Sakura (`sakura`) | light | pink, in-house | Sakura |
+
+- The persisted value is the id above; `dark` / `light` keep their historical values, so existing
+  configurations need no migration.
+- The **first entry** in the terminal color-scheme dropdown is “Follow theme (<paired scheme>)”:
+  picking it follows the theme (no color overrides at all, so the terminal changes with the theme).
+  Every entry below it pins that scheme; the paired one still carries a “(default)” suffix to show
+  where it comes from. Editing the foreground/background/cursor/selection color while following
+  counts as choosing your own colors, and leaves the following state.
+- Following is recorded **explicitly** in `Appearance.TerminalColorsFollowTheme`, never re-derived by
+  comparing colors against the factory values — that comparison could not tell “picked Dracula” from
+  “following the theme”, which made picking Dracula under a non-Dracula theme a no-op.
+- Palettes are defined by the host's `UiThemeCatalog` (seed colors) and `ThemeTokenApplier`
+  (derivation rules); the token list and rules live in `DESIGN.md` §2 of the VelaShell repository.
+- Plugins still see only `dark` / `light` / `system` — named themes are not part of the plugin contract.
 
 ---
 
