@@ -69,5 +69,5 @@
 
 ## 浮层（后续）
 - 命令面板 `FN5dM` 560px、传输组件 `9Ralg` 280px、隧道 `fuXS7` 320px、资源监控 `EP3Gd` 280px(padding12 gap8)、右键菜单 `e6klM` 200px(padding[4,0])。
-- 小浮层：cornerRadius 6 + `bg-surface` + 1px `border-secondary`(outer) + 阴影 blur16 #00000060 y+4。
-- 大弹窗：cornerRadius 8 + 阴影 blur32 #00000080 y+8（设置 720、新建连接 500、密码验证 420）。
+- 小浮层：cornerRadius 6 + `bg-surface` + 1px `border-secondary`(outer) + 阴影令牌 `VelaShadowWindow`（见交互与界面规格「浮层阴影」）。**圆角不会自己裁剪内容**：卡片里若有滚动列表或通到边缘的实心色块（如未读竖条），需要一层带内圆角（外圆角 − 1px 描边）且 `ClipToBounds=True` 的 Border 包住内容——`ClipToBounds` 写在卡片自己身上会把它的投影一起裁掉。
+- 大弹窗：cornerRadius 8 + 同一个 `VelaShadowWindow` 阴影令牌（设置 720、新建连接 500、密码验证 420）。**浮层的投影语言只有一套**——大弹窗不另配一份，否则同屏两个浮层的层级感会互相打架。
