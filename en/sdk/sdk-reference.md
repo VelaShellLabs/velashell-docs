@@ -1,6 +1,6 @@
 # Plugin SDK Reference
 
-> Applies to **SDK 1.5.0 / apiLevel 1**
+> Applies to **SDK 2.0.0 / apiLevel 2**
 > See also (other repositories): [Development Guide](../templates/dev-guide.md) (tutorial) · [CLI Manual](../cli/cli.md) · [Packaging and Publishing](../templates/publishing.md)
 
 This page is the **lookup-oriented** view of the SDK: package layout, contract surface, what each
@@ -11,13 +11,13 @@ step-by-step walkthrough, read the [Development Guide](../templates/dev-guide.md
 
 ## 1. Packages
 
-| Package | Repository | Referenced by | Contents |
-| --- | --- | --- | --- |
-| **`VelaShell.PluginSdk.Build`** | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | **the plugin project (this one only)** | MSBuild props/targets, a version-pinned Avalonia, the bundled packer, manifest validation, the `PackVpx` target |
-| `VelaShell.PluginSdk` | this repository | pulled in transitively | The contract assembly: entry interface, `IPluginContext` and every capability interface, DTOs, manifest model, `.vpx` container, host registry |
-| `VelaShell.PluginSdk.Testing` | this repository | the plugin's **test** project | `TestPluginContext` and in-memory doubles for every capability |
-| `VelaShell.Plugin.Cli` | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | developer machine (dotnet tool) | `vela-plugin`: inner loop, validation, packing, signing, health check |
-| `VelaShell.Plugin.Templates` | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | developer machine | `dotnet new velaplugin` / `velaplugin-ui` |
+| Package                         | Repository                                                                                | Referenced by                          | Contents                                                                                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`VelaShell.PluginSdk.Build`** | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli)             | **the plugin project (this one only)** | MSBuild props/targets, a version-pinned Avalonia, the bundled packer, manifest validation, the `PackVpx` target                                |
+| `VelaShell.PluginSdk`           | this repository                                                                           | pulled in transitively                 | The contract assembly: entry interface, `IPluginContext` and every capability interface, DTOs, manifest model, `.vpx` container, host registry |
+| `VelaShell.PluginSdk.Testing`   | this repository                                                                           | the plugin's **test** project          | `TestPluginContext` and in-memory doubles for every capability                                                                                 |
+| `VelaShell.Plugin.Cli`          | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli)             | developer machine (dotnet tool)        | `vela-plugin`: inner loop, validation, packing, signing, health check                                                                          |
+| `VelaShell.Plugin.Templates`    | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | developer machine                      | `dotnet new velaplugin` / `velaplugin-ui`                                                                                                      |
 
 The `PackageReference` line a plugin project needs — **including the current version** — lives in the
 [Development Guide](../templates/dev-guide.md). That version belongs to
@@ -51,12 +51,12 @@ public sealed class DemoPlugin : IVelaPlugin
 }
 ```
 
-| Constraint | Detail |
-| --- | --- |
-| Activation limit | 10 seconds; **stretched to 10 minutes while a debugger is attached** |
-| Deactivation limit | About 2 seconds (application exit path), abandoned on timeout |
-| Long-running work | Start your own background task and observe `context.Shutdown` |
-| Resource cleanup | Commands and event subscriptions registered through the SDK are cleaned up by the host; never put your own types into host static fields or long-lived events, or the ALC cannot be reclaimed |
+| Constraint         | Detail                                                                                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Activation limit   | 10 seconds; **stretched to 10 minutes while a debugger is attached**                                                                                                                          |
+| Deactivation limit | About 2 seconds (application exit path), abandoned on timeout                                                                                                                                 |
+| Long-running work  | Start your own background task and observe `context.Shutdown`                                                                                                                                 |
+| Resource cleanup   | Commands and event subscriptions registered through the SDK are cleaned up by the host; never put your own types into host static fields or long-lived events, or the ALC cannot be reclaimed |
 
 ---
 
@@ -68,48 +68,83 @@ agnostic** (async methods, DTOs, opaque ids only), so the same plugin source run
 
 ### 3.1 Identity and infrastructure
 
-| Member | Description |
-| --- | --- |
-| `PluginId` / `PluginVersion` | From `plugin.json` |
-| `DataDirectory` | Private directory (already created). **All local writes belong here**; it is deleted on uninstall |
-| `Host` (`IHostInfo`) | Host version, apiLevel, current locale and theme |
-| `Log` (`IPluginLogger`) | `Debug/Info/Warn/Error` into the host log pipeline (prefixed with the plugin id) |
-| `Shutdown` | Shutdown token: capability calls may start failing afterwards, so wind down |
+| Member                       | Description                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PluginId` / `PluginVersion` | From `plugin.json`                                                                                                                                                       |
+| `DataDirectory`              | Private directory (already created). **All local writes belong here**; it is deleted on uninstall                                                                        |
+| `Host` (`IHostInfo`)         | Host version, apiLevel, current locale. `Host.Theme` only holds the coarse `dark`/`light`/`system` value — for the actual theme identity and palette see `Theme` in §3.5 |
+| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error` into the host log pipeline (prefixed with the plugin id)                                                                                         |
+| `Shutdown`                   | Shutdown token: capability calls may start failing afterwards, so wind down                                                                                              |
 
 ### 3.2 Data
 
-| Capability | Key methods | Notes |
-| --- | --- | --- |
-| `Storage` (`IPluginStorage`) | `GetAsync<T>` / `SetAsync<T>` / `RemoveAsync` / `GetKeysAsync` | Per-plugin namespaced KV backed by SonnetDB (JSON files in headless setups) |
-| `Secrets` (`ISecretsApi`) | `GetAsync` / `SetAsync` / `DeleteAsync` | Encrypted private key-value store. **No plaintext fallback** — unavailable is reported as unavailable |
-| `TimeSeries` (`ITimeSeriesApi`) | `OpenAsync` / `ListAsync` / `DropAsync`; on a series `WriteAsync` / `QueryAsync` / `CountAsync` / `DistinctTagValuesAsync` / `DeleteAsync` | A private embedded time-series store (append by time, retrieve by tag) |
+| Capability                      | Key methods                                                                                                                                | Notes                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `Storage` (`IPluginStorage`)    | `GetAsync<T>` / `SetAsync<T>` / `RemoveAsync` / `GetKeysAsync`                                                                             | Per-plugin namespaced KV backed by SonnetDB (JSON files in headless setups)                           |
+| `Secrets` (`ISecretsApi`)       | `GetAsync` / `SetAsync` / `DeleteAsync`                                                                                                    | Encrypted private key-value store. **No plaintext fallback** — unavailable is reported as unavailable |
+| `TimeSeries` (`ITimeSeriesApi`) | `OpenAsync` / `ListAsync` / `DropAsync`; on a series `WriteAsync` / `QueryAsync` / `CountAsync` / `DistinctTagValuesAsync` / `DeleteAsync` | A private embedded time-series store (append by time, retrieve by tag)                                |
 
 ### 3.3 Sessions and remote access
 
-| Capability | Key methods | Notes |
-| --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`; `ListSavedAsync` / `OpenAsync` / `CloseAsync` (SDK TBD) | Enumerate SSH sessions, **redacted, never credentials**. The last three **ask the host to open a saved session** — only saved configurations (the user decides which machines exist), credentials never pass through the plugin, and the host may refuse (`PluginPermissionDeniedException`); `SessionOpenOptions.Reason` is shown to the user verbatim. A failure to connect raises `PluginSessionOpenException` — "you may not" and "it did not work" call for different handling |
-| `RemoteFs` (`IRemoteFsApi`) | directory / attributes / read / write / transfer / rename / delete | SFTP over an existing session |
-| `RemoteExec` (`IRemoteExecApi`) | `RunAsync` (whole result) / `StreamAsync` (per line) | A separate channel — **never the user's terminal** |
-| `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | A **raw byte duplex stream** to a remote endpoint (Docker Engine API, tar streams). `inProcess` only |
-| `Terminal` (`ITerminalApi`) | `GetOutputAsync` / `SearchOutputAsync` / `WriteAsync` | Read/search session output; **writing input requires user consent** (revocable on the manager page) |
+| Capability                          | Key methods                                                        | Notes                                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `Sessions` (`ISessionsApi`)         | `ListAsync` / `GetAsync`                                           | Enumerate SSH sessions, **redacted, never credentials**                                              |
+| `RemoteFs` (`IRemoteFsApi`)         | directory / attributes / read / write / transfer / rename / delete | SFTP over an existing session                                                                        |
+| `RemoteExec` (`IRemoteExecApi`)     | `RunAsync` (whole result) / `StreamAsync` (per line)               | A separate channel — **never the user's terminal**                                                   |
+| `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync`                             | A **raw byte duplex stream** to a remote endpoint (Docker Engine API, tar streams). `inProcess` only |
+| `Terminal` (`ITerminalApi`)         | `GetOutputAsync` / `SearchOutputAsync` / `WriteAsync`              | Read/search session output; **writing input requires user consent** (revocable on the manager page)  |
 
 ### 3.4 UI and extension points
 
-| Capability | Key methods | Notes |
-| --- | --- | --- |
-| `Commands` (`ICommandsApi`) | `Register` / `TryExecute` | Command ids must be prefixed by the plugin id; manifest placeholders are replaced by real handlers on activation |
-| `Ui` (`IUiApi`) | `ShowPanelAsync(options, contentFactory)` | Present your own Avalonia controls: dockable main-window tabs in `inProcess`, standalone card windows in `isolated` |
-| `TerminalView` (`ITerminalViewApi`) | `Create(...)` | **Borrows the host's terminal emulator** (VT parsing, screen buffer, selection, IME, key encoding) as a control you embed in your own UI. `inProcess` only |
-| `Protocols` (`IProtocolsApi`) | register a protocol implementation | Your own remote **file** protocol, a first-class citizen of the connection page next to SSH/SFTP/FTP. `inProcess` only |
-| `Workspaces` (`IWorkspacesApi`) | register a workspace provider | **Non-file** connection types (Redis, MySQL, …) whose session document you render entirely. `inProcess` only |
-| `Clipboard` (`IClipboardApi`) | text read/write | System clipboard |
-| `Events` (`IHostEvents`) | session connect/disconnect, theme and locale changes | Subscriptions are cleaned up by the host on deactivation |
+| Capability                          | Key methods                                          | Notes                                                                                                                                                      |
+| ----------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Commands` (`ICommandsApi`)         | `Register` / `TryExecute`                            | Command ids must be prefixed by the plugin id; manifest placeholders are replaced by real handlers on activation                                           |
+| `Ui` (`IUiApi`)                     | `ShowPanelAsync(options, contentFactory)`            | Present your own Avalonia controls: dockable main-window tabs in `inProcess`, standalone card windows in `isolated`                                        |
+| `TerminalView` (`ITerminalViewApi`) | `Create(...)`                                        | **Borrows the host's terminal emulator** (VT parsing, screen buffer, selection, IME, key encoding) as a control you embed in your own UI. `inProcess` only |
+| `Protocols` (`IProtocolsApi`)       | register a protocol implementation                   | Your own remote **file** protocol, a first-class citizen of the connection page next to SSH/SFTP/FTP. `inProcess` only                                     |
+| `Workspaces` (`IWorkspacesApi`)     | register a workspace provider                        | **Non-file** connection types (Redis, MySQL, …) whose session document you render entirely. `inProcess` only                                               |
+| `Clipboard` (`IClipboardApi`)       | text read/write                                      | System clipboard                                                                                                                                           |
+| `Events` (`IHostEvents`)            | session connect/disconnect, theme and locale changes | Subscriptions are cleaned up by the host on deactivation                                                                                                   |
+| `Theme` (`IHostThemeApi`)           | `Current` / `Colors` / `GetColor` / `Changed`        | Theme identity, the fully resolved `Vela*` palette, and a signal that covers every kind of theme change. See §3.5                                          |
 
 > **The four `inProcess`-only capabilities** (`RemoteTunnel`, `TerminalView`, `Protocols`,
 > `Workspaces`) throw "capability unavailable" in isolated mode. They hand out live native
 > objects or raw streams, which have no equivalent across a process boundary — if you need them,
 > set `hostMode` to `inProcess`.
+
+### 3.5 Theming (SDK 2.0)
+
+**You do not need this interface to colour your UI.** In Avalonia, always write
+`{DynamicResource VelaXxx}` — the host derives those tokens per theme and swaps the whole set
+at once, and they follow automatically in both `inProcess` and `isolated` mode.
+
+What this interface is for is the three places `DynamicResource` cannot reach:
+
+1. you need a `Color` rather than a `Brush` (syntax-highlighting definitions, custom drawing, image export);
+2. you resolve colours once in code (converters, computations outside a control template) — those need a "re-read now" signal;
+3. you want to branch on **theme identity** (a different illustration or icon set for one theme).
+
+```csharp
+HostThemeInfo theme = ctx.Theme.Current;
+// theme.Id            "tokyo-night"  — already resolved, never "system"
+// theme.Name          "Tokyo Night"
+// theme.IsDark        true
+// theme.Variant       "dark"
+// theme.FollowsSystem whether the user picked "follow system"
+// theme.Accent        "#7AA2F7"      — includes the user's accent override
+
+string? bg = ctx.Theme.GetColor("VelaBgTerminal");   // "#FF1A1B26"
+
+ctx.Theme.Changed += info => { /* Current and Colors are already updated */ };
+```
+
+> **Do not use `Host.Theme` to detect a theme change.** `IHostInfo.Theme` only ever holds
+> `dark`, `light` or `system`: the host ships a dozen named themes and they are all collapsed
+> to their light/dark name there. So for a VelaDark → Tokyo Night switch, the value of
+> `Host.Theme` **and** the argument of `IHostEvents.ThemeChanged` are unchanged — code that
+> compares that argument misses the change entirely. And when it reads `system`, it does not
+> tell you whether the UI is currently light or dark. `IHostThemeApi.Changed` is the union of
+> all three cases: named-theme switch, system light/dark flip, and accent override.
 
 ---
 
@@ -131,18 +166,42 @@ in [Packaging and Publishing §1.2](../templates/publishing.md). Three things bi
 
 `apiLevel` only moves on **breaking** changes (2.0 raised it from `1` to `2`); additive surface is gated by
 `minSdkVersion`.
+`apiLevel` only moves on **breaking** changes; additive surface is gated by `minSdkVersion`.
+The discipline is "SDK major == apiLevel" — the whole 1.x series is `apiLevel 1`,
+and **2.0 onwards is `apiLevel 2`**.
 
-| SDK | Added | Does a plugin need `minSdkVersion`? |
-| --- | --- | --- |
-| 1.0 | First contract | — |
-| 1.1 | `ExecResult` gains stderr and exit code; streaming remote exec | Yes, if used |
-| 1.2 | `IRemoteTunnelApi` (raw byte duplex stream) | Yes, if used (`1.2.0`) |
-| 1.3 | `ITerminalViewApi` (borrow the host terminal control) | Yes, if used (`1.3.0`) |
-| 1.3.1 | Workspace **variants**: `WorkspaceVariant`, `VariantKey`/`Variants`, `NoCredentials`/`NoEndpoint` | Yes, if used (`1.3.1`) |
-| 1.4 | `HostRegistry` (host self-registration for `vela-plugin`) | **No** — toolchain surface, plugin code never calls it |
-| **1.5** | Connection-form additions for protocols: `ProtocolFeatures.NoEndpoint` (hide the port column), `ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource` (choices fetched when the form opens), `AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue` (editable combo boxes; the host column can be a combo too). Driven by the serial plugin — ports are hot-plugged, baud rates have non-standard values. | Yes, if used (`1.5.0`) |
-| **2.0** | `IHostThemeApi` (`IPluginContext.Theme`): theme identity, the whole resolved `Vela*` palette, and a change signal that covers every re-skin. **The first bump of `apiLevel` in this series (1 → 2)**: the major-version jump takes `AssemblyVersion` to `2.0.0.0`, so already-compiled plugins must be rebuilt | Rebuild, and set `apiLevel` to `2` |
-| **TBD** | Three methods on the sessions capability: `ListSavedAsync` (saved connection configurations, including ones not currently connected), `OpenAsync` (ask the host to open one), `CloseAsync` (only sessions this plugin opened). Until now a plugin could only act on machines the user had **already connected by hand**, which broke every unattended use. Still additive; `apiLevel` unchanged | Yes, if used (`TBD`) |
+| SDK     | Added                                                                                                                                                                                                                                                                                                                                                                                                                                | Does a plugin need `minSdkVersion`?                    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| 1.0     | First contract                                                                                                                                                                                                                                                                                                                                                                                                                       | —                                                      |
+| 1.1     | `ExecResult` gains stderr and exit code; streaming remote exec                                                                                                                                                                                                                                                                                                                                                                       | Yes, if used                                           |
+| 1.2     | `IRemoteTunnelApi` (raw byte duplex stream)                                                                                                                                                                                                                                                                                                                                                                                          | Yes, if used (`1.2.0`)                                 |
+| 1.3     | `ITerminalViewApi` (borrow the host terminal control)                                                                                                                                                                                                                                                                                                                                                                                | Yes, if used (`1.3.0`)                                 |
+| 1.3.1   | Workspace **variants**: `WorkspaceVariant`, `VariantKey`/`Variants`, `NoCredentials`/`NoEndpoint`                                                                                                                                                                                                                                                                                                                                    | Yes, if used (`1.3.1`)                                 |
+| 1.4     | `HostRegistry` (host self-registration for `vela-plugin`)                                                                                                                                                                                                                                                                                                                                                                            | **No** — toolchain surface, plugin code never calls it |
+| **1.5** | Connection-form additions for protocols: `ProtocolFeatures.NoEndpoint` (hide the port column), `ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource` (choices fetched when the form opens), `AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue` (editable combo boxes; the host column can be a combo too). Driven by the serial plugin — ports are hot-plugged, baud rates have non-standard values. | Yes, if used (`1.5.0`)                                 |
+| **2.0** | **Generation bump (`apiLevel` 1 → 2)** — see "Migrating to 2.0" below. The surface it carries is `IHostThemeApi` (`ctx.Theme`, see §3.5): theme identity, the fully resolved palette, and a `Changed` signal covering every kind of theme change. Before it, a plugin could only see the three values of `IHostInfo.Theme` — no named theme, no accent, and no change at all when switching within the same light/dark variant.      | No — express it with `apiLevel: 2`                     |
+
+### Migrating to 2.0
+
+2.0 is the **first** time this series moves `apiLevel`. Bumping the major version takes the
+contract assembly's `AssemblyVersion` from `1.0.0.0` to `2.0.0.0` (see `$(VelaSdkMajor).0.0.0`
+in the SDK repo's `src/Directory.Build.props`), so **every already-compiled plugin must be
+rebuilt** before a 2.x host will load it.
+
+Two things to do:
+
+1. Move `VelaShell.PluginSdk.Build` to the matching version, rebuild, and repack the `.vpx`.
+2. Set `apiLevel` to `2` in `plugin.json`.
+
+Step 2 is optional for running on a 2.x host (a host accepts any generation up to its own),
+but it is what you want **when the plugin lands on a 1.x host**: you get the discovery-time
+message "Plugin targets apiLevel 2, host supports up to 1. Update VelaShell." instead of an
+opaque assembly-binding failure. That is precisely what `apiLevel` exists for.
+
+The new surface itself is still purely additive: nothing removed, no signature changed. The one
+source-level incompatibility is the new `Theme` member on `IPluginContext` — plugins **consume**
+that interface and are unaffected; anyone who wrote their own `IPluginContext` implementation
+(usually a test double) must add the member, or switch to `TestPluginContext`.
 
 ---
 

@@ -1,6 +1,6 @@
 # 插件 SDK 参考
 
-> 适用版本:**SDK 1.5.0 / apiLevel 1**
+> 适用版本:**SDK 2.0.0 / apiLevel 2**
 > 相关文档(在别的仓库):[开发指南](../templates/dev-guide.md)(教程式) · [CLI 手册](../cli/cli.md) · [打包与发布](../templates/publishing.md)
 
 本篇是**面向查阅**的 SDK 全貌:包结构、契约表面、每个能力域能做什么/受什么限制、
@@ -68,7 +68,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | --- | --- |
 | `PluginId` / `PluginVersion` | 来自 `plugin.json` |
 | `DataDirectory` | 插件私有目录(已创建)。**一切本地写入都应限于此**,卸载时整体删除 |
-| `Host` (`IHostInfo`) | 宿主版本、apiLevel、当前语言与主题 |
+| `Host` (`IHostInfo`) | 宿主版本、apiLevel、当前语言。`Host.Theme` 只有 `dark`/`light`/`system` 三个粗粒度值,主题的实际身份与配色看 §3.5 的 `Theme` |
 | `Log` (`IPluginLogger`) | `Debug/Info/Warn/Error`,写进宿主日志管道(带插件 id 前缀) |
 | `Shutdown` | 停机令牌:触发后能力调用可能开始失败,应尽快收尾 |
 
@@ -101,10 +101,42 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | `Workspaces` (`IWorkspacesApi`) | 注册工作区提供者 | **非文件型**连接类型(Redis、MySQL…),由插件全权渲染会话文档。仅 `inProcess` |
 | `Clipboard` (`IClipboardApi`) | 文本读写 | 系统剪贴板 |
 | `Events` (`IHostEvents`) | 会话连接/断开、主题与语言切换 | 订阅由宿主在停用时自动清理 |
+| `Theme` (`IHostThemeApi`) | `Current` / `Colors` / `GetColor` / `Changed` | 主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的信号。见 §3.5 |
 
 > **`inProcess` 专属的四项**(`RemoteTunnel` / `TerminalView` / `Protocols` / `Workspaces`)
 > 在隔离模式下调用会抛"能力不可用"。它们交出去的都是活的原生对象或裸流,
 > 跨进程边界没有等价物 —— 需要它们就把 `hostMode` 设成 `inProcess`。
+
+### 3.5 主题(SDK 2.0)
+
+**界面取色不需要这个接口。** Avalonia 里一律写 `{DynamicResource VelaXxx}` ——
+令牌由宿主逐主题派生并整套换新,进程内与隔离模式都自动跟随。
+
+需要它的是 DynamicResource 到不了的三种地方:
+
+1. 要 `Color` 而不是 `Brush`(语法高亮定义、自绘、导出图片);
+2. 代码里一次性取色的地方(转换器、控件模板之外的计算)—— 它们需要一个"该重取了"的信号;
+3. 要按**主题身份**分支(给某套主题换一张插画、一组图标)。
+
+```csharp
+HostThemeInfo theme = ctx.Theme.Current;
+// theme.Id        "tokyo-night"   —— 已解析,永远不是 "system"
+// theme.Name      "Tokyo Night"
+// theme.IsDark    true
+// theme.Variant   "dark"
+// theme.FollowsSystem  用户选的是不是"跟随系统"
+// theme.Accent    "#7AA2F7"       —— 含用户的自定义强调色覆盖
+
+string? bg = ctx.Theme.GetColor("VelaBgTerminal");   // "#FF1A1B26"
+
+ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
+```
+
+> **别用 `Host.Theme` 判断换肤。** `IHostInfo.Theme` 只有 `dark`/`light`/`system` 三个值:
+> 宿主内置十几套具名主题,它们在那里全被收敛成自己的明暗名。于是 VelaDark → Tokyo Night
+> 这种换肤,`Host.Theme` 与 `IHostEvents.ThemeChanged` 的**参数都不会变化**,
+> 按参数判断"变没变"会整整漏掉一次换肤;`Theme == "system"` 时它也没告诉你此刻是明是暗。
+> `IHostThemeApi.Changed` 是三种情形的并集 —— 换具名主题、跟随系统翻转、改强调色。
 
 ---
 
@@ -122,7 +154,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ## 5. SDK 版本历史
 
-`apiLevel` 只在**破坏性**变更时才动(2.0 那次从 `1` 抬到 `2`);只增不改的新面靠 `minSdkVersion` 拦。
+`apiLevel` 只在**破坏性**变更时才动;只增不改的新面靠 `minSdkVersion` 拦。
+纪律是「SDK 主版本 == apiLevel」——1.x 系列全程 `apiLevel 1`,**2.0 起为 `apiLevel 2`**。
 
 | SDK | 新增 | 插件需要声明 `minSdkVersion` 吗 |
 | --- | --- | --- |
@@ -133,8 +166,26 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | 1.3.1 | 工作区**变体**:`WorkspaceVariant`、`VariantKey`/`Variants`、`NoCredentials`/`NoEndpoint` | 用到就要(`1.3.1`) |
 | 1.4 | `HostRegistry`(宿主自我登记,供 `vela-plugin` 定位安装与核对版本) | **不需要** —— 这是工具链面,插件代码不调用 |
 | **1.5** | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`) |
-| **2.0** | `IHostThemeApi`(`IPluginContext.Theme`):主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的变更信号。**本系列第一次动 `apiLevel`(1 → 2)**:主版本跳变把 `AssemblyVersion` 带到 `2.0.0.0`,已编译的插件必须重新编译 | 重新编译 + 把 `apiLevel` 改成 `2` |
-| **TBD** | 会话能力加三个方法:`ListSavedAsync`(已保存的连接配置,含此刻没连着的)、`OpenAsync`(请求宿主打开其中一条)、`CloseAsync`(只能关自己打开的)。在这之前插件只能操作用户**已经手动连上**的机器,于是无人值守的用法都塌了半边。仍是只增不改,`apiLevel` 不动 | 用到就要(`TBD`) |
+| **2.0** | **代际变更(`apiLevel` 1 → 2)**,详见下方「2.0 迁移」。内容上带的是 `IHostThemeApi`(`ctx.Theme`,见 §3.5):主题身份、整套已解析配色、覆盖全部换肤情形的 `Changed`。在这之前插件只看得到 `IHostInfo.Theme` 那三个值,认不出具名主题与强调色,而且同明暗内部换肤时那个值根本不变。 | 不需要 —— 用 `apiLevel: 2` 表达即可 |
+
+### 2.0 迁移
+
+2.0 是本系列**第一次**动 `apiLevel`。主版本跳变把契约程序集的 `AssemblyVersion` 从
+`1.0.0.0` 带到 `2.0.0.0`(见 SDK 仓库 `src/Directory.Build.props` 的 `$(VelaSdkMajor).0.0.0`),
+所以**已编译的插件必须重新编译**才能被 2.x 宿主装载。
+
+插件作者要做两件事:
+
+1. 把 `VelaShell.PluginSdk.Build` 抬到对应版本并重新编译、重新打 `.vpx`;
+2. 把 `plugin.json` 的 `apiLevel` 改成 `2`。
+
+第 2 条不做也能在 2.x 宿主上跑(宿主接受不高于自身的代际),但**装到 1.x 宿主上时**
+你要的是发现期那句「Plugin targets apiLevel 2, host supports up to 1. Update VelaShell.」,
+而不是一个看不懂的程序集绑定异常 —— 这正是 `apiLevel` 存在的理由。
+
+新增的能力面本身仍是只增不改的:没有删除任何成员,没有改任何签名。唯一的源码级不兼容是
+`IPluginContext` 多了 `Theme` 成员 —— 插件**消费**这个接口,不受影响;自己写了
+`IPluginContext` 实现(多半是测试替身)的要补上,或者改用 `TestPluginContext`。
 
 ---
 

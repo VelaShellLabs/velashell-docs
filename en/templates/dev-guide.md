@@ -80,7 +80,7 @@ dotnet build -c Release -t:PackVpx               # → bin/vpx/acme.snippets-0.1
 The generated `.csproj` has a single dependency:
 
 ```xml
-<PackageReference Include="VelaShell.PluginSdk.Build" Version="1.5.0" />
+<PackageReference Include="VelaShell.PluginSdk.Build" Version="2.0.0" />
 ```
 
 That one package brings everything a plugin project needs: the `VelaShell.PluginSdk` contract assembly, **Avalonia pinned to exactly the host's version** (including its AXAML compiler), `EnableDynamicLoading`, `plugin.json` copied to the output, shared assemblies kept out of the plugin directory, build-time manifest validation, and the `PackVpx` target. Do **not** reference `VelaShell.PluginSdk` or `Avalonia` separately: a version mismatch fails the build with `VELA1001` instead of surfacing at runtime as a cross-load-context cast failure on the user's machine.
