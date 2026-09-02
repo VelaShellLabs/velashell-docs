@@ -1,6 +1,6 @@
 # 插件 SDK 参考
 
-> 适用版本:**SDK 2.0.0 / apiLevel 2**
+> 适用版本:**SDK 2.0.2 / apiLevel 2**
 > 相关文档(在别的仓库):[开发指南](../templates/dev-guide.md)(教程式) · [CLI 手册](../cli/cli.md) · [打包与发布](../templates/publishing.md)
 
 本篇是**面向查阅**的 SDK 全貌:包结构、契约表面、每个能力域能做什么/受什么限制、

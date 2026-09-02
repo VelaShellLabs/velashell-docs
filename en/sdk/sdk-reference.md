@@ -1,6 +1,6 @@
 # Plugin SDK Reference
 
-> Applies to **SDK 2.0.0 / apiLevel 2**
+> Applies to **SDK 2.0.2 / apiLevel 2**
 > See also (other repositories): [Development Guide](../templates/dev-guide.md) (tutorial) · [CLI Manual](../cli/cli.md) · [Packaging and Publishing](../templates/publishing.md)
 
 This page is the **lookup-oriented** view of the SDK: package layout, contract surface, what each
