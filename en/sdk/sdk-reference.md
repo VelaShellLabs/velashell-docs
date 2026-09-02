@@ -88,7 +88,7 @@ agnostic** (async methods, DTOs, opaque ids only), so the same plugin source run
 
 | Capability | Key methods | Notes |
 | --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync` | Enumerate SSH sessions, **redacted, never credentials** |
+| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`; `ListSavedAsync` / `OpenAsync` / `CloseAsync` (SDK TBD) | Enumerate SSH sessions, **redacted, never credentials**. The last three **ask the host to open a saved session** — only saved configurations (the user decides which machines exist), credentials never pass through the plugin, and the host may refuse (`PluginPermissionDeniedException`); `SessionOpenOptions.Reason` is shown to the user verbatim. A failure to connect raises `PluginSessionOpenException` — "you may not" and "it did not work" call for different handling |
 | `RemoteFs` (`IRemoteFsApi`) | directory / attributes / read / write / transfer / rename / delete | SFTP over an existing session |
 | `RemoteExec` (`IRemoteExecApi`) | `RunAsync` (whole result) / `StreamAsync` (per line) | A separate channel — **never the user's terminal** |
 | `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | A **raw byte duplex stream** to a remote endpoint (Docker Engine API, tar streams). `inProcess` only |
@@ -129,7 +129,7 @@ in [Packaging and Publishing §1.2](../templates/publishing.md). Three things bi
 
 ## 5. SDK version history
 
-`apiLevel` only moves on **breaking** changes (still `1`); additive surface is gated by
+`apiLevel` only moves on **breaking** changes (2.0 raised it from `1` to `2`); additive surface is gated by
 `minSdkVersion`.
 
 | SDK | Added | Does a plugin need `minSdkVersion`? |
@@ -141,6 +141,8 @@ in [Packaging and Publishing §1.2](../templates/publishing.md). Three things bi
 | 1.3.1 | Workspace **variants**: `WorkspaceVariant`, `VariantKey`/`Variants`, `NoCredentials`/`NoEndpoint` | Yes, if used (`1.3.1`) |
 | 1.4 | `HostRegistry` (host self-registration for `vela-plugin`) | **No** — toolchain surface, plugin code never calls it |
 | **1.5** | Connection-form additions for protocols: `ProtocolFeatures.NoEndpoint` (hide the port column), `ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource` (choices fetched when the form opens), `AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue` (editable combo boxes; the host column can be a combo too). Driven by the serial plugin — ports are hot-plugged, baud rates have non-standard values. | Yes, if used (`1.5.0`) |
+| **2.0** | `IHostThemeApi` (`IPluginContext.Theme`): theme identity, the whole resolved `Vela*` palette, and a change signal that covers every re-skin. **The first bump of `apiLevel` in this series (1 → 2)**: the major-version jump takes `AssemblyVersion` to `2.0.0.0`, so already-compiled plugins must be rebuilt | Rebuild, and set `apiLevel` to `2` |
+| **TBD** | Three methods on the sessions capability: `ListSavedAsync` (saved connection configurations, including ones not currently connected), `OpenAsync` (ask the host to open one), `CloseAsync` (only sessions this plugin opened). Until now a plugin could only act on machines the user had **already connected by hand**, which broke every unattended use. Still additive; `apiLevel` unchanged | Yes, if used (`TBD`) |
 
 ---
 
@@ -166,6 +168,11 @@ Available doubles: `CollectingLogger`, `InMemoryStorage`, `InMemoryTimeSeries`, 
 `FakeRemoteFs`, `FakeRemoteExec`, `FakeRemoteTunnel`, `FakeTerminal`, `FakeTerminalViewApi`,
 `FakeUi`, `FakeSecrets`, `FakeClipboard`, `RecordingCommands`, `RecordingProtocols`,
 `RecordingWorkspaces`, `TestHostEvents`, `TestHostInfo`.
+
+Besides `AddConnected`, `FakeSessions` offers `AddSaved` (build a saved configuration) and three hooks:
+`DenyOpen` / `OpenFailure` simulate "the user said no" and "it would not connect", while `LastOpenReason`
+lets you assert that the reason shown to the user actually made it through — an implementation that passes
+"the plugin needs to connect" works perfectly and still turns the confirmation dialog into a blind button.
 
 What unit tests cannot cover (real UI, real sessions, real protocol tabs) belongs to the inner
 loop: `vela-plugin dev init` → F5, see the [CLI Manual](../cli/cli.md).
