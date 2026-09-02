@@ -34,6 +34,7 @@ Make VelaShell an **extensible operations workbench**: plugins run in independen
 | [publishing.md](../templates/publishing.md) | **Packaging and publishing**: release build, `.vpx`, signing and trust, submitting to the [marketplace](http://market.easilynet.top), CI packaging | Plugin developers |
 | [sdk-reference.md](../sdk/sdk-reference.md) | **SDK reference**: packages, entry contract, capability surface, SDK version history, test doubles, loading model | Plugin developers |
 | [STATUS.md](STATUS.md) | **Progress overview (single source of truth)**: completion by area, acceptance evidence, deliberate decisions, next-step recommendations | Everyone |
+| [collaboration.md](collaboration.md) | **Collaboration (implemented)**: setting up the chat bridge (Feishu/DingTalk/Telegram/WeCom) and its security model, slash commands, and how external agents connect to the outbound MCP server | Users, plugin developers |
 | [01-vision-and-goals.md](01-vision-and-goals.md) | Vision, goals/non-goals, typical scenarios, comparison with systems such as VS Code | Everyone |
 | [02-architecture.md](02-architecture.md) | Overall architecture, process model, component divisions, project-directory plan, key decision records | Everyone |
 | [03-plugin-model.md](03-plugin-model.md) | Plugin package format (.vpx), manifest specification, activation events, lifecycle, contribution points | Host developers, plugin developers |
