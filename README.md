@@ -30,6 +30,7 @@ zh/                    en/                    内容
 | 把插件打包发布出去 | [打包与发布](zh/templates/publishing.md) · [Publishing](en/templates/publishing.md) |
 | 查插件能调用哪些 API | [SDK 参考](zh/sdk/sdk-reference.md) · [SDK reference](en/sdk/sdk-reference.md) |
 | 理解插件系统为什么长这样 | [插件蓝图](zh/plugins/) · [Blueprint](en/plugins/) |
+| 让团队从 IM 里用 / 让别的 agent 调 | [协作接入](zh/plugins/协作接入.md) · [Collaboration](en/plugins/collaboration.md) |
 | 理解宿主的分层与依赖方向 | [架构](zh/host/architecture.md) · [Architecture](en/host/architecture.md) |
 
 ## 代码仓库

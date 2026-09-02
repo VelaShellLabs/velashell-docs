@@ -39,6 +39,7 @@
 | [publishing.md](../templates/publishing.md) | **打包与发布**:Release 构建、`.vpx`、签名与信任、发布到[插件商店](http://market.easilynet.top)、CI 出包 | 插件开发者 |
 | [sdk-reference.md](../sdk/sdk-reference.md) | **SDK 参考**:包结构、入口契约、能力域一览、SDK 版本历史、测试替身、装载模型 | 插件开发者 |
 | [STATUS.md](STATUS.md) | **进度总览(单一权威)**:分项完成度、验收证据、刻意决策、下一步建议 | 所有人 |
+| [协作接入.md](协作接入.md) | **协作接入(已实现)**:IM 桥接(飞书/钉钉/Telegram/企微)的配置步骤与安全模型、聊天里的斜杠命令、对外 MCP 服务端的接入方式 | 用户、插件开发者 |
 | [01-vision-and-goals.md](01-vision-and-goals.md) | 愿景、目标/非目标、典型场景、与 VSCode 等系统的对比 | 所有人 |
 | [02-architecture.md](02-architecture.md) | 总体架构、进程模型、组件划分、工程目录规划、关键决策记录 | 所有人 |
 | [03-plugin-model.md](03-plugin-model.md) | 插件包格式(.vpx)、manifest 规范、激活事件、生命周期、贡献点 | 宿主开发者、插件开发者 |
