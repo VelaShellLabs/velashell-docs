@@ -534,9 +534,9 @@ context.Events.LocaleChanged    += locale => ...;
 **唯一硬约束:Avalonia 版本与宿主一致。** Avalonia 相关包必须 compile-only:
 
 ```xml
-<!-- csproj:版本 = 宿主版本(当前 12.1.1);Avalonia dll 绝不复制进插件目录,
+<!-- csproj:版本 = 宿主版本(当前 12.1.2);Avalonia dll 绝不复制进插件目录,
      运行时由装载方共享同一套(进程内 = 宿主的;隔离进程 = PluginHost 自带的)。 -->
-<PackageReference Include="Avalonia" Version="12.1.1" ExcludeAssets="runtime" />
+<PackageReference Include="Avalonia" Version="12.1.2" ExcludeAssets="runtime" />
 ```
 
 基于 Avalonia 的第三方组件包(如控件库)则**正常引用**(它们的 dll 要随插件

@@ -143,7 +143,7 @@
 `src/Directory.Packages.props` 做的。拆库之后读不到对方的文件了,于是反过来:
 
 ```
-Directory.Build.props: <VelaAvaloniaVersion>12.1.1</VelaAvaloniaVersion>
+Directory.Build.props: <VelaAvaloniaVersion>12.1.2</VelaAvaloniaVersion>
         ↓ 打包时写进 buildTransitive/VelaShell.PluginSdk.props
 $(VelaSdkPinnedAvaloniaVersion)
         ↓ 引用 VelaShell.PluginSdk 的工程都吃得到

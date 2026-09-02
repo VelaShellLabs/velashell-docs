@@ -362,9 +362,9 @@ Plugins use **full Avalonia** to design their own UI: choose compile-time AXAML 
 **The only hard constraint: the Avalonia version must match the host.** Avalonia-related packages must be compile-only:
 
 ```xml
-<!-- csproj: version = host version (currently 12.1.1); Avalonia DLLs are never copied into the plugin directory,
+<!-- csproj: version = host version (currently 12.1.2); Avalonia DLLs are never copied into the plugin directory,
      and the loader shares the same set at runtime (in-process = the host's; isolated process = bundled with PluginHost). -->
-<PackageReference Include="Avalonia" Version="12.1.1" ExcludeAssets="runtime" />
+<PackageReference Include="Avalonia" Version="12.1.2" ExcludeAssets="runtime" />
 ```
 
 Third-party packages based on Avalonia, such as control libraries, should be referenced normally (their DLLs must be distributed with the plugin; only the `Avalonia*` assemblies themselves are forcibly shared by the loader).
