@@ -346,3 +346,58 @@ live on that side), but that is inference, not data. By the same token, "the R2R
 correctly" currently rests only on the PluginHost side of the evidence (it did start, initialize
 Avalonia and wait for the timeout). **Before shipping, launch the main app once on each of the three
 platforms** to confirm R2R + Avalonia + the plugin ALC hold together.
+
+## 2026-09-01: CLI-installed plugins are no longer blocked by a "missing receipt"
+
+### Symptom
+
+`vela-plugin install velashell.redis` completes cleanly — digests, signature and compatibility all
+check out, and it even prints `signature Valid` — yet after restarting the host the plugin
+management page marks it **Invalid**:
+
+> Protected installation receipt is missing. Reinstall this plugin through the plugin manager.
+
+### Cause
+
+The installation receipt lives in the host's trust store (SonnetDB plus `ISecretProtector`
+authenticated encryption), which the CLI cannot reach — the docs have always said so, and the price
+was supposed to be nothing more than "no post-install tamper detection". The host, however,
+implemented "no receipt" as **refuse to load**, and only ever adopted existing directories once, on
+the first start after the upgrade (`LegacyInstallMigrationCompleted`). Any directory appearing after
+that migration could never obtain a baseline: CLI installs, and the documented "Method 3: place the
+directory directly", both dead-ended on this error. The documented behaviour and the implemented
+behaviour disagreed, and the code was the side that was wrong.
+
+### The rule now
+
+Adoption happens per directory, on demand (`PluginManager.VerifyOrAdoptInstallReceiptAsync`), and the
+two kinds of receipt now state plainly what they guarantee:
+
+| Where the receipt came from | What happens when the contents change |
+| --- | --- |
+| Installed through the manager (`LegacyAdopted == false`) | Written by the host itself right after unpacking, so it really does mean "this directory came out of that package"; any change is refused, with a prompt to reinstall |
+| Side-loaded (CLI, or a directory dropped in) | A TOFU baseline recorded the first time the host saw it; a change (usually `vela-plugin update`) is re-recorded, with a log line |
+
+Two supporting changes:
+
+- Orphan receipts whose **directory no longer exists** are dropped at startup. `vela-plugin
+  uninstall` only removes the directory — it cannot reach the trust store — and keeping the stale
+  receipt would make the next install of that same id fail as "files changed" when the user changed
+  nothing.
+- The one-shot `LegacyInstallMigrationCompleted` flag is no longer read (the field stays, so old
+  state does not need a format change).
+
+Nothing was given up on the security side: the receipt that is actually worth something is the first
+kind, and it is untouched. A side-loaded directory exists before the host ever sees it, so nothing
+can prove which package it came from; refusing it does not stop a process that can write into the
+plugin directory (such a process already runs as the user) but does dead-end both documented install
+paths. **The cost, stated plainly: do not mix the two paths for one plugin** — installing over a
+manager-installed plugin from the CLI still reads as changed files and is marked Invalid; uninstall
+it in the manager first.
+
+Evidence: three tests added or rewritten in `PluginInstallUninstallTests` — a directly dropped
+directory is adopted and activates (its receipt is `LegacyAdopted`, with no fabricated package
+digest), a side-loaded directory that changed on disk is re-baselined instead of marked red, and a
+directory deleted outside the host has its receipt dropped so the same id installs again. The
+existing "modified manager-installed plugin is refused" and "a modified plugin withdraws its tabs"
+tests still pass (127 green under `TestCategory=Plugins`).
