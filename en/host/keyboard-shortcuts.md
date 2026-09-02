@@ -63,6 +63,7 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Close Tab | `Ctrl+W` | — |
 | Next Tab | `Ctrl+Tab` | — |
 | Previous Tab | `Ctrl+Shift+Tab` | — |
+| Toggle Explorer Sidebar | `Ctrl+B` | — |
 | Toggle File Browser | `Ctrl+Shift+F` | — |
 | Tunnel Manager | `Ctrl+Shift+T` | — |
 | Toggle line number &amp; time gutter | `Ctrl+Shift+L` | — |
