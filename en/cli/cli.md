@@ -89,6 +89,18 @@ Packages land in `~/.velashell/plugins/<id>/` - the same directory the host's
 > `minSdkVersion` / `minHostVersion` against the VelaShell installed on this machine.
 > Want the post-install protection? Use the manager. Want one command? Use this.
 
+The first time the host sees such a directory it records the content it finds as that plugin's
+baseline and loads it normally - so a CLI install works after a restart. That baseline only ever
+means "this is how it looked when I first saw it": when `vela-plugin update` changes the contents,
+the host simply records them again instead of marking the plugin red. That is exactly what "no
+post-install tamper detection" buys you.
+
+> **Do not mix the two paths for the same plugin.** For a plugin installed through the manager the
+> receipt was written by the host itself right after unpacking, so it really does mean "this
+> directory came out of that package". Installing over it from the command line only looks like
+> changed files to the host, and the plugin is marked Invalid. Uninstall it in the manager first if
+> you want to switch to the CLI.
+
 ### `install`
 
 ```bash

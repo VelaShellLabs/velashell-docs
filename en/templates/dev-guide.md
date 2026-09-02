@@ -105,7 +105,7 @@ Fetches the package by id from the [marketplace](http://market.easilynet.top), c
 
 **Method 2: `.vpx` package**. Sidebar plugin icon → Plugin Management page → select the file with "Install .vpx…" (validates the container and manifest, guards against zip slip and zip bombs, extracts into the user directory, replaces the old version for the same id, and activates according to the activation policy). The command-line equivalent is `vela-plugin install <package.vpx>`. Uninstallation is also a one-click operation on the management page (deletes the directory and clears database data).
 
-> The management page and the CLI write to the **same directory**. The only difference is that the management page also records a protected installation receipt for post-install tamper detection; the CLI cannot produce that receipt, but it performs every pre-install check. The trade-off is spelled out in the CLI manual.
+> The management page and the CLI write to the **same directory**. The only difference is that the management page also records a protected installation receipt for post-install tamper detection; the CLI cannot produce that receipt (the host instead records the contents it finds the first time it sees such a directory, and loads it after a restart), but it performs every pre-install check. Do not mix the two paths for one plugin — installing over a manager-installed plugin reads as "files changed" to the host. The trade-off is spelled out in the CLI manual.
 
 `.vpx` is VelaShell's **own container format**, not a renamed zip — see §12 for the layout and signing.
 
