@@ -84,7 +84,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 | 能力 | 关键方法 | 说明 |
 | --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync` | 枚举当前 SSH 会话,**脱敏,不含任何凭据** |
+| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(SDK TBD) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型 |
 | `RemoteFs` (`IRemoteFsApi`) | 目录/属性/读写/传输/重命名/删除 | 基于既有会话的 SFTP |
 | `RemoteExec` (`IRemoteExecApi`) | `RunAsync`(整段结果)/ `StreamAsync`(按行回调) | 独立通道,**不进用户终端** |
 | `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | 到远端端点的**裸字节双工流**(Docker Engine API、tar 流这类二进制协议)。仅 `inProcess` |
@@ -122,7 +122,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ## 5. SDK 版本历史
 
-`apiLevel` 只在**破坏性**变更时才动(至今仍是 `1`);只增不改的新面靠 `minSdkVersion` 拦。
+`apiLevel` 只在**破坏性**变更时才动(2.0 那次从 `1` 抬到 `2`);只增不改的新面靠 `minSdkVersion` 拦。
 
 | SDK | 新增 | 插件需要声明 `minSdkVersion` 吗 |
 | --- | --- | --- |
@@ -133,6 +133,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | 1.3.1 | 工作区**变体**:`WorkspaceVariant`、`VariantKey`/`Variants`、`NoCredentials`/`NoEndpoint` | 用到就要(`1.3.1`) |
 | 1.4 | `HostRegistry`(宿主自我登记,供 `vela-plugin` 定位安装与核对版本) | **不需要** —— 这是工具链面,插件代码不调用 |
 | **1.5** | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`) |
+| **2.0** | `IHostThemeApi`(`IPluginContext.Theme`):主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的变更信号。**本系列第一次动 `apiLevel`(1 → 2)**:主版本跳变把 `AssemblyVersion` 带到 `2.0.0.0`,已编译的插件必须重新编译 | 重新编译 + 把 `apiLevel` 改成 `2` |
+| **TBD** | 会话能力加三个方法:`ListSavedAsync`(已保存的连接配置,含此刻没连着的)、`OpenAsync`(请求宿主打开其中一条)、`CloseAsync`(只能关自己打开的)。在这之前插件只能操作用户**已经手动连上**的机器,于是无人值守的用法都塌了半边。仍是只增不改,`apiLevel` 不动 | 用到就要(`TBD`) |
 
 ---
 
@@ -160,6 +162,10 @@ public async Task Activate_RegistersCommand()
 `FakeRemoteFs`、`FakeRemoteExec`、`FakeRemoteTunnel`、`FakeTerminal`、`FakeTerminalViewApi`、
 `FakeUi`、`FakeSecrets`、`FakeClipboard`、`RecordingCommands`、`RecordingProtocols`、
 `RecordingWorkspaces`、`TestHostEvents`、`TestHostInfo`。
+
+`FakeSessions` 除了 `AddConnected` 还有 `AddSaved`(造一条已保存配置)与三个钩子:
+`DenyOpen` / `OpenFailure` 模拟"用户点了不"与"连不上",`LastOpenReason` 用来断言那句给用户看的
+理由确实传上去了 —— 一个传了"插件需要连接"的实现功能上完全正常,却把确认框变成了盲点按钮。
 
 单测覆盖不了的部分(真实 UI、真实会话、真实协议页签)走开发内环:
 `vela-plugin dev init` → F5,见 [CLI 手册](../cli/cli.md)。
