@@ -84,7 +84,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 | 能力 | 关键方法 | 说明 |
 | --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(SDK TBD) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型 |
+| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(SDK 2.0.2) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型 |
 | `RemoteFs` (`IRemoteFsApi`) | 目录/属性/读写/传输/重命名/删除 | 基于既有会话的 SFTP |
 | `RemoteExec` (`IRemoteExecApi`) | `RunAsync`(整段结果)/ `StreamAsync`(按行回调) | 独立通道,**不进用户终端** |
 | `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | 到远端端点的**裸字节双工流**(Docker Engine API、tar 流这类二进制协议)。仅 `inProcess` |
