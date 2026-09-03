@@ -80,6 +80,14 @@ someone dragged it into a group. Two ways, neither of which involves copying cha
 > A pairing code **only adds a chat to the allowlist**. It cannot change the mode or the approval
 > setting — it decides "may this chat talk to the bot", not "may it touch servers".
 
+> **Your own direct message to the bot needs authorising too.** The bot cannot tell whether the
+> person messaging it is you — anyone in the same tenant can message it. Serving direct messages by
+> default would mean the whole company can drive your production machines.
+>
+> Also, "Enable the chat bridge" at the top of the page is a **master switch**, not a way to grant
+> access to other people: unticked, no connection is made at all, nothing is listening on the Feishu
+> side, and whatever you send in a direct message never arrives. It has to be on even for solo use.
+
 **⑤ Bind a server**: send `/sessions` in the chat to see what is connected, then
 `/use user@host:port`. The binding stores `user@host:port` rather than a session id, so it survives
 a reconnect and still works after VelaShell is restarted the next day.
