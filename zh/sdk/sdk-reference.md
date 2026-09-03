@@ -10,13 +10,13 @@
 
 ## 1. 包结构
 
-| 包 | 出自哪个仓库 | 谁引用 | 内容 |
-| --- | --- | --- | --- |
-| **`VelaShell.PluginSdk.Build`** | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | **插件工程(只引这一个)** | MSBuild props/targets、锁定版本的 Avalonia、随包分发的打包器、清单校验、`PackVpx` 目标 |
-| `VelaShell.PluginSdk` | 本仓库 | 由上者传递引入 | 契约程序集:入口接口、`IPluginContext` 与全部能力接口、DTO、清单模型、`.vpx` 容器、宿主注册表 |
-| `VelaShell.PluginSdk.Testing` | 本仓库 | 插件的**测试**工程 | `TestPluginContext` 与各能力的内存替身 |
-| `VelaShell.Plugin.Cli` | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | 开发者机器(dotnet tool) | `vela-plugin`:开发内环、校验、打包、签名、体检 |
-| `VelaShell.Plugin.Templates` | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | 开发者机器 | `dotnet new velaplugin` / `velaplugin-ui` |
+| 包                              | 出自哪个仓库                                                                              | 谁引用                   | 内容                                                                                         |
+| ------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
+| **`VelaShell.PluginSdk.Build`** | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli)             | **插件工程(只引这一个)** | MSBuild props/targets、锁定版本的 Avalonia、随包分发的打包器、清单校验、`PackVpx` 目标       |
+| `VelaShell.PluginSdk`           | 本仓库                                                                                    | 由上者传递引入           | 契约程序集:入口接口、`IPluginContext` 与全部能力接口、DTO、清单模型、`.vpx` 容器、宿主注册表 |
+| `VelaShell.PluginSdk.Testing`   | 本仓库                                                                                    | 插件的**测试**工程       | `TestPluginContext` 与各能力的内存替身                                                       |
+| `VelaShell.Plugin.Cli`          | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli)             | 开发者机器(dotnet tool)  | `vela-plugin`:开发内环、校验、打包、签名、体检                                               |
+| `VelaShell.Plugin.Templates`    | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | 开发者机器               | `dotnet new velaplugin` / `velaplugin-ui`                                                    |
 
 插件工程要写的那一行 `PackageReference`(**含当前版本号**)在[开发指南](../templates/dev-guide.md)里 ——
 那个版本号属于 `VelaShell.PluginSdk.Build`,与本仓库的 SDK 版本各走各的线,
@@ -48,11 +48,11 @@ public sealed class DemoPlugin : IVelaPlugin
 }
 ```
 
-| 约束 | 细节 |
-| --- | --- |
-| 激活时限 | 10 秒;**挂着调试器时自动放宽到 10 分钟** |
-| 停用时限 | 约 2 秒(应用退出路径),超时被放弃 |
-| 长任务 | 自己开后台任务,用 `context.Shutdown` 令牌响应停机 |
+| 约束     | 细节                                                                                                |
+| -------- | --------------------------------------------------------------------------------------------------- |
+| 激活时限 | 10 秒;**挂着调试器时自动放宽到 10 分钟**                                                            |
+| 停用时限 | 约 2 秒(应用退出路径),超时被放弃                                                                    |
+| 长任务   | 自己开后台任务,用 `context.Shutdown` 令牌响应停机                                                   |
 | 资源回收 | 经 SDK 注册的命令与事件订阅由宿主自动清理;别把自己的类型塞进宿主静态字段/长命事件,否则 ALC 无法回收 |
 
 ---
@@ -64,44 +64,44 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ### 3.1 身份与基础设施
 
-| 成员 | 说明 |
-| --- | --- |
-| `PluginId` / `PluginVersion` | 来自 `plugin.json` |
-| `DataDirectory` | 插件私有目录(已创建)。**一切本地写入都应限于此**,卸载时整体删除 |
-| `Host` (`IHostInfo`) | 宿主版本、apiLevel、当前语言。`Host.Theme` 只有 `dark`/`light`/`system` 三个粗粒度值,主题的实际身份与配色看 §3.5 的 `Theme` |
-| `Log` (`IPluginLogger`) | `Debug/Info/Warn/Error`,写进宿主日志管道(带插件 id 前缀) |
-| `Shutdown` | 停机令牌:触发后能力调用可能开始失败,应尽快收尾 |
+| 成员                         | 说明                                                                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `PluginId` / `PluginVersion` | 来自 `plugin.json`                                                                                                          |
+| `DataDirectory`              | 插件私有目录(已创建)。**一切本地写入都应限于此**,卸载时整体删除                                                             |
+| `Host` (`IHostInfo`)         | 宿主版本、apiLevel、当前语言。`Host.Theme` 只有 `dark`/`light`/`system` 三个粗粒度值,主题的实际身份与配色看 §3.5 的 `Theme` |
+| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error`,写进宿主日志管道(带插件 id 前缀)                                                                    |
+| `Shutdown`                   | 停机令牌:触发后能力调用可能开始失败,应尽快收尾                                                                              |
 
 ### 3.2 数据
 
-| 能力 | 关键方法 | 说明 |
-| --- | --- | --- |
-| `Storage` (`IPluginStorage`) | `GetAsync<T>` / `SetAsync<T>` / `RemoveAsync` / `GetKeysAsync` | 按插件 id 命名空间化的 KV,落 SonnetDB(headless 时退回 JSON 文件) |
-| `Secrets` (`ISecretsApi`) | `GetAsync` / `SetAsync` / `DeleteAsync` | 加密落盘的私有键值。**没有明文兜底**:后端缺席时直接报不可用 |
-| `TimeSeries` (`ITimeSeriesApi`) | `OpenAsync` / `ListAsync` / `DropAsync`;series 上 `WriteAsync` / `QueryAsync` / `CountAsync` / `DistinctTagValuesAsync` / `DeleteAsync` | 插件私有的嵌入式时序库(按时间追加 + 按标签检索) |
+| 能力                            | 关键方法                                                                                                                                | 说明                                                             |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `Storage` (`IPluginStorage`)    | `GetAsync<T>` / `SetAsync<T>` / `RemoveAsync` / `GetKeysAsync`                                                                          | 按插件 id 命名空间化的 KV,落 SonnetDB(headless 时退回 JSON 文件) |
+| `Secrets` (`ISecretsApi`)       | `GetAsync` / `SetAsync` / `DeleteAsync`                                                                                                 | 加密落盘的私有键值。**没有明文兜底**:后端缺席时直接报不可用      |
+| `TimeSeries` (`ITimeSeriesApi`) | `OpenAsync` / `ListAsync` / `DropAsync`;series 上 `WriteAsync` / `QueryAsync` / `CountAsync` / `DistinctTagValuesAsync` / `DeleteAsync` | 插件私有的嵌入式时序库(按时间追加 + 按标签检索)                  |
 
 ### 3.3 会话与远程
 
-| 能力 | 关键方法 | 说明 |
-| --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(SDK 2.0.2) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型 |
-| `RemoteFs` (`IRemoteFsApi`) | 目录/属性/读写/传输/重命名/删除 | 基于既有会话的 SFTP |
-| `RemoteExec` (`IRemoteExecApi`) | `RunAsync`(整段结果)/ `StreamAsync`(按行回调) | 独立通道,**不进用户终端** |
-| `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | 到远端端点的**裸字节双工流**(Docker Engine API、tar 流这类二进制协议)。仅 `inProcess` |
-| `Terminal` (`ITerminalApi`) | `GetOutputAsync` / `SearchOutputAsync` / `WriteAsync` | 读取/搜索会话输出;**回写输入需要用户授权**(管理页可撤销) |
+| 能力                                | 关键方法                                                                         | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Sessions` (`ISessionsApi`)         | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(2.0.2 起) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型。`CloseAsync` **只关得掉本插件经 `OpenAsync` 开的那些**(含被复用的现成会话在内,别人的一律拒绝) |
+| `RemoteFs` (`IRemoteFsApi`)         | 目录/属性/读写/传输/重命名/删除                                                  | 基于既有会话的 SFTP                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `RemoteExec` (`IRemoteExecApi`)     | `RunAsync`(整段结果)/ `StreamAsync`(按行回调)                                    | 独立通道,**不进用户终端**                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync`                                           | 到远端端点的**裸字节双工流**(Docker Engine API、tar 流这类二进制协议)。仅 `inProcess`                                                                                                                                                                                                                                                                                                                                                       |
+| `Terminal` (`ITerminalApi`)         | `GetOutputAsync` / `SearchOutputAsync` / `WriteAsync`                            | 读取/搜索会话输出;**回写输入需要用户授权**(管理页可撤销)                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### 3.4 界面与扩展点
 
-| 能力 | 关键方法 | 说明 |
-| --- | --- | --- |
-| `Commands` (`ICommandsApi`) | `Register` / `TryExecute` | 命令 id 必须以插件 id 为前缀;清单里声明的占位命令在激活时被真实处理器替换 |
-| `Ui` (`IUiApi`) | `ShowPanelAsync(options, contentFactory)` | 呈现插件自建的 Avalonia 控件:`inProcess` 可停靠成主窗口标签页,`isolated` 为独立卡片窗口 |
-| `TerminalView` (`ITerminalViewApi`) | `Create(...)` | **出借宿主的终端仿真器**(VT 解析、屏幕缓冲、选区、IME、键盘编码),插件拿到一个可嵌进自己界面的真终端。仅 `inProcess` |
-| `Protocols` (`IProtocolsApi`) | 注册协议实现 | 插件自带的远程**文件**协议,与 SSH/SFTP/FTP 同为连接配置页的一等公民。仅 `inProcess` |
-| `Workspaces` (`IWorkspacesApi`) | 注册工作区提供者 | **非文件型**连接类型(Redis、MySQL…),由插件全权渲染会话文档。仅 `inProcess` |
-| `Clipboard` (`IClipboardApi`) | 文本读写 | 系统剪贴板 |
-| `Events` (`IHostEvents`) | 会话连接/断开、主题与语言切换 | 订阅由宿主在停用时自动清理 |
-| `Theme` (`IHostThemeApi`) | `Current` / `Colors` / `GetColor` / `Changed` | 主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的信号。见 §3.5 |
+| 能力                                | 关键方法                                      | 说明                                                                                                                |
+| ----------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `Commands` (`ICommandsApi`)         | `Register` / `TryExecute`                     | 命令 id 必须以插件 id 为前缀;清单里声明的占位命令在激活时被真实处理器替换                                           |
+| `Ui` (`IUiApi`)                     | `ShowPanelAsync(options, contentFactory)`     | 呈现插件自建的 Avalonia 控件:`inProcess` 可停靠成主窗口标签页,`isolated` 为独立卡片窗口                             |
+| `TerminalView` (`ITerminalViewApi`) | `Create(...)`                                 | **出借宿主的终端仿真器**(VT 解析、屏幕缓冲、选区、IME、键盘编码),插件拿到一个可嵌进自己界面的真终端。仅 `inProcess` |
+| `Protocols` (`IProtocolsApi`)       | 注册协议实现                                  | 插件自带的远程**文件**协议,与 SSH/SFTP/FTP 同为连接配置页的一等公民。仅 `inProcess`                                 |
+| `Workspaces` (`IWorkspacesApi`)     | 注册工作区提供者                              | **非文件型**连接类型(Redis、MySQL…),由插件全权渲染会话文档。仅 `inProcess`                                          |
+| `Clipboard` (`IClipboardApi`)       | 文本读写                                      | 系统剪贴板                                                                                                          |
+| `Events` (`IHostEvents`)            | 会话连接/断开、主题与语言切换                 | 订阅由宿主在停用时自动清理                                                                                          |
+| `Theme` (`IHostThemeApi`)           | `Current` / `Colors` / `GetColor` / `Changed` | 主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的信号。见 §3.5                                              |
 
 > **`inProcess` 专属的四项**(`RemoteTunnel` / `TerminalView` / `Protocols` / `Workspaces`)
 > 在隔离模式下调用会抛"能力不可用"。它们交出去的都是活的原生对象或裸流,
@@ -157,16 +157,17 @@ ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
 `apiLevel` 只在**破坏性**变更时才动;只增不改的新面靠 `minSdkVersion` 拦。
 纪律是「SDK 主版本 == apiLevel」——1.x 系列全程 `apiLevel 1`,**2.0 起为 `apiLevel 2`**。
 
-| SDK | 新增 | 插件需要声明 `minSdkVersion` 吗 |
-| --- | --- | --- |
-| 1.0 | 首版契约 | — |
-| 1.1 | `ExecResult` 加标准错误与退出码;远程执行的流式形态 | 用到就要 |
-| 1.2 | `IRemoteTunnelApi`(裸字节双工流) | 用到就要(`1.2.0`) |
-| 1.3 | `ITerminalViewApi`(出借宿主终端控件) | 用到就要(`1.3.0`) |
-| 1.3.1 | 工作区**变体**:`WorkspaceVariant`、`VariantKey`/`Variants`、`NoCredentials`/`NoEndpoint` | 用到就要(`1.3.1`) |
-| 1.4 | `HostRegistry`(宿主自我登记,供 `vela-plugin` 定位安装与核对版本) | **不需要** —— 这是工具链面,插件代码不调用 |
-| **1.5** | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`) |
-| **2.0** | **代际变更(`apiLevel` 1 → 2)**,详见下方「2.0 迁移」。内容上带的是 `IHostThemeApi`(`ctx.Theme`,见 §3.5):主题身份、整套已解析配色、覆盖全部换肤情形的 `Changed`。在这之前插件只看得到 `IHostInfo.Theme` 那三个值,认不出具名主题与强调色,而且同明暗内部换肤时那个值根本不变。 | 不需要 —— 用 `apiLevel: 2` 表达即可 |
+| SDK       | 新增                                                                                                                                                                                                                                                                                                                | 插件需要声明 `minSdkVersion` 吗           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| 1.0       | 首版契约                                                                                                                                                                                                                                                                                                            | —                                         |
+| 1.1       | `ExecResult` 加标准错误与退出码;远程执行的流式形态                                                                                                                                                                                                                                                                  | 用到就要                                  |
+| 1.2       | `IRemoteTunnelApi`(裸字节双工流)                                                                                                                                                                                                                                                                                    | 用到就要(`1.2.0`)                         |
+| 1.3       | `ITerminalViewApi`(出借宿主终端控件)                                                                                                                                                                                                                                                                                | 用到就要(`1.3.0`)                         |
+| 1.3.1     | 工作区**变体**:`WorkspaceVariant`、`VariantKey`/`Variants`、`NoCredentials`/`NoEndpoint`                                                                                                                                                                                                                            | 用到就要(`1.3.1`)                         |
+| 1.4       | `HostRegistry`(宿主自我登记,供 `vela-plugin` 定位安装与核对版本)                                                                                                                                                                                                                                                    | **不需要** —— 这是工具链面,插件代码不调用 |
+| **1.5**   | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`)                         |
+| **2.0**   | **代际变更(`apiLevel` 1 → 2)**,详见下方「2.0 迁移」。内容上带的是 `IHostThemeApi`(`ctx.Theme`,见 §3.5):主题身份、整套已解析配色、覆盖全部换肤情形的 `Changed`。在这之前插件只看得到 `IHostInfo.Theme` 那三个值,认不出具名主题与强调色,而且同明暗内部换肤时那个值根本不变。                                          | 不需要 —— 用 `apiLevel: 2` 表达即可       |
+| **2.0.2** | 会话能力的「打开已保存的会话」三件套:`ISessionsApi.ListSavedAsync` / `OpenAsync` / `CloseAsync`,配套 `SavedSessionInfo`、`SessionOpenOptions` 与 `PluginSessionOpenException`。在这之前插件只能操作用户**已经手动连上**的机器,任何无人值守的用法都塌了半边。                                                        | 用到就要(`2.0.2`)                         |
 
 ### 2.0 迁移
 

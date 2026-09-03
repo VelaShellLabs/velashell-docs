@@ -42,7 +42,7 @@ inProcess 停靠 / 隔离独立窗口)、可靠性(心跳/自愈/回收)、数�
 答完了直接作为下一轮发出去,被停掉或出错了原样放回输入框。onCommand 惰性激活,五语文案。
 验收:VelaShell.Plugin.Ai.Tests 44 项(工具箱审批闸门/能力桥接语义/设置与机密存取/会话历史时序读写/
 @ 引用语法/面板 headless 交互),插话另有 13 项(拿真的 `FunctionInvokingChatClient` 验"下一步之前
-真的进了上下文",以及排队/撤回/停止归还的面板接线)。**协作接入(2026-09-02)**:同一个插件里长出两条方向相反的路 —— 往外是 **IM 桥接**(飞书/钉钉/Telegram/企微四家,分别走长连接/Stream/长轮询/公网回调四种入站传输),团队在群里 @ 机器人,agent 在已连上的会话上干活、结果回帖;往内是**对外 MCP 服务端**(只绑 127.0.0.1 + 强制令牌 + 默认只读挡位),让 Claude Code / Codex 这类外部 agent 调 VelaShell 的工具,工具直接复用 `AgentToolbox`。安全默认刻意保守:白名单为空谁都不理、桥接默认只读挡位、`/mode` 默认只能往低了调、审批走文本回复(超时按拒绝)、审批人可与"能说话的人"分开配。授权一个群不用抄 id —— 设置页生成六位配对码在群里发 `/pair`,或在"敲过门的聊天"里点一下允许。**会话不必事先连好**(SDK 2.0.2 起):agent 手里有 `list_saved_sessions` / `open_session` / `close_session` 三个工具,能按会话树里保存的配置自己连一台 —— 只在 Agent 挡位可用、先过审批,宿主还会再向用户确认一次,而模型给的那句理由在两处原样出现。详见[协作接入](协作接入.md)。容器管理插件未开始。
+真的进了上下文",以及排队/撤回/停止归还的面板接线)。**协作接入(2026-09-02)**:同一个插件里长出两条方向相反的路 —— 往外是 **IM 桥接**(飞书/钉钉/Telegram/企微四家,分别走长连接/Stream/长轮询/公网回调四种入站传输),团队在群里 @ 机器人,agent 在已连上的会话上干活、结果回帖;往内是**对外 MCP 服务端**(只绑 127.0.0.1 + 强制令牌 + 默认只读挡位),让 Claude Code / Codex 这类外部 agent 调 VelaShell 的工具,工具直接复用 `AgentToolbox`。安全默认刻意保守:白名单为空谁都不理、桥接默认只读挡位、`/mode` 默认只能往低了调、审批走文本回复(超时按拒绝)、审批人可与"能说话的人"分开配。授权一个群不用抄 id —— 设置页生成六位配对码在群里发 `/pair`,或在"敲过门的聊天"里点一下允许。**机器不在线也能干活(2026-09-03)**:`AgentToolbox` 接上 `list_saved_sessions` / `open_session` / `close_session`(SDK 2.0.2 + 宿主实现),值班的人昨晚关了标签页时,机器人可以自己按**已保存的配置**连一台,而不是回一句"你先去连一台"。`open_session` 是唯一要过两道人的工具:这轮对话的审批 + 宿主自己的确认框(显示 agent 给的理由原文,可选「始终允许」—— 无人值守正是靠它才走得通);计划模式不注册,MCP 那条路只在「绕过审批」时才走得通。`close_session` 免审批但只关得掉它自己开的那些。详见[协作接入](协作接入.md)。容器管理插件未开始。
 
 质量基线(每轮全量回归):全仓构建 0 警告 0 错误;**测试 2107 项通过**(2026-08-18,
 另 79 项按环境跳过 —— 绝大多数是需要真机 Redis 的集成测试)。插件相关覆盖:
@@ -65,7 +65,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | UI(完整 Avalonia) | 08(改道) | VelaUI 声明式树**按用户决策不做**;插件直接用完整 Avalonia(编译期 AXAML/自带样式/i18n/第三方包),约束仅 Avalonia 版本与宿主一致(ALC 强制共享) | PluginPanelUiTests |
 | 停靠/窗口双形态 | 08 | 进程内:dock 标签可拖拽分栏 + 自绘卡片窗口;隔离:独立卡片窗口(PluginHostShellWindow,与资源监视同规格) | UiApi 全路径测试 |
 | 主题令牌 | 08 | `{DynamicResource Vela*}` 双模式生效(隔离经 RPC 快照下发 + 切换重推) | PluginThemeTokensTests |
-| 能力域:sessions/remoteFs/remoteExec | 07 | 复用宿主连接、进度节流、Stat 缺路径返回 null 等语义纪律 | 契约级测试 + e2e |
+| 能力域:sessions/remoteFs/remoteExec | 07 | 复用宿主连接、进度节流、Stat 缺路径返回 null 等语义纪律。**按已保存配置开会话(2026-09-03,SDK 2.0.2)**:`ListSavedAsync` / `OpenAsync` / `CloseAsync` 宿主侧落地 —— 只开已保存的配置、理由原样进确认框、凭据一个字节不经过插件、连上后走宿主既有连接流程真开一个标签页(凭据弹窗/跳板链/指纹确认/连接历史全都在);"用户拒绝"与"没连上"是两种结局各给各的异常;只关得掉本插件开的那些 | 契约级测试 + e2e、SessionsCapabilityTests、SessionRoutingTests |
 | 能力域:commands/events | 07 | 命令面板注册(前缀强制/自动清理)、会话/主题/语言事件 | PluginCommandsApiTests |
 | 能力域:storage/secrets/clipboard | 06/07 | SonnetDB `plugin_data` 单集合复合主键,**按插件强隔离**;机密 DPAPI 加密落库;卸载自动清扫(禁用≠卸载) | SonnetDbPluginDataStoreTests、清扫测试 |
 | 能力域:timeSeries(私有时序库) | 07 | SonnetDB measurement,物理名 `pts_<插件命名空间>_<短名>`(命名空间由 id 派生 + 哈希兜底,插件不可指定);建表/写/查/计数/去重/删,取值全参数化,配额见 `TimeSeriesLimits`;卸载按前缀整体 drop;隔离模式经 `ts/*` 路由 | PluginTimeSeriesTests、TimeSeriesRoutingTests |
