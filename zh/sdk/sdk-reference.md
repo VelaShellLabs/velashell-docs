@@ -84,7 +84,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 | 能力 | 关键方法 | 说明 |
 | --- | --- | --- |
-| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(SDK TBD) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型 |
+| `Sessions` (`ISessionsApi`) | `ListAsync` / `GetAsync`;`ListSavedAsync` / `OpenAsync` / `CloseAsync`(2.0.2 起) | 枚举当前 SSH 会话,**脱敏,不含任何凭据**。后三个是**请求宿主打开一条已保存的会话** —— 只能开已保存的配置(连哪些机器由用户先定)、凭据一个字节都不经过插件、宿主可以拒绝(`PluginPermissionDeniedException`),`SessionOpenOptions.Reason` 会原样显示给用户。连不上另给 `PluginSessionOpenException`:"不让你连"与"没连上"处置不同,不该混成一个类型。`CloseAsync` **只关得掉本插件经 `OpenAsync` 开的那些**(含被复用的现成会话在内,别人的一律拒绝) |
 | `RemoteFs` (`IRemoteFsApi`) | 目录/属性/读写/传输/重命名/删除 | 基于既有会话的 SFTP |
 | `RemoteExec` (`IRemoteExecApi`) | `RunAsync`(整段结果)/ `StreamAsync`(按行回调) | 独立通道,**不进用户终端** |
 | `RemoteTunnel` (`IRemoteTunnelApi`) | `OpenUnixSocketAsync` / `OpenTcpAsync` | 到远端端点的**裸字节双工流**(Docker Engine API、tar 流这类二进制协议)。仅 `inProcess` |
@@ -167,6 +167,7 @@ ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
 | 1.4 | `HostRegistry`(宿主自我登记,供 `vela-plugin` 定位安装与核对版本) | **不需要** —— 这是工具链面,插件代码不调用 |
 | **1.5** | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`) |
 | **2.0** | **代际变更(`apiLevel` 1 → 2)**,详见下方「2.0 迁移」。内容上带的是 `IHostThemeApi`(`ctx.Theme`,见 §3.5):主题身份、整套已解析配色、覆盖全部换肤情形的 `Changed`。在这之前插件只看得到 `IHostInfo.Theme` 那三个值,认不出具名主题与强调色,而且同明暗内部换肤时那个值根本不变。 | 不需要 —— 用 `apiLevel: 2` 表达即可 |
+| **2.0.2** | 会话能力的「打开已保存的会话」三件套:`ISessionsApi.ListSavedAsync` / `OpenAsync` / `CloseAsync`,配套 `SavedSessionInfo`、`SessionOpenOptions` 与 `PluginSessionOpenException`。在这之前插件只能操作用户**已经手动连上**的机器,任何无人值守的用法都塌了半边。 | 用到就要(`2.0.2`) |
 
 ### 2.0 迁移
 
