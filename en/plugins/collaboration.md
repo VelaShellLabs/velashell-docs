@@ -200,7 +200,59 @@ page before an agent can be connected.
 
 ---
 
-## 3. Known limits
+## 3. When the machine is not connected, it can connect one itself
+
+The agent on both routes used to be able to act **only on machines the user had already connected**:
+if whoever was on duty closed that tab last night, a "is the production disk full?" in the group got
+"connect one first" back. It now has three tools:
+
+| Tool                  | What it does                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `list_saved_sessions` | List the configurations **saved in the session tree** (including ones not connected right now); anything already connected comes back with its session id |
+| `open_session`        | Connect to one of them                                                                                        |
+| `close_session`       | Close a session **it opened itself**                                                                          |
+
+### 3.1 The gate: it cannot connect to a machine you never saved
+
+- The argument is a **configuration id**, not a host and port — which machines exist is something you
+  decide in the session tree first;
+- **Not one byte of credentials passes through the plugin.** Passwords, passphrases and fingerprint
+  confirmations are all handled by the host's own dialogs;
+- `close_session` **only closes what it opened**. It cannot touch the tabs you opened — an interface
+  that can hang up a terminal somebody else is using should not exist.
+
+### 3.2 Two confirmations, asking two different questions
+
+`open_session` is the only tool that goes past two humans:
+
+1. **This turn's approval** (reply `y`/`n` in the chat, press the approval card in the panel) — it
+   asks "do we let it do this, this time";
+2. **The host's confirmation dialog** (on your own desktop, showing the agent's **stated reason
+   verbatim**) — it asks "do we let *this plugin* connect machines on my behalf".
+
+The second one offers "always allow", and **that is what makes the unattended route work**: you
+approve once at your desk, and from then on the bot in the group can connect by itself. To take it
+back, revoke it on the plugin manager page (revoking there is all-or-nothing — the terminal-write
+grant goes with it).
+
+The reason is shown to you **verbatim**, never reworded. An agent that supplies no reason has the
+call sent straight back to be rewritten — a confirmation dialog with no reason is just a button
+people press blind.
+
+### 3.3 How the modes relate to this route
+
+- In **plan mode** `open_session` / `close_session` are not registered at all: planning means "say
+  how you would do it first", and nothing should move at that step. `list_saved_sessions` is
+  read-only, so it stays;
+- The **outbound MCP route** has no approval UI, so `open_session` only works when "bypass approval"
+  is selected ("ask every time" means refuse everything, and "read-only auto-allow" only clears
+  commands with no side effects — opening a connection is not one). The server instructions mention
+  this route only in that case: promising something that always hits a wall is worse than not
+  mentioning it.
+
+---
+
+## 4. Known limits
 
 - **WeCom needs a public entry point** (see 1.5).
 - **Feishu card buttons** are not wired up: approvals are text replies.
@@ -208,7 +260,7 @@ page before an agent can be connected.
 
 ---
 
-## 4. Troubleshooting
+## 5. Troubleshooting
 
 | Symptom | Usually means |
 | --- | --- |
