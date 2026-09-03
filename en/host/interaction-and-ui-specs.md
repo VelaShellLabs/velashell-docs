@@ -267,6 +267,27 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 When a session disconnects, dim the terminal canvas and center a disconnection notice (red status + “Connection disconnected” + “Reconnect” button + reason/time). The corresponding tab dot turns red, the status bar connection icon turns red, and the host dot in the sidebar turns red. Support an automatic reconnect toggle with exponential backoff.
 
+### Connection Failures for Document-Style Connections
+
+That overlay assumes **the tab already exists** — a terminal tab is created before the handshake, so the
+failure can simply be drawn inside it. SFTP / FTP / plugin file systems (S3…) / plugin workspaces (Redis…)
+have no such tab: they **only get one once they are connected**, so a failure leaves nothing on screen.
+A first-connection failure in those four therefore raises an error dialog (title “Connection Failed”, body =
+profile name + the reason) instead of only writing the status bar — with the status bar alone, what the user
+sees is “I clicked connect and nothing happened”.
+
+- The dialog shares one serialization gate with the credential prompt: restoring several sessions at startup
+  fires them concurrently, and two modal dialogs over the same owner deadlock each other.
+- **A deliberate cancel is not a failure**: cancelling the credential prompt or declining a certificate only
+  updates the status bar, with no dialog — that would merely restate the decision the user just made.
+  Cancelling also clears `LastConnectionError`, which is how the plugin-opened-session path tells
+  “could not connect” apart from “the user said no”.
+- When all three credential attempts fail and the loop exits, report once as well; otherwise typing a password
+  three times ends in silence.
+- Messages from the plugin protocol exception family (`ProtocolConnectionException` and friends) are, per the
+  SDK contract, already user-facing and already carry the endpoint, so the host presents them verbatim rather
+  than wrapping them in another “Failed to connect to X:” that prints the same address twice.
+
 ---
 
 ## 8. Command Palette ★User specified (`Ctrl+P` / `Ctrl+K`)
