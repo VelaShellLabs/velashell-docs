@@ -92,6 +92,17 @@ someone dragged it into a group. Two ways, neither of which involves copying cha
 `/use user@host:port`. The binding stores `user@host:port` rather than a session id, so it survives
 a reconnect and still works after VelaShell is restarted the next day.
 
+> **The machine does not have to be connected already** (from SDK 2.0.2). The agent has three
+> session tools: `list_saved_sessions` to see what the session tree holds, `open_session` to connect
+> one of those saved configurations, and `close_session` to close what it opened. So the bot can
+> connect by itself even if whoever was on duty closed that tab last night.
+>
+> This route is tightly gated: `open_session` is a **write** operation (available only in Agent
+> mode), it goes through the bridge's own approval, and **the host asks the user to confirm as
+> well** — the reason the model gave appears verbatim in both prompts, so a mismatch is a red flag.
+> Credentials never pass through the plugin, and a plugin can only open **saved configurations**;
+> it cannot dial an arbitrary host and port.
+
 ### 1.3 What you can do from the chat
 
 @ the bot in a group (in a direct message just talk). Slash commands:
@@ -191,11 +202,6 @@ page before an agent can be connected.
 
 ## 3. Known limits
 
-- **It can only act on machines the user has already connected.** `ISessionsApi` currently offers
-  only `ListAsync` / `GetAsync`, so a plugin cannot open a session — if whoever was on duty closed
-  that tab last night, the bot can only answer "connect one first". The SDK contract that fixes this
-  (`ListSavedAsync` / `OpenAsync` / `CloseAsync`) is on its way; see the version history in the
-  [SDK reference](../sdk/sdk-reference.md).
 - **WeCom needs a public entry point** (see 1.5).
 - **Feishu card buttons** are not wired up: approvals are text replies.
 - The bridge only handles **text messages**; images, files and rich text are not parsed yet.
