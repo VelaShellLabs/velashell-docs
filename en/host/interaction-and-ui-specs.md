@@ -411,6 +411,39 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
     The field count is protocol-dependent (a plugin protocol such as S3 declares a dozen), so without the clamp the dialog grows past the screen and the footer buttons become unreachable.
   - Plugin fields marked `IsAdvanced` are folded into “Advanced options” by default; the footer button shows a `+N` badge for the folded count,
     and editing an existing profile auto-expands as soon as any advanced field differs from its declared default.
+  - **Built-in items inside “Advanced options”**: tags, jump host, and **“Run command after authentication” + a delay (0–60 s)**.
+    - The latter is **per profile** (`SessionProfile.PostAuthCommand` / `PostAuthCommandDelaySeconds`), and is a
+      different thing from the “Run command after connect” under Settings → Terminal → Session, which applies to
+      **every** terminal: what you run after logging in differs per machine (`sudo su -` on a bastion, `tmux attach`
+      on a dev box), so a single global box forces you to pick one. When both are set, the **global one runs first,
+      then the per-profile one** — the same order the user sees across the two screens.
+    - **Shown for SSH only**: the command is injected into a shell channel, and SFTP / FTP / object storage have no
+      terminal at all. Switching to those protocols hides the row and saves the value as null — keeping it would store
+      a command that never runs, and that then fires once out of nowhere when you switch back to SSH.
+    - **Why a delay**: PTY input is kernel-buffered, so waiting for a prompt is not required; the delay exists because
+      the peer keeps writing to the terminal after login (motd scripts, corporate login banners, banners that also
+      consume stdin), and an immediate injection gets buried or swallowed by that output. `0` = send as soon as the
+      handshake completes. The 60 s ceiling is **clamped in the model's setter**, not only in the UI — the config file
+      can be hand-edited, and a `99999` would make the command look like it never runs.
+    - **Runs on reconnect too** (in-place reconnect reuses the same tab), because it describes “what to do every time
+      I log into this machine”. When the delay is > 0 it is sent via `DispatcherTimer.RunOnce` rather than blocking the
+      handshake, and the callback re-checks identity by session id + connection status — within those seconds the tab
+      may have disconnected, been closed, or reconnected as a different session.
+  - **FTP-only item inside “Advanced options”: “Default remote path”** (`FtpSettings.InitialRemotePath`, shown only
+    on the `FTP` tab). After connecting, the remote pane opens that directory instead of the login working directory —
+    the upload target is the same `/var/www/html` or `/pub/incoming` year after year, while the login directory an FTP
+    server hands you is often just the root, so clicking down four or five levels on every connection is pure busywork.
+    - **It is the first candidate, not a hard requirement**: if it cannot be opened (typo, directory removed, account
+      chrooted) it falls back to the login working directory and then to the root — the same discipline as falling back
+      to the root when the home directory cannot be opened. A mistyped path must not strand the user on a blank error page.
+    - **Normalization lives in the `FtpSettings` setter** (trim, backslashes to forward slashes, add the leading `/`,
+      strip the trailing `/`, empty and bare `/` become null), so the dialog, the importers, and a hand-edited config
+      file all share one rule: users type `\pub` out of Windows habit and paste paths with trailing slashes, and FTP's
+      `CWD` is not uniformly forgiving about either.
+    - It lives on `FtpSettings` rather than as a flat `SessionProfile` field: the latter is copied field by field in four
+      places across the repo, so every new flat field costs four edits, whereas protocol-specific settings go into their
+      own nullable nested object and only need the matching `Clone()` update. SSH / SFTP still start at the login home
+      directory, and plugin protocols (S3…) declare their own fields in their descriptor.
 - **Footer**: left = “Advanced options” (with the folded-count badge); right = `Test` / `Save` / `Connect` (accent).
 
 ### 13.2 Password Verification Dialog (Two Steps)
