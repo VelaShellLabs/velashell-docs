@@ -105,6 +105,13 @@ From top to bottom:
 2. **Session resource tree (`fill_container`, scrollable)**: collapsible group list occupying most of the sidebar.
    - Group row: collapsible triangle + group name, such as “Production” or “Testing”, + count.
    - Host row: status dot (green/yellow/red) + hostname + optional label, such as “jump host” on an `accent-dim` background.
+     - **The dot is the merge of every live session under that profile**, not whatever changed state last. One profile
+       can have several terminal tabs and several documents open at once (standalone SFTP / FTP / plugin file systems
+       such as S3 / workbenches such as Redis) while the tree has a single node for it: the merge priority is
+       `Connected > Connecting > Error > Disconnected`, and it returns to “disconnected” only once all of them are gone.
+     - Counter-examples (both were shipped bugs): with last-change-wins, opening a second tab on an already-connected
+       session and closing it mid-handshake left the node stuck on “connecting” forever (#321); and opening two tabs on
+       one FTP profile and closing either of them turned the node “disconnected” while the other was still alive.
    - The current session row is highlighted with `bg-active` and a vertical accent bar on the left.
    - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging.
    - By default, follows the active terminal tab: automatically expands the parent group, selects the corresponding connection, and scrolls to it without taking terminal keyboard focus. This can be disabled under “Settings → General → Behavior”.
