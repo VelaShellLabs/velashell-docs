@@ -37,9 +37,13 @@ VelaShell 主程序自身的架构、设计规格与调研记录。English: [`..
 | [性能与内存优化-2026-07.md](性能与内存优化-2026-07.md) | 性能与内存优化批次记录 |
 | [终端输入乱序问题分析与架构建议.md](终端输入乱序问题分析与架构建议.md) | 终端输入串行化 |
 
-## 留在代码仓库里的两份
+## 留在代码仓库里的三份
 
-[`DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) —— 设计系统的色彩/字体/间距令牌与组件规范。
-它被 XAML 注释与单元测试直接按章节号引用,跟着代码走才不会漂。
+| 文档 | 内容 |
+| --- | --- |
+| [`DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) | 设计系统的色彩 / 字体 / 间距令牌与组件规范。它被 XAML 注释与单元测试**按章节号直接引用**,跟着代码走才不会漂 |
+| [`plan.md`](https://github.com/joesdu/VelaShell/blob/main/plan.md) | **已经发生的事**:进展记录、当前架构、每次改动的来龙去脉 |
+| [`feature-plan.md`](https://github.com/joesdu/VelaShell/blob/main/feature-plan.md) | **还没发生的事**:待办、候选特性、确认不做的清单(附理由) |
 
-[`plan.md`](https://github.com/joesdu/VelaShell/blob/main/plan.md) —— 进展记录、已知问题与后续待办,开发跟进以它为准。
+> ⚠️ 本页的调研类文档里如果写着「XX 尚未实现」,**以 `feature-plan.md` 为准** ——
+> 调研文档记录的是**当时**的判断,不随实现更新。

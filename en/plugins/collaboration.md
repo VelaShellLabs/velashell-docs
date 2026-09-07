@@ -192,11 +192,50 @@ this. HTTP only asks the user to paste one address into their agent's configurat
   cannot show it an approval card. "Ask every time" therefore **refuses every write** here. To let it
   change things you must explicitly pick "read-only auto" or "bypass": a visible choice rather than a
   quiet default.
-- "Allowed servers" restricts the external agent to a named set of machines.
+- "Allowed servers" restricts the external agent to a named set of machines (see below).
 
 This one is **on by default**: loopback-only plus a mandatory token plus a read-only default mode is
 a low enough risk, while "off by default" only adds the pointless step of hunting through a settings
 page before an agent can be connected.
+
+### 2.4 Configuring "Allowed servers" (reworked 2026-09-05)
+
+The UI is a dropdown plus — when restricted — a **checklist**, the very same one used by
+"Authorized chats":
+
+| Option | Meaning |
+| --- | --- |
+| **Unrestricted** (default) | The external agent can operate any connected machine |
+| **Only the ones checked below** | Only sessions matching the checked saved profiles are visible |
+
+> The old multi-line textbox that wanted hand-typed `user@host:port` entries **has been removed.**
+> Three reasons:
+>
+> 1. **A live session carries no name.** The SDK's `SessionInfo` has only host, port and username;
+>    the name lives on `SavedSessionInfo`. Any "match by name" rule must first map the live session
+>    back to a saved profile and compare field by field — and that logic already exists as
+>    `SavedSessionScope.Matches`, with tests guarding it.
+> 2. **Names get renamed and duplicated; a saved profile's id does not.** So the UI checks names,
+>    but what gets **stored is the `SavedSessionId` plus the group name**.
+> 3. The usual hazard of hand-typing: one typo and the external agent can reach nothing at all,
+>    with no visible indication of what is wrong.
+>
+> **Out-of-scope sessions simply do not exist** as far as `SessionTargets.ResolveAsync` is
+> concerned — it never answers "that one is not on the list; the list is A, B, C", because such an
+> answer is itself a probing interface.
+
+**The default is deliberately the opposite of IM authorization**: MCP defaults to *unrestricted*,
+whereas IM authorization treats an empty list as *nobody gets through*. The reasoning is that this
+route is already bounded by loopback, a mandatory token and a read-only mode; additionally locking
+down the user's own Claude Code / Codex stops no attacker — only the user.
+
+**Upgrade migration** (`NormalizeScope` runs on both read and write):
+
+| Old list | Result |
+| --- | --- |
+| Empty | Unrestricted — byte-for-byte the pre-upgrade behaviour |
+| Non-empty, entries resolve | The matching machines are checked |
+| Non-empty, **nothing resolves** | Restricted with nothing checked = **no machine at all**, *not* a fallback to "allow everything" |
 
 ---
 

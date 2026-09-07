@@ -9,30 +9,42 @@
 
 ## 1. 进程模型
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ VelaShell 主进程(宿主)                                      │
-│                                                             │
-│  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ PluginManager │  │ Permission   │  │ Capability       │  │
-│  │ 发现/装载/卸载 │  │ Broker       │  │ Services         │  │
-│  │ 生命周期/健康  │  │ 授权检查+UX  │  │ remoteFs/terminal│  │
-│  └──────┬────────┘  └──────┬───────┘  │ ui/storage/...   │  │
-│         │                  │          └────────┬─────────┘  │
-│  ┌──────┴──────────────────┴───────────────────┴─────────┐  │
-│  │ PluginConnection(每插件一条):JSON-RPC 复用器          │  │
-│  └──────┬────────────────────┬───────────────────┬───────┘  │
-└─────────┼────────────────────┼───────────────────┼──────────┘
-     命名管道/UDS         命名管道/UDS         命名管道/UDS
-          │                    │                   │
-┌─────────┴────────┐ ┌─────────┴────────┐ ┌────────┴─────────┐
-│ PluginHost 进程 A │ │ PluginHost 进程 B │ │ PluginHost 进程 C │
-│ ┌──────────────┐ │ │                  │ │                  │
-│ │ 收集式 ALC    │ │ │   (插件 B)       │ │   (插件 C)       │
-│ │  插件 A 程序集│ │ │                  │ │                  │
-│ └──────────────┘ │ │                  │ │                  │
-└──────────────────┘ └──────────────────┘ └──────────────────┘
+```mermaid
+flowchart TB
+    subgraph Host["VelaShell 主进程（宿主）"]
+        direction TB
+        PM["<b>PluginManager</b><br/>发现 / 装载 / 卸载<br/>生命周期 · 健康"]
+        PB["<b>Permission Broker</b><br/>授权检查 + UX"]
+        CS["<b>Capability Services</b><br/>remoteFs · terminal · ui<br/>storage · secrets · …"]
+        Conn["<b>PluginConnection</b>（每插件一条）<br/>RPC 复用器"]
+        PM --> Conn
+        PB --> Conn
+        CS --> Conn
+    end
+
+    Conn -- "命名管道 / UDS" --> HA
+    Conn -- "命名管道 / UDS" --> HB
+    Conn -- "命名管道 / UDS" --> HC
+
+    subgraph HA["PluginHost 进程 A"]
+        A1["收集式 ALC<br/>插件 A 程序集"]
+    end
+    subgraph HB["PluginHost 进程 B"]
+        B1["收集式 ALC<br/>插件 B 程序集"]
+    end
+    subgraph HC["PluginHost 进程 C"]
+        C1["收集式 ALC<br/>插件 C 程序集"]
+    end
+
+    style PM fill:#1d3557,color:#fff
+    style PB fill:#7c4a03,color:#fff
+    style CS fill:#2d6a4f,color:#fff
+    style Conn fill:#5a3e85,color:#fff
 ```
+
+> **进程内模式**（当前默认）没有中间那条管道：`PluginManager` 直接在宿主进程里开一个
+> 可收集 ALC 装插件程序集，能力调用是普通方法调用，UI 直接并入停靠工作区。
+> 上图画的是**隔离进程**那一路（D1/D2/D3）。两种模式共用同一套 SDK 契约，插件源码零改动。
 
 核心决策(每条的展开见对应文档):
 

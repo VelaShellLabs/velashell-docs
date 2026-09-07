@@ -4,31 +4,43 @@
 
 ## 1. Process Model
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ VelaShell main process (host)                               │
-│                                                             │
-│  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ PluginManager │  │ Permission   │  │ Capability       │  │
-│  │ discover/load/│  │ Broker       │  │ Services         │  │
-│  │ unload/life-  │  │ authorization │  │ remoteFs/terminal│  │
-│  │ cycle/health  │  │ checks + UX  │  │ ui/storage/...   │  │
-│  └──────┬────────┘  └──────┬───────┘  └────────┬─────────┘  │
-│         │                  │          ┌────────┴─────────┐  │
-│  ┌──────┴──────────────────┴──────────┴──────────────────┐  │
-│  │ PluginConnection (one per plugin): JSON-RPC multiplexer │  │
-│  └──────┬────────────────────┬───────────────────┬───────┘  │
-└─────────┼────────────────────┼───────────────────┼──────────┘
-     Named Pipe/UDS       Named Pipe/UDS       Named Pipe/UDS
-          │                    │                   │
-┌─────────┴────────┐ ┌─────────┴────────┐ ┌────────┴─────────┐
-│ PluginHost process A │ │ PluginHost process B │ │ PluginHost process C │
-│ ┌──────────────┐ │ │                  │ │                  │
-│ │ Collectible ALC │ │ │   (Plugin B)       │ │   (Plugin C)       │
-│ │  Plugin A assembly│ │ │                  │ │                  │
-│ └──────────────┘ │ │                  │ │                  │
-└──────────────────┘ └──────────────────┘ └──────────────────┘
+```mermaid
+flowchart TB
+    subgraph Host["VelaShell main process (host)"]
+        direction TB
+        PM["<b>PluginManager</b><br/>discover / load / unload<br/>lifecycle · health"]
+        PB["<b>Permission Broker</b><br/>authorization checks + UX"]
+        CS["<b>Capability Services</b><br/>remoteFs · terminal · ui<br/>storage · secrets · …"]
+        Conn["<b>PluginConnection</b> (one per plugin)<br/>RPC multiplexer"]
+        PM --> Conn
+        PB --> Conn
+        CS --> Conn
+    end
+
+    Conn -- "Named Pipe / UDS" --> HA
+    Conn -- "Named Pipe / UDS" --> HB
+    Conn -- "Named Pipe / UDS" --> HC
+
+    subgraph HA["PluginHost process A"]
+        A1["Collectible ALC<br/>plugin A assemblies"]
+    end
+    subgraph HB["PluginHost process B"]
+        B1["Collectible ALC<br/>plugin B assemblies"]
+    end
+    subgraph HC["PluginHost process C"]
+        C1["Collectible ALC<br/>plugin C assemblies"]
+    end
+
+    style PM fill:#1d3557,color:#fff
+    style PB fill:#7c4a03,color:#fff
+    style CS fill:#2d6a4f,color:#fff
+    style Conn fill:#5a3e85,color:#fff
 ```
+
+> **In-process mode** (the current default) has no pipe in the middle: `PluginManager` opens a
+> collectible ALC inside the host process, capability calls are ordinary method calls, and the
+> plugin's UI joins the docking workspace directly. The diagram above shows the **isolated-process**
+> path (D1/D2/D3). Both modes share one set of SDK contracts and the plugin source is identical.
 
 Core decisions (expanded in the corresponding documents):
 

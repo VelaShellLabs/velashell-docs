@@ -36,15 +36,23 @@ Architecture, design specs and research for the VelaShell main application.
 
 ## Chinese-only
 
-Three research documents have no English translation yet — Redis client design, S3 protocol design
-and its implementation report, and the system-keychain / sudo credential research. See
-[`../../zh/host/`](../../zh/host/).
+Four research documents have no English translation yet:
+
+| Document | Contents |
+| --- | --- |
+| [Redis客户端插件化调研与设计.md](../../zh/host/Redis客户端插件化调研与设计.md) | Redis GUI client: workspace connection type, engine trade-offs, UI design |
+| [S3协议插件化设计.md](../../zh/host/S3协议插件化设计.md) | Design of the S3 object-storage plugin |
+| [S3协议完整支持-实施报告-2026-08.md](../../zh/host/S3协议完整支持-实施报告-2026-08.md) | Implementation log for full S3 support |
+| [系统密钥链与sudo凭据填充可行性调研.md](../../zh/host/系统密钥链与sudo凭据填充可行性调研.md) | Feasibility of the three platforms' system keychains and sudo autofill |
 
 ## Kept in the code repository
 
-[`DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) — the design system: colour,
-type and spacing tokens plus component rules. XAML comments and unit tests cite its section numbers
-directly, so it stays next to the code.
+| Document | Contents |
+| --- | --- |
+| [`DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) | The design system: colour, type and spacing tokens plus component rules. XAML comments and unit tests **cite its section numbers directly**, so it stays next to the code |
+| [`plan.md`](https://github.com/joesdu/VelaShell/blob/main/plan.md) | **What already happened**: the progress log, the current architecture, and the reasoning behind every change |
+| [`feature-plan.md`](https://github.com/joesdu/VelaShell/blob/main/feature-plan.md) | **What has not happened yet**: the backlog, candidate features, and the won't-do list with reasons |
 
-[`plan.md`](https://github.com/joesdu/VelaShell/blob/main/plan.md) — progress log, known issues and
-the backlog; the source of truth for day-to-day work.
+> ⚠️ Where a research document on this page says "X is not implemented", **trust
+> `feature-plan.md` instead** — research documents record the judgement made *at the time* and are
+> not updated as things ship.
