@@ -274,6 +274,17 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 When a session disconnects, dim the terminal canvas and center a disconnection notice (red status + “Connection disconnected” + “Reconnect” button + reason/time). The corresponding tab dot turns red, the status bar connection icon turns red, and the host dot in the sidebar turns red. Support an automatic reconnect toggle with exponential backoff.
 
+**Automatic reconnect only rescues disconnects nobody asked for** — dropped links, timeouts, a server that
+died. The four cases below never reconnect on their own; the notice still shows, and coming back is the
+user’s call via “Reconnect” (the same principle as “a tunnel the user stopped by hand is never restarted”):
+
+- The user clicked “Disconnect” in the toolbar.
+- The user typed `exit` / `logout` on the remote, i.e. the remote shell exited on its own (on the wire: the
+  peer closed the channel normally).
+- A local terminal’s shell exited.
+- The very first connection never succeeded — authentication failures above all, where retrying just throws
+  the same wrong password at the server a few more times.
+
 ### Connection Failures for Document-Style Connections
 
 That overlay assumes **the tab already exists** — a terminal tab is created before the handshake, so the
