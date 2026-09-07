@@ -228,7 +228,7 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 - **Alt+left-drag = rectangular block selection** (#128, aligned with Windows Terminal behavior): whether Alt is held at mouse-down determines whether the operation is block selection or a normal linear selection. Changing Alt during the drag does not switch modes. Copy takes the same column range from each line, always inserting line breaks between lines. When the application enables mouse tracking (htop/vim/tmux), mouse events are given to the application; use Shift+Alt+drag to force block selection.
 - **Shift+left-click = extend the selection** (#266, aligned with Windows Terminal / xterm): when a selection already exists, Shift+click keeps the anchor in place and moves only the far end to the clicked cell (before or after the anchor — the selection flips direction accordingly); keep the button held to keep dragging and fine-tune it. To grab a long log spanning more than one screen, select the start, scroll back, then Shift+click the end. The extension reuses the linear/block mode fixed at the original mouse-down. With no selection yet, Shift+click still starts a new one, preserving the existing "hold Shift to bypass application mouse reporting and select text" semantics.
 - **Ctrl+Shift+left-drag = append a discontiguous region**: commits the in-progress region and starts another one, repeatable. Copy concatenates the regions in **document order, top to bottom**, with a line break between them — so "select line 1, Ctrl+Shift-select line 3, copy once and get both lines" holds regardless of the order they were picked. Each region remembers its own mode, so Ctrl+Shift+Alt+drag appends a rectangular region that coexists with linear ones, and Ctrl+Shift+double-click appends another word. A plain drag without Ctrl+Shift starts over (dropping every appended region); so does a search-hit highlight. Ctrl+**Shift**+click on a URL does not open the browser (opening links is Ctrl+click without Shift). Terminals have no precedent for this (Windows Terminal / iTerm2 / xterm all have single-region selection only), so the binding is ours.
-- See §7 “Disconnected State” for the idle/disconnected overlay.
+- See §7 “Disconnected State” for the idle/disconnected overlay, and §7 “Connecting State” for the connecting one.
 
 ### 5.3 In-Terminal Search Bar
 
@@ -285,26 +285,63 @@ user’s call via “Reconnect” (the same principle as “a tunnel the user st
 - The very first connection never succeeded — authentication failures above all, where retrying just throws
   the same wrong password at the server a few more times.
 
+### Connecting State
+
+**The tab comes first, the session second.** The moment the user asks for a connection the tab is there,
+in a connecting state; once the session exists it is replaced in place by the real content. The four
+document-style connections (SFTP / FTP / plugin file systems S3… / plugin workspaces Redis…) used to
+**only get a tab once connected**, so on a slow link there was no tab, no dot and no spinner — the click
+looked dead.
+
+While connecting, three surfaces answer at once:
+
+| Surface | What |
+| --- | --- |
+| Tab content | Centred card: an **indeterminate** progress ring in a 48px circle + “Connecting to &lt;name&gt;” + the connection type (SFTP / FTP / S3 / Redis…) + one way out |
+| Tab strip | Amber status dot + a 12px ring in place of the type icon, the arc in that session’s accent colour |
+| Status bar (bottom right) | The background-activity ring + a one-line summary; hover lists every activity in flight |
+
+Easy things to get wrong:
+
+- **No spinning while waiting on a human.** Credential and certificate prompts are people-time, not
+  network time: close out the activity before raising the prompt and open a new one when it returns.
+- Progress is **always indeterminate**: connecting has no countable stages, and a smooth fake bar is
+  just decoration.
+- The card’s “Cancel”, the tab’s ×, `Ctrl+W` and the context-menu closes are one and the same: closing a
+  tab that is still connecting means “don’t”, and the cancellation propagates all the way into the handshake.
+- The profile’s dot in the session tree turns amber for the duration too.
+
 ### Connection Failures for Document-Style Connections
 
-That overlay assumes **the tab already exists** — a terminal tab is created before the handshake, so the
-failure can simply be drawn inside it. SFTP / FTP / plugin file systems (S3…) / plugin workspaces (Redis…)
-have no such tab: they **only get one once they are connected**, so a failure leaves nothing on screen.
-A first-connection failure in those four therefore raises an error dialog (title “Connection Failed”, body =
-profile name + the reason) instead of only writing the status bar — with the status bar alone, what the user
-sees is “I clicked connect and nothing happened”.
+With the placeholder tab from the previous section, a failure **lands in the tab that owns it**: the same
+card in its error state (red icon + the reason + “Reconnect” + “Close Tab”), identical to the terminal’s
+in-tab disconnect overlay. **No modal dialog** — a modal blocks work that has nothing to do with this
+failure. Document-style connections used to raise one only because “no connection meant no tab, and a
+failure had nowhere to go”; now it has somewhere.
 
-- The dialog shares one serialization gate with the credential prompt: restoring several sessions at startup
-  fires them concurrently, and two modal dialogs over the same owner deadlock each other.
-- **A deliberate cancel is not a failure**: cancelling the credential prompt or declining a certificate only
-  updates the status bar, with no dialog — that would merely restate the decision the user just made.
-  Cancelling also clears `LastConnectionError`, which is how the plugin-opened-session path tells
-  “could not connect” apart from “the user said no”.
-- When all three credential attempts fail and the loop exits, report once as well; otherwise typing a password
-  three times ends in silence.
+- **A deliberate cancel is not a failure**: cancelling the credential prompt raises nothing and takes the
+  placeholder tab with it (leaving an empty shell behind makes the cancel pointless). Cancelling also clears
+  `LastConnectionError`, which is how the plugin-opened-session path tells “could not connect” apart from
+  “the user said no”. Declining a certificate likewise raises no dialog, but its reason does go on the failure
+  card — that is how this connection ended, and it belongs in its own tab.
+- When all three credential attempts fail and the loop exits, the last reason lands on the card as well;
+  otherwise typing a password three times ends in silence.
 - Messages from the plugin protocol exception family (`ProtocolConnectionException` and friends) are, per the
   SDK contract, already user-facing and already carry the endpoint, so the host presents them verbatim rather
   than wrapping them in another “Failed to connect to X:” that prints the same address twice.
+- The credential prompt still runs behind its serialization gate: restoring several sessions at startup fires
+  them concurrently, and two modal dialogs over the same owner deadlock each other.
+
+### Background Activity Ring (status bar, bottom right)
+
+Every piece of background work that can outlast a moment registers here; the ring shows it and hovering
+lists them. Registered today: plugin loading / verification / prewarm, settings sync, and **every connection
+path** — first SSH connect and reconnect, plugin terminals (Telnet / serial) on open and reconnect, the four
+document-style connections, and opening a plugin panel.
+
+The boundary: a plugin’s lazy activation is registered by the plugin manager itself; whatever the plugin does
+to load its own data after the panel opens is invisible to the host and stays unspun — no fabricated spinner
+for work the host cannot see.
 
 ---
 
