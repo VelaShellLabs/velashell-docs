@@ -40,7 +40,7 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 ## Reading the table
 
 - An "Applies when" of `—` means the shortcut is unconditional.
-- `Left Click` / `Right Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Title Bar` in the key column are mouse gestures, not keyboard keys.
+- `Left Click` / `Right Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Command mark` / `Title Bar` in the key column are mouse gestures, not keyboard keys. `Command mark` is the narrow gutter column that shows one marker per command; it only appears once the remote shell emits OSC 133 marks.
 - An action listed on several rows has several equivalent bindings, or variants under different conditions (scrollback paging, for instance, differs between the main and the alternate screen).
 
 ## Full table
@@ -84,6 +84,8 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Scroll forward one page | `PageDown` | Main screen with scrollback only |
 | Scroll back one page | `Shift+PageUp` | Works on the alternate screen too |
 | Scroll forward one page | `Shift+PageDown` | Works on the alternate screen too |
+| Jump to the previous prompt | `Ctrl+Shift+Up` | requires shell integration (OSC 133) |
+| Jump to the next prompt | `Ctrl+Shift+Down` | requires shell integration (OSC 133) |
 | Delete Previous Word | `Ctrl+Backspace` | — |
 | Move the cursor to the line start | `Shift+Home` | — |
 | Move the cursor to the line end | `Shift+End` | — |
@@ -123,6 +125,7 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Scroll the buffer five times faster | `Alt+Wheel` | — |
 | Open the gutter settings menu | `Gutter+Right Click` | — |
 | Collapse or expand an output block | `Gutter+Left Click` | — |
+| Select this command's output | `Command mark+Left Click` | requires shell integration (OSC 133) |
 
 ### Command Palette
 
