@@ -22,6 +22,7 @@ VelaShell 主程序自身的架构、设计规格与调研记录。English: [`..
 | [隧道功能规划.md](隧道功能规划.md) | 端口转发隧道设计 |
 | [消息中心与资讯源.md](消息中心与资讯源.md) | 侧边栏铃铛的设计、资讯源 JSON 契约与投放规则（做推送后台看这篇） |
 | [路由追踪设计.md](路由追踪设计.md) | 路由追踪与地理可视化 |
+| [会话导入.md](会话导入.md) | 从 Xshell / WinSCP / OpenSSH `~/.ssh/config` 迁移会话:对话框行为、三个来源的定位与密码还原、`ssh_config` 的解析规则、新增来源的做法 |
 | [SFTP双栏与WinSCP差距分析.md](SFTP双栏与WinSCP差距分析.md) | 双栏 SFTP 与 WinSCP 的逐项差距决策清单 |
 | [FTP客户端可行性调研.md](FTP客户端可行性调研.md) | FTP / FTPS 支持的取舍 |
 | [Telnet与串口可行性调研.md](Telnet与串口可行性调研.md) | Telnet / 串口会话类型的可行性与改造清单 |

@@ -40,6 +40,7 @@ zh/                    en/                    内容
 | 理解插件系统为什么长这样 | [插件蓝图](zh/plugins/) · [Blueprint](en/plugins/) |
 | 让团队从 IM 里用 / 让别的 agent 调 | [协作接入](zh/plugins/协作接入.md) · [Collaboration](en/plugins/collaboration.md) |
 | 理解宿主的分层与依赖方向 | [架构](zh/host/architecture.md) · [Architecture](en/host/architecture.md) |
+| 把 Xshell / WinSCP / `~/.ssh/config` 的会话搬过来 | [会话导入](zh/host/会话导入.md) · [Session import](en/host/session-import.md) |
 | 看整个生态怎么拼起来 | 下面这张图 |
 
 ## 生态地图
