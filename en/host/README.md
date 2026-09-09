@@ -23,6 +23,7 @@ Architecture, design specs and research for the VelaShell main application.
 | [tunnel-feature-planning.md](tunnel-feature-planning.md) | Port-forwarding tunnel design |
 | [message-center-and-feed.md](message-center-and-feed.md) | The sidebar bell, the news-feed JSON contract and targeting rules (read this to build the push backend) |
 | [route-tracing-design.md](route-tracing-design.md) | Traceroute and geographic visualisation |
+| [session-import.md](session-import.md) | Migrating sessions from Xshell / WinSCP / OpenSSH `~/.ssh/config`: dialog behaviour, how each source is located and its passwords recovered, the `ssh_config` parsing rules, and how to add a source |
 | [sftp-dual-pane-winscp-gap-analysis.md](sftp-dual-pane-winscp-gap-analysis.md) | Dual-pane SFTP vs WinSCP, item by item |
 | [ftp-client-feasibility-research.md](ftp-client-feasibility-research.md) | Trade-offs behind FTP / FTPS support |
 | [telnet-and-serial-feasibility-research.md](telnet-and-serial-feasibility-research.md) | Feasibility and work list for Telnet / serial sessions |
