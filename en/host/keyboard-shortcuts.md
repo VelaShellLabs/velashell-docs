@@ -40,7 +40,7 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 ## Reading the table
 
 - An "Applies when" of `—` means the shortcut is unconditional.
-- `Left Click` / `Right Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Command mark` / `Title Bar` in the key column are mouse gestures, not keyboard keys. `Command mark` is the narrow gutter column that shows one marker per command; it only appears once the remote shell emits OSC 133 marks.
+- `Left Click` / `Right Click` / `Middle Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Command mark` / `Title Bar` / `Tab` / `Tab strip` / `Splitter` in the key column are mouse gestures, not keyboard keys. `Command mark` is the narrow gutter column that shows one marker per command; it only appears once the remote shell emits OSC 133 marks.
 - An action listed on several rows has several equivalent bindings, or variants under different conditions (scrollback paging, for instance, differs between the main and the alternate screen).
 
 ## Full table
@@ -63,6 +63,10 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Close Tab | `Ctrl+W` | — |
 | Next Tab | `Ctrl+Tab` | — |
 | Previous Tab | `Ctrl+Shift+Tab` | — |
+| Split Horizontally | `Ctrl+Shift+D` | — |
+| Split Vertically | `Ctrl+Shift+S` | — |
+| Maximize / restore pane | `Ctrl+Shift+X` | Only when the window is split |
+| Move focus between panes | `Alt+←+→+↑+↓` | Only when the window is split; otherwise the key goes to the remote shell |
 | Toggle Explorer Sidebar | `Ctrl+B` | — |
 | Toggle File Browser | `Ctrl+Shift+F` | — |
 | Tunnel Manager | `Ctrl+Shift+T` | — |
@@ -123,6 +127,9 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Paste with the right button | `Right Click` | Can be turned off in Settings |
 | Zoom the terminal font | `Ctrl+Wheel` | — |
 | Scroll the buffer five times faster | `Alt+Wheel` | — |
+| Close Tab | `Tab+Middle Click` | — |
+| Scroll the tab strip | `Tab strip+Wheel` | — |
+| Even out panes | `Splitter+Double Click` | Only when the window is split |
 | Open the gutter settings menu | `Gutter+Right Click` | — |
 | Collapse or expand an output block | `Gutter+Left Click` | — |
 | Select this command's output | `Command mark+Left Click` | requires shell integration (OSC 133) |

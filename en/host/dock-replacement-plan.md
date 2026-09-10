@@ -44,7 +44,11 @@ After a repository-wide audit, Dock's integration surface is **highly concentrat
 8. **View retention**: each document's `TerminalTabView` is built only once; switching tabs does not rebuild it
    (previously provided by `ControlRecycling`; critical to smooth multi-tab switching).
 9. **Product boundaries**: floating windows prohibited, Pin prohibited, MDI prohibited, no "+" new-tab button (new tabs use Ctrl+T/session tree).
-10. **Empty-group collapse**: after the last tab in a split-off group is closed, automatically remove the group and promote its sibling; the primary group never disappears.
+10. **Empty-group collapse**: after the last tab in a split-off group is closed, automatically remove the group and promote its sibling; **the root** never disappears.
+    (Corrected 2026-09-10: this used to read "the primary group never disappears". Pinning that exemption to one
+    specific instance turns a primary group that was dragged aside and then emptied into a blank nobody can get rid of —
+    close every tab on the left half of a split and the right half never fills the area. "Primary" is now a **transferable**
+    fallback role, handed to a surviving neighbour when the group empties. See `plan.md` §64 in the host repository.)
 
 ### 1.3 Known Defects (Corrected During Replacement; Not Behavior Changes)
 
@@ -92,7 +96,9 @@ Docking/
 
 - `DockWorkspace.Root : DockNode` — initially a single `DockGroup` (`IsPrimary=true`).
 - **Structural operations** (all in the model layer and unit-testable):
-  - `AddDocument(doc)`: add to the primary group and activate (same as the original Dock behavior: new terminals always enter the first group).
+  - `AddDocument(doc)`: put the document in the most suitable pane and activate it. Three-tier placement:
+    **empty pane > the pane currently in use > the primary group** (since 2026-09-10; it used to always target the
+    primary group, which after a split opens new tabs on the half the user is not looking at).
   - `RemoveDocument(doc)`: silently remove (connection-failure tab-removal path), then collapse empty groups.
   - `CloseDocument(doc)`: respect `CanClose` → remove → raise `DocumentClosed`.
   - `CloseOthers/All/Left/Right(doc)`: call `CloseDocument` one by one (ensures the complete SSH cleanup chain).
@@ -100,9 +106,17 @@ Docking/
     If the group contains only one document, split it the same way (consistent behavior for all groups), leaving the original group empty as a drag target.
   - `DockTo(doc, targetGroup, position)`: Center = merge into the group (with an optional index); edge = split beside the target group;
     dragging to the edge of its own group when it is the only tab = split semantics (leave the original group empty).
-  - Empty-group collapse: a non-primary group emptied by “moving/closing a document” → remove it from the parent split; if a split has only 1 child → promote the child
-    (inherit the proportion); if the promoted node is an empty secondary group left by a split (all siblings have been closed), reclaim it as well;
-    the root split converges back to a single group. Empty groups left by splitting remain in place, with the empty pane displaying “Drag a tab here”.
+  - Empty-group collapse: any group emptied by “moving/closing a document” → remove it from the parent split (a primary group first
+    hands its fallback role to a surviving neighbour, see §1.2-10 above); if a split has only 1 child → promote the child
+    (inherit the proportion); if the promoted node is an empty group left by a split (all siblings have been closed), reclaim it as well;
+    the root split converges back to a single group. **Only the root never collapses** — the layout tree always needs a floor.
+  - Empty groups left by splitting remain in place as drop targets, showing “Drag a tab from another pane here” plus a
+    **Close pane** button (`ClosePane`). When no session is open at all (the root pane), a different message is shown and
+    **no button** — there is neither a tab to drag nor a pane to close.
+  - `ToggleMaximizeGroup(group)` / `MaximizedGroup`: maximize a pane (tmux's `resize-pane -Z`). It **only affects rendering and
+    never touches the layout tree**; released automatically when focus moves away, when the pane leaves the tree, or when the
+    layout converges back to a single pane.
+  - `EqualizePanes()`: reset every split's proportions to an even share (`Proportion = NaN`).
 - **Activation semantics**: each group has `ActiveDocument`; the workspace has a global `ActiveDocument`
   (the active document in the last-interacted group). Changes raise `ActiveDocumentChanged`
   — the two original events, `ActiveDockableChanged` + `FocusedDockableChanged`, become one.
