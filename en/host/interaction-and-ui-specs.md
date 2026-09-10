@@ -484,6 +484,41 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       I log into this machine”. When the delay is > 0 it is sent via `DispatcherTimer.RunOnce` rather than blocking the
       handshake, and the callback re-checks identity by session id + connection status — within those seconds the tab
       may have disconnected, been closed, or reconnected as a different session.
+  - **Session-level terminal items inside “Advanced options” (SSH only)**: encoding, terminal type, color scheme, tab
+    color, startup directory, keep-alive interval, and **anti-idle (s)**. There can only be one global setting, but
+    machines are not alike — the bastion host speaks GBK while the dev box speaks UTF-8, and production tabs should be
+    red at a glance. Those differences follow the machine; folded into one global switch they become an either/or.
+    Every item except anti-idle means “empty / `-1` = follow the global setting”.
+    - **Anti-idle and keep-alive do not guard the same thing; they complement each other and cannot substitute for one
+      another**: keep-alive is the SSH **protocol-level** heartbeat (`KeepAliveSeconds` →
+      `SshClientSettings.KeepAliveInterval`) and guards against NAT and firewalls quietly reclaiming an idle TCP
+      connection; anti-idle guards against the **server** dropping you for being idle (bash's `TMOUT`, a bastion host's
+      session timeout), and those all count “has anyone typed into the tty” — a protocol heartbeat is invisible to them.
+      With two “seconds” fields side by side, the hint text has to nail that distinction, or users will simply assume
+      they set the wrong one.
+    - **It sends `NUL` (0x00), not a space**: a space is taken as user input and stays on the command line, and
+      full-screen programs (vim / less / htop) swallow it as a keypress — you come back after an hour to thirty spaces
+      in front of your command, or to less already scrolled to the end of the file. `NUL` is discarded by the line
+      discipline yet still refreshes the tty's read activity: there was input, and nothing happened.
+    - **Per session only, with no global switch** — unlike every other item in the group, its `null` means “off”, not
+      “follow the global setting”: only a specific few machines kick you for idling, and the injected byte does end up
+      in the peer's tty, so spraying it over every session only makes the rest carry a risk they never asked for. `0`
+      in the dialog = off, and it is normalized back to `null` on save so that a profile which never touched this item
+      is not left with a false “I set it, and I set it to off” trace. The 3600 s ceiling is **clamped in the model's
+      setter**, the same discipline as keep-alive.
+    - **It only fires when the session is genuinely idle**: the clock runs from the **last outbound write** (keystrokes,
+      programmatic injection, and its own byte), not from the last injection. When the timer wakes up and finds the last
+      keystroke too recent, it moves the alarm to the moment a full interval will have passed and goes back to sleep —
+      so while the user is typing, not one extra byte goes out.
+    - **Nothing is sent during a ZMODEM session**: that stream carries protocol frames, and one stray byte means a CRC
+      error and a retransmit at best, a failed transfer at worst — the same reason keystrokes are held back during a
+      transfer; and a transfer is traffic in itself, so the server does not consider the session idle anyway. The
+      withheld injection is not dropped: it goes out as soon as sending is possible again.
+    - **Applies on reconnect too** (the same discipline as “Post-authentication command”): it is set from the session
+      profile when the transport is attached, so both the first connection and every reconnect get it — missing the
+      reconnect path shows up as “it starts kicking me again after a dropped connection”, and nobody connects that to
+      reconnecting. Changing the profile takes effect on the **next connection**, the same as the keep-alive field next
+      to it; a local terminal has no session profile, so not a single byte is ever sent there.
   - **FTP-only item inside “Advanced options”: “Default remote path”** (`FtpSettings.InitialRemotePath`, shown only
     on the `FTP` tab). After connecting, the remote pane opens that directory instead of the login working directory —
     the upload target is the same `/var/www/html` or `/pub/incoming` year after year, while the login directory an FTP
