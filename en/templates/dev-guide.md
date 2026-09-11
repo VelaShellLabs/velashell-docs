@@ -442,11 +442,17 @@ workspaces (`WorkspaceDescriptor.Icon`) take the same type. See
   not 24. **Leave the view box out and it defaults to 24, so scaling a 1024 logo against 24 blows it
   up more than fortyfold** — that is usually what is behind an "icon does not show up" report.
 
-Window mode ignores `Icon` (a window has its own title bar). A malformed path will not take the UI
-down: if the host fails to parse it, it treats the icon as absent and falls back to the generic plug.
+**Window mode takes this icon too**: it is drawn at the far left of the custom title bar, both
+in-process and in an isolated process. With several plugins' settings windows open side by side,
+the icon in each title bar is what tells them apart — before this, in-process windows all carried
+the same generic plug and isolated windows had no icon at all.
 
-⚠️ Do not confuse this with `TitleActions` above: that draws **buttons on a window title bar**,
-always a 24×24 stroke glyph with no notion of fill or view box. This one draws the **tab**.
+A malformed path will not take the UI down: if the host fails to parse it, it treats the icon as
+absent and falls back to the generic plug.
+
+⚠️ Do not confuse this with `TitleActions` above: that draws the **action buttons on the right of
+the title bar**, always a 24×24 stroke glyph with no notion of fill or view box. This one draws the
+tab, and the glyph at the **far left** of the title bar.
 
 **Theme tokens: write `{DynamicResource VelaXxx}` to follow the host theme.** All of the host's `Vela*` design tokens (semantic brushes, font-size scale, and font families) are available to plugins and follow light/dark switching immediately:
 
