@@ -588,6 +588,38 @@ new()
 图标传的是 lucide 风格的 24×24 **SVG 路径数据**而不是资源键 —— 隔离进程里没有宿主的
 `Icon.*` 资源字典;宿主按标题栏字号缩放描边。回调在 UI 线程调用。
 
+#### 标签页图标(`PanelOptions.Icon`,SDK 2.0.4)
+
+停靠标签页默认顶着一个**通用插头** —— 宿主不认识你这个面板是干什么的,也不该认识:
+宿主里维护一张「插件 id → 图标」的对照表,第三方插件永远进不去。想要自己的标就自己交:
+
+```csharp
+new()
+{
+    Title = "AI 助手",
+    // lucide 的 bot,六段描边
+    Icon = PluginIcon.Stroked(
+        "M12 8V4H8 M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z "
+        + "M2 14h2 M20 14h2 M15 13v2 M9 13v2"),
+    Placement = PanelPlacement.Right
+}
+```
+
+`PluginIcon` 是标签页图标的**唯一入口**,协议(`ProtocolDescriptor.Icon`)与工作台
+(`WorkspaceDescriptor.Icon`)填的是同一个类型,详见 [SDK 参考 §3.6](../sdk/sdk-reference.md)。
+两个便捷构造分别对应两种真实用法:
+
+- `PluginIcon.Stroked(path)` —— lucide 那套描边字形,视框恒为 24,抄路径即可;
+- `PluginIcon.Filled(path, viewBoxSize: 1024)` —— 品牌 logo:实心,而且视框通常不是 24。
+  **视框不报就是 24,按 24 缩放一个 1024 的 logo 等于把它放大四十多倍** ——
+  「图标没显示」这类现象,原因通常就在这一条。
+
+窗口模式忽略 `Icon`(窗口有自己的标题栏)。路径畸形不会把界面顶掉:宿主解析失败时当作没给,
+退回通用插头。
+
+⚠️ 别和上面的 `TitleActions` 搞混:那个画的是**窗口标题栏上的按钮**,恒为 24×24 描边,
+没有填充与视框可言;这个画的是**标签页**。
+
 **主题令牌:写 `{DynamicResource VelaXxx}` 就能贴宿主主题。** 宿主的全部
 `Vela*` 设计令牌(语义画刷、字号阶梯、字体族)对插件可用,明暗切换即时跟随:
 
@@ -679,6 +711,7 @@ context.Protocols.Register(
     {
         Id = context.PluginId,               // 或 $"{context.PluginId}.<子协议>"
         DisplayName = "S3",
+        Icon = PluginIcon.Stroked(CloudPathData),   // 会话标签页的图标,不给就是通用插头
         DefaultPort = 443,
         HostLabel = "服务端点",              // 可改写主机/用户名/密码三格的标签
         Features = ProtocolFeatures.ServerSideCopy | ProtocolFeatures.AnonymousAccess,
@@ -798,6 +831,8 @@ context.Workspaces.Register(
     {
         Id = context.PluginId,               // 或 $"{context.PluginId}.<子类型>"
         DisplayName = "Redis",
+        // 品牌 logo 多半是实心的、视框也不是 24 —— 两件都要说清楚,详见 SDK 参考 §3.6
+        Icon = PluginIcon.Filled(RedisLogoPathData, viewBoxSize: 1030),
         DefaultPort = 6379,
         HostLabel = "服务地址",              // 可改写主机/用户名/密码三格的标签
         Fields = [ new() { Key = "mode", Label = "部署形态", Kind = ProtocolSettingKind.Choice, … } ],

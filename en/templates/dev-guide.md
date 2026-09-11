@@ -415,6 +415,39 @@ The icon is lucide-style 24×24 **SVG path data**, not a resource key — an iso
 access to the host's `Icon.*` resource dictionary; the host scales the stroke to the title-bar size.
 The callback runs on the UI thread.
 
+#### Tab icons (`PanelOptions.Icon`, SDK 2.0.4)
+
+A docked tab carries a **generic plug** by default — the host does not know what your panel is for,
+and it should not: a host-side "plugin id → icon" lookup table is a table third-party plugins can
+never get into. Hand over your own glyph instead:
+
+```csharp
+new()
+{
+    Title = "AI Assistant",
+    // lucide's bot, six strokes
+    Icon = PluginIcon.Stroked(
+        "M12 8V4H8 M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z "
+        + "M2 14h2 M20 14h2 M15 13v2 M9 13v2"),
+    Placement = PanelPlacement.Right
+}
+```
+
+`PluginIcon` is the **single entry point** for tab icons; protocols (`ProtocolDescriptor.Icon`) and
+workspaces (`WorkspaceDescriptor.Icon`) take the same type. See
+[SDK reference §3.6](../sdk/sdk-reference.md). The two factories map onto the two real cases:
+
+- `PluginIcon.Stroked(path)` — a lucide stroke glyph; the view box is always 24, just copy the path;
+- `PluginIcon.Filled(path, viewBoxSize: 1024)` — a brand logo: filled, and its view box is usually
+  not 24. **Leave the view box out and it defaults to 24, so scaling a 1024 logo against 24 blows it
+  up more than fortyfold** — that is usually what is behind an "icon does not show up" report.
+
+Window mode ignores `Icon` (a window has its own title bar). A malformed path will not take the UI
+down: if the host fails to parse it, it treats the icon as absent and falls back to the generic plug.
+
+⚠️ Do not confuse this with `TitleActions` above: that draws **buttons on a window title bar**,
+always a 24×24 stroke glyph with no notion of fill or view box. This one draws the **tab**.
+
 **Theme tokens: write `{DynamicResource VelaXxx}` to follow the host theme.** All of the host's `Vela*` design tokens (semantic brushes, font-size scale, and font families) are available to plugins and follow light/dark switching immediately:
 
 ```xml

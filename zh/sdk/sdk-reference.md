@@ -138,6 +138,43 @@ ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
 > 按参数判断"变没变"会整整漏掉一次换肤;`Theme == "system"` 时它也没告诉你此刻是明是暗。
 > `IHostThemeApi.Changed` 是三种情形的并集 —— 换具名主题、跟随系统翻转、改强调色。
 
+### 3.6 标签页图标(`PluginIcon`,SDK 2.0.4)
+
+宿主的会话标签页按连接类型画图标(SSH 一个字形、SFTP / FTP 一个字形)。
+**插件的标签默认是一个通用插头** —— 宿主不认识你是 Redis 还是别的什么,也不该认识:
+宿主里维护一张「插件 id → 图标」的对照表,第三方插件永远进不去。
+
+所以图标由插件自己交出来。**三处填的都是同一个类型** `PluginIcon`:
+
+| 填在哪 | 画的是 | 什么时候给 |
+| --- | --- | --- |
+| `ProtocolDescriptor.Icon` | 该协议的会话标签 | 注册期,一个协议一份 |
+| `WorkspaceDescriptor.Icon` | 该工作台的会话标签 | 注册期,一个工作台一份 |
+| `PanelOptions.Icon` | 该面板的标签(窗口模式忽略) | 每次开面板一份 |
+
+最后一处是「每次一份」而不是「一个插件一份」:同一个插件开的聊天页与设置页可以各画各的。
+
+两个便捷构造覆盖了全部真实用法:
+
+```csharp
+// lucide 那套描边字形:抄路径即可,视框恒为 24
+Icon = PluginIcon.Stroked("M6 12h12 M6 8h12a4 4 0 0 1 0 8H6a4 4 0 0 1 0-8Z")
+
+// 品牌 logo:实心,而且视框通常不是 24 —— 两件都要说清楚
+Icon = PluginIcon.Filled(RedisLogoPathData, viewBoxSize: 1030)
+```
+
+三条容易踩的:
+
+1. **视框不报就是 24。** 品牌 logo 导出的视框常是 1024 之类,不报出来宿主会按 24 缩放,
+   **把它放大四十多倍** —— 「图标没显示」这类现象,原因通常就在这一条。
+2. **描边与填充选错了不会报错,只会看不出是什么。** 用描边去画实心图形得到的是它的轮廓线;
+   反过来把描边字形填起来则是一堆色块。
+3. **路径畸形不会把界面顶掉。** 宿主解析失败时当作没给,退回通用插头。
+
+> ⚠️ 与 `PanelTitleAction.IconPathData` **不是一回事**。那个画的是**窗口标题栏**上的动作按钮,
+> 恒为 24×24 描边,没有填充与视框可言(见[开发指南 §5.9](../templates/dev-guide.md))。
+
 ---
 
 ## 4. 清单(`plugin.json`)
@@ -168,6 +205,8 @@ ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
 | **1.5**   | 协议连接表单三件套:`ProtocolFeatures.NoEndpoint`(收起端口栏)、`ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource`(候选项在表单打开时现取)、`AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue`(可编辑下拉;主机栏也能做成下拉)。由串口插件驱动 —— 端口是热插拔设备,波特率有非标值。 | 用到就要(`1.5.0`)                         |
 | **2.0**   | **代际变更(`apiLevel` 1 → 2)**,详见下方「2.0 迁移」。内容上带的是 `IHostThemeApi`(`ctx.Theme`,见 §3.5):主题身份、整套已解析配色、覆盖全部换肤情形的 `Changed`。在这之前插件只看得到 `IHostInfo.Theme` 那三个值,认不出具名主题与强调色,而且同明暗内部换肤时那个值根本不变。                                          | 不需要 —— 用 `apiLevel: 2` 表达即可       |
 | **2.0.2** | 会话能力的「打开已保存的会话」三件套:`ISessionsApi.ListSavedAsync` / `OpenAsync` / `CloseAsync`,配套 `SavedSessionInfo`、`SessionOpenOptions` 与 `PluginSessionOpenException`。在这之前插件只能操作用户**已经手动连上**的机器,任何无人值守的用法都塌了半边。                                                        | 用到就要(`2.0.2`)                         |
+| **2.0.3** | 标签页图标的第一版:`ProtocolDescriptor` / `WorkspaceDescriptor` 上各一组 `IconPathData` / `IconViewBoxSize` / `IconIsFilled`。⚠️ **这一版的三对字段已被 2.0.4 版的 `Icon` 取代,不要再用** —— 当时面板那条路还漏着,而同一个概念在两处各写三个平行属性本身就是设计错误。发布次日即改,零插件受影响。 | ❌ 已废弃,直接用 2.0.4 版                   |
+| **2.0.4**   | 标签页图标收成一个入口 `PluginIcon`(见 §3.6),三处共用:`ProtocolDescriptor.Icon`、`WorkspaceDescriptor.Icon`,以及**新增的** `PanelOptions.Icon` —— 面板标签走的不是描述符那条路,2.0.3 漏了它。带 `PluginIcon.Stroked` / `PluginIcon.Filled` 两个便捷构造。 | 用到就要(`2.0.4`)                           |
 
 ### 2.0 迁移
 
