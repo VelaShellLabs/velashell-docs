@@ -159,7 +159,7 @@ So the plugin hands the icon over itself. **All three places take the same type*
 | --- | --- | --- |
 | `ProtocolDescriptor.Icon` | Session tabs for that protocol | At registration, one per protocol |
 | `WorkspaceDescriptor.Icon` | Session tabs for that workspace | At registration, one per workspace |
-| `PanelOptions.Icon` | That panel's tab (ignored in window mode) | Per panel opening |
+| `PanelOptions.Icon` | That panel's tab **and its title bar in window mode** | Per panel opening |
 
 The last one is per-opening rather than per-plugin on purpose: the chat page and the settings
 page opened by the same plugin can each carry their own glyph.

@@ -150,7 +150,7 @@ ctx.Theme.Changed += info => { /* Current 与 Colors 都已是新值 */ };
 | --- | --- | --- |
 | `ProtocolDescriptor.Icon` | 该协议的会话标签 | 注册期,一个协议一份 |
 | `WorkspaceDescriptor.Icon` | 该工作台的会话标签 | 注册期,一个工作台一份 |
-| `PanelOptions.Icon` | 该面板的标签(窗口模式忽略) | 每次开面板一份 |
+| `PanelOptions.Icon` | 该面板的标签**以及窗口模式下的标题栏** | 每次开面板一份 |
 
 最后一处是「每次一份」而不是「一个插件一份」:同一个插件开的聊天页与设置页可以各画各的。
 
