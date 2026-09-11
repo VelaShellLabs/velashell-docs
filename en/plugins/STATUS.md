@@ -61,13 +61,13 @@ Quality baseline (full regression each round): full-repository build with 0 warn
 | UI mount points | Command palette, dock document, independent window, plugin management page | Sidebar view, status bar, settings page, context-menu contribution points (blueprint 08) |
 | Cross-process dock embedding | Retained at the RPC protocol layer (EmbedRoutingTests), but the **host Win32 implementation has been removed**: cross-process window adoption fundamentally conflicts with dock reparenting (stutter/windows escaping), and is **deprecated** | Isolated plugins always use independent card windows; true dock tabs use in-process mode; stable cross-platform approach = shared-memory surface (blueprint 08 §4, long term) |
 | Distribution form | Directory as plugin + **one-click install/uninstall of .vpx package** (ZIP, zip-slip protection); SDK used via ProjectReference; **published artifacts carry `plugins/<directory-name>/` and `VelaShell.PluginHost.*`** (the former follows each plugin's `<VelaPluginShip>` choice, example plugins are not packaged, and directory name = ID with dots replaced by hyphens to avoid nested-bundle misclassification by macOS codesign; to ensure the host process has a real executable on disk, the main application has used flat publishing since 2026-08-12) | SDK NuGet package publishing, `dotnet new` templates, .vpx signing/validation (blueprints 09/10) |
+| Plugin marketplace / registry | **The marketplace is live** ([market.easilynet.top](https://market.easilynet.top); repository [velashell-markets](https://github.com/VelaShellLabs/velashell-markets) — upload, review, search and distribution, authenticating through [velashell-identity](https://github.com/joesdu/velashell-identity)); **the host now ships a read-only marketplace client** (2026-09-11): opening the plugin manager asks `GET /api/plugins/latest` once for the installed ids, a newer version can be downloaded and installed in place, and a version this host is too old for **gets a hint, not a button**. `.vpx` signature verification and **publisher continuity** (later versions of an id must still be signed by the pinned key; changing or dropping the key makes the user compare two fingerprints first) have shipped | **Trust root**: the marketplace's claim that "this id belongs to this key" is itself TOFU — what is missing is an id↔key mapping vouched for by publisher identity. And only the **update** path consults the marketplace today; the install path does not. Browsing, search and reviews still happen in a browser; there is no in-app store page (blueprint 10 §4, "Browse") |
 
 ### ❌ Not Started
 
 | Area | Blueprint | Description |
 | --- | --- | --- |
 | Permission system + Broker | 06 | **Not implemented by user decision** (first-party/self-installed plugins, trust comes with installation); revisit if a third-party ecosystem opens in the future |
-| .vpx signing / store | 10 | Packaging and .vpx install/uninstall are complete; **the marketplace is live** ([market.easilynet.top](https://market.easilynet.top); repository [velashell-markets](https://github.com/VelaShellLabs/velashell-markets) — upload, review, search and distribution, authenticating through [velashell-identity](https://github.com/joesdu/velashell-identity)). **Still missing: publisher signature verification** (blueprint 10 §3) |
 | Capability domains: localFs / audio / net / ai | 07/11 | Not exposed. Recommend defining `vela.ai` when work begins with the AI plugin (the terminal domain is complete) |
 | Plugin management page log viewer | 02/06 | List/enable-disable/revoke authorization are complete; tailing each plugin's logs is deferred |
 | Advanced SonnetDB models exposed to plugins | — | Time-series/full-text/vector, etc. are not exposed to plugins for now; revisit based on real demand (apiLevel follows additive-only discipline) |
@@ -227,8 +227,10 @@ readable. Progress is a coarse ladder rather than a smooth curve: none of these 
 fine-grained callbacks, and rather than invent a smooth fake, the arc jumps a step at a time — every
 jump corresponds to something genuinely finished.
 
-> Note: the plugin store (market.easilynet.top) is a link opened in the browser; the download does
-> not happen in-app. The slow seconds are entirely local — verification, extraction, hashing.
+> Note (updated 2026-09-11): browsing the store is still a link opened in the browser, but **updates
+> now happen in-app** — the plugin manager downloads the new `.vpx` and hands it to the same install
+> path. On the manual-install path the slow seconds are still entirely local — verification,
+> extraction, hashing.
 
 **One thing deliberately not done**: activating right after install re-computes the directory hash
 that `SaveInstallReceiptAsync` just computed. It looks wasteful, but do not pre-seed the verification
