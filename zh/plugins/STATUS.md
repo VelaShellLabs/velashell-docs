@@ -86,13 +86,13 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | UI 挂载点 | 命令面板、停靠文档、独立窗口、插件管理页 | 侧栏视图、状态栏、设置页、右键菜单贡献点(蓝图 08) |
 | 跨进程 dock 停靠 | RPC 协议层保留(EmbedRoutingTests),但**宿主 Win32 实现已移除**:跨进程窗口收养与 dock reparenting 根本冲突(卡顿/窗口飘出),**弃用** | 隔离插件一律独立卡片窗口;真·dock 标签用 inProcess;跨平台稳态 = 共享内存表面(蓝图 08 §4,远期) |
 | 发布形态 | 目录即插件 + **.vpx 专属容器一键装/卸**;**SDK/工具/模板五个 NuGet 包**(见下节);**发布产物携带 `plugins/<目录名>/` 与 `VelaShell.PluginHost.*`**(前者按各插件 `<VelaPluginShip>` 取舍,示例插件不进包,目录名 = id 把点换成短横以避开 macOS codesign 的嵌套 bundle 误判;为让宿主进程在磁盘上有真实可执行体,主程序 2026-08-12 起改为摊开发布) | 插件源(registry)与发布者验证(蓝图 10 §3,分期推迟) |
+| 插件商店 / 插件源 | **商店已上线**([market.easilynet.top](https://market.easilynet.top),仓库 [velashell-markets](https://github.com/VelaShellLabs/velashell-markets):上传、审核、检索与分发,认证走 [velashell-identity](https://github.com/joesdu/velashell-identity));**宿主已内置只读商店客户端**(2026-09-11):打开插件管理页时按 id 批量问一次 `GET /api/plugins/latest`,有新版可在页内下载安装,宿主太旧的**给提示不给按钮**;`.vpx` 验签与**发布者连续性**(同 id 的后续版本必须仍由钉住的那把私钥签名,换钥或去签名要用户看过两个指纹再点头)已落地 | **信任根**:商店说的「这个 id 属于这把钥匙」本身也是 TOFU,缺一份由发布者身份背书的 id↔公钥映射;而且今天只有**更新**路径去查商店,装包路径没查。浏览 / 搜索 / 评价仍在浏览器里,应用内没有商店浏览页(蓝图 10 §4「浏览」) |
 
 ### ❌ 未开始
 
 | 分项 | 蓝图 | 说明 |
 | --- | --- | --- |
 | 权限系统 + Broker | 06 | **用户决策不做**(第一方/自装插件,信任即安装);若未来开放第三方生态需回访 |
-| 插件商店 / 插件源 | 10 | 打包已做;**商店已上线**([market.easilynet.top](https://market.easilynet.top),仓库 [velashell-markets](https://github.com/VelaShellLabs/velashell-markets):上传、审核、检索与分发,认证走 [velashell-identity](https://github.com/joesdu/velashell-identity))。**仍未做:发布者签名验证**(蓝图 10 §3) |
 | 能力域:localFs / audio / net / ai | 07/11 | 未开口。建议 `vela.ai` 随 AI 插件动工时定接口(terminal、timeSeries、protocols、workspaces 域已完成) |
 | 插件管理页 日志查看 | 02/06 | 列表/启停/撤授权已做;查看每插件日志尾部待后续 |
 | SonnetDB 高阶模型开放 | — | 时序/全文/向量等暂不对插件开口,按真实需求再议(apiLevel 只增纪律) |
@@ -199,8 +199,9 @@ AI / Redis 面板另有 headless 装载与交互测试。
 都拿不到细粒度回调,与其编一个平滑的假进度,不如让弧一段一段地跳 —— 它至少每一跳都对应
 真的完成了一件事。
 
-> 注:插件商店(market.easilynet.top)是浏览器里开的链接,下载不在应用内 ——
-> 慢的那几秒全在本地的验签/解压/哈希上。
+> 注(2026-09-11 更新):浏览商店仍然是浏览器里开的链接,但**更新已经在应用内了** ——
+> 插件管理页会下载新版 `.vpx`,再走同一条安装路径。手动装包那条路上慢的那几秒,
+> 仍然全在本地的验签/解压/哈希上。
 
 **没有做的一件事**:装完随即激活会把 `SaveInstallReceiptAsync` 刚算过的目录哈希再算一遍,
 看着是浪费。但不要预置校验结果去省它 —— 那等于把"落凭据 → 首次装载"之间的窗口排除在

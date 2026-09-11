@@ -161,6 +161,11 @@ Compares versions by id. Ids the marketplace does not carry (hand-placed, privat
 rather than failed. One plugin failing does not stop the rest; the exit code reports the tally.
 `--pre` / `--source` / `--prefix` / `--trust` / `--allow-unsigned` mean what they do for `install`.
 
+The host's plugin manager page (since 2026-09-11) uses the **same selection rule** — pre-releases
+are skipped by default, falling back to the newest pre-release when no stable version exists.
+The two must agree: if they don't, you get "the CLI says there's an update, the manager says
+there isn't", which cannot be explained to a user.
+
 ### `list`
 
 ```bash
@@ -184,6 +189,11 @@ With no text it lists the first page.
 > `GET /api/plugins/{id}/versions/{version}/download` (returning
 > `{url, fileSha256, payloadSha256, packageSize}`). Only `http(s)` is accepted; a plain-HTTP
 > download URL earns a warning - the digest is still checked, but nobody can vouch for who served it.
+>
+> The host's plugin manager needs a fourth: `GET /api/plugins/latest?ids=<comma-separated>&pre=<bool>`,
+> returning the latest published version keyed by plugin id (version, `apiLevel`, `minHostVersion`,
+> `minSdkVersion`, signature verdict and publisher fingerprint, `fileSha256`, `packageSize`).
+> The CLI does not use it - it picks from the detail endpoint itself.
 
 ---
 

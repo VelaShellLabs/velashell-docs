@@ -1,9 +1,9 @@
 # 10 · Packaging, Signing, and Distribution
 
 > **The operational handbook is [publishing.md](../templates/publishing.md)** (build → pack → sign → submit).
-> Marketplace: <http://market.easilynet.top> (the client has no built-in marketplace client yet;
-> users download the `.vpx` and install it from the plugin manager page). This document is the
-> long-term blueprint.
+> Marketplace: <http://market.easilynet.top> (**browsing and search happen in a browser**; the
+> client's built-in marketplace client only checks for updates and downloads packages — see the
+> 2026-09-11 note below). This document is the long-term blueprint.
 >
 > **Implementation note (2026-08)**: **packaging and signing have shipped**; **distribution
 > (registry / store) is still deferred**. Three places where the implementation departs from the
@@ -24,6 +24,30 @@
 >    `PluginManagerOptions.RequireTrustedPackageSignature` plus `TrustedPackageKeys`. The three
 >    trust tiers, TOFU, key continuity, and revocation lists below are future work for when a
 >    third-party ecosystem opens up.
+>
+> **Implementation note (2026-09-11): the host now ships a read-only marketplace client.** Opening the
+> plugin manager asks the marketplace once whether the installed plugins have newer versions, and a
+> newer version can be downloaded and installed without leaving the page. Where it departs from §2/§3:
+>
+> - **No static signed index** (§3 stage A). The host calls `GET /api/plugins/latest?ids=…&pre=`,
+>   fetching the latest published version for a batch of ids. Once the catalogue grows, making every
+>   client download the whole table to look at a handful of plugins is wasted work on both ends; asking
+>   by id keeps the request proportional to how many plugins this machine has, not to the store's size.
+> - **No background polling** (§2 says "daily by default"). The request happens only when the user opens
+>   the plugin manager — not at startup, not on a timer. The reason is in the host repository's
+>   `PRIVACY.md`, which accounts for every outbound request one by one.
+> - **Pre-releases are excluded by default**: the endpoint takes a `pre` flag; the host never sets it.
+>   Installing a beta is what `vela-plugin --pre` is for.
+> - **Automatic updates are still not done** (as below). "Install straight away when the publisher has
+>   not changed" *is* done: when the fingerprint matches the pinned one, no second question is asked;
+>   a different publisher — or a version that is simply unsigned — goes through the full confirmation.
+> - **Downgrade is not done** (last bullet of §2): no previous version is cached locally.
+> - **A newer version this host cannot install gets a hint, not a button** — delivering on
+>   [03 §7](03-plugin-model.md)'s "surface a clear 'upgrade the host' hint in the plugin manager".
+>   A button that is guaranteed to fail is worse than no button.
+> - **Upgrading no longer wipes plugin data**: overwriting installs now "deactivate → swap directory",
+>   keeping KV, secrets and time-series intact. Only uninstall purges — matching what
+>   `vela-plugin update` has always done.
 
 ## 1. Signing and Source Trust
 

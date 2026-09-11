@@ -153,6 +153,10 @@ vela-plugin update --check        # 只报告,不动手
 某一个升级失败不会拦住其余的,全部跑完后用退出码汇报。
 `--pre` / `--source` / `--prefix` / `--trust` / `--allow-unsigned` 与 `install` 同义。
 
+宿主的插件管理页(2026-09-11 起)用的是**同一套选版规则** —— 默认跳过预发布,
+一个正式版都没有时退回最新的预发布。两边口径必须一致:不一致就会得到
+「命令行说该升、管理页说没变」这种没法向用户解释的结果。
+
 ### `list`
 
 ```bash
@@ -173,6 +177,10 @@ vela-plugin search [关键词] [--page N] [--size N] [--source <url>]
 > **自建商店**:`--source` 或 `VELA_PLUGIN_MARKET` 指到你自己那份即可,它需要提供三个只读接口 ——
 > `GET /api/plugins?q=&page=&size=`、`GET /api/plugins/{id}`、
 > `GET /api/plugins/{id}/versions/{version}/download`(返回 `{url, fileSha256, payloadSha256, packageSize}`)。
+>
+> 宿主的插件管理页还要第四个:`GET /api/plugins/latest?ids=<逗号分隔>&pre=<bool>`,
+> 返回按插件 id 索引的最新已发布版本表(版本号、`apiLevel`、`minHostVersion`、`minSdkVersion`、
+> 签名结论与发布者指纹、`fileSha256`、`packageSize`)。CLI 不用它 —— 它走详情接口自己挑。
 > 只放行 `http(s)`;直链走 HTTP 时会警告一句 —— 摘要仍然核,但没人能担保是谁发的。
 
 ---
