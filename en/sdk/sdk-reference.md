@@ -146,6 +146,48 @@ ctx.Theme.Changed += info => { /* Current and Colors are already updated */ };
 > tell you whether the UI is currently light or dark. `IHostThemeApi.Changed` is the union of
 > all three cases: named-theme switch, system light/dark flip, and accent override.
 
+### 3.6 Tab icons (`PluginIcon`, SDK 2.0.4)
+
+The host draws an icon on every session tab based on the connection type (one glyph for SSH,
+another for SFTP / FTP). **A plugin's tab gets a generic plug by default** — the host does not
+know whether you are Redis or something else, and it should not: a host-side
+"plugin id → icon" lookup table is a table third-party plugins can never get into.
+
+So the plugin hands the icon over itself. **All three places take the same type**, `PluginIcon`:
+
+| Where | What it draws | When you supply it |
+| --- | --- | --- |
+| `ProtocolDescriptor.Icon` | Session tabs for that protocol | At registration, one per protocol |
+| `WorkspaceDescriptor.Icon` | Session tabs for that workspace | At registration, one per workspace |
+| `PanelOptions.Icon` | That panel's tab (ignored in window mode) | Per panel opening |
+
+The last one is per-opening rather than per-plugin on purpose: the chat page and the settings
+page opened by the same plugin can each carry their own glyph.
+
+Two factory methods cover every real case:
+
+```csharp
+// A lucide stroke glyph: copy the path, the view box is always 24
+Icon = PluginIcon.Stroked("M6 12h12 M6 8h12a4 4 0 0 1 0 8H6a4 4 0 0 1 0-8Z")
+
+// A brand logo: filled, and its view box is usually not 24 — say both
+Icon = PluginIcon.Filled(RedisLogoPathData, viewBoxSize: 1030)
+```
+
+Three things that bite:
+
+1. **An unreported view box means 24.** Brand logos are commonly exported at 1024 or so; leave
+   it out and the host scales against 24, **blowing the glyph up more than fortyfold** — that is
+   usually what is behind an "icon does not show up" report.
+2. **Getting stroke vs fill wrong raises no error, it just stops being recognisable.** Stroking a
+   filled shape yields its outline; filling a stroke glyph yields a pile of blobs.
+3. **A malformed path will not take the UI down.** If the host fails to parse it, it treats the
+   icon as absent and falls back to the generic plug.
+
+> ⚠️ This is **not** the same thing as `PanelTitleAction.IconPathData`. That one draws an action
+> button on a **window title bar**, is always a 24×24 stroke glyph, and has no notion of fill or
+> view box (see [the development guide §5.9](../templates/dev-guide.md)).
+
 ---
 
 ## 4. Manifest
@@ -181,6 +223,8 @@ and **2.0 onwards is `apiLevel 2`**.
 | **1.5**   | Connection-form additions for protocols: `ProtocolFeatures.NoEndpoint` (hide the port column), `ProtocolSettingKind.DynamicChoice` + `IProtocolChoiceSource` (choices fetched when the form opens), `AllowsCustomValue` / `HostKind` / `HostChoices` / `HostAllowsCustomValue` (editable combo boxes; the host column can be a combo too). Driven by the serial plugin — ports are hot-plugged, baud rates have non-standard values. | Yes, if used (`1.5.0`)                                 |
 | **2.0**   | **Generation bump (`apiLevel` 1 → 2)** — see "Migrating to 2.0" below. The surface it carries is `IHostThemeApi` (`ctx.Theme`, see §3.5): theme identity, the fully resolved palette, and a `Changed` signal covering every kind of theme change. Before it, a plugin could only see the three values of `IHostInfo.Theme` — no named theme, no accent, and no change at all when switching within the same light/dark variant.      | No — express it with `apiLevel: 2`                     |
 | **2.0.2** | The "open a saved session" trio on the sessions capability: `ISessionsApi.ListSavedAsync` / `OpenAsync` / `CloseAsync`, with `SavedSessionInfo`, `SessionOpenOptions` and `PluginSessionOpenException`. Before it a plugin could only act on machines the user had **already connected by hand**, which caved in half of every unattended use.                                                                                       | Yes, if used (`2.0.2`)                                 |
+| **2.0.3** | First cut at tab icons: an `IconPathData` / `IconViewBoxSize` / `IconIsFilled` trio on each of `ProtocolDescriptor` and `WorkspaceDescriptor`. ⚠️ **That trio is superseded by `Icon` in 2.0.4 — do not use it.** Panels were missing entirely at the time, and spelling one concept out as three parallel properties in two places was a design mistake to begin with. Replaced the next day; no plugin was affected. | ❌ Withdrawn — go straight to 2.0.4 |
+| **2.0.4**   | Tab icons collapsed into a single entry point, `PluginIcon` (see §3.6), shared by all three places: `ProtocolDescriptor.Icon`, `WorkspaceDescriptor.Icon`, and the **new** `PanelOptions.Icon` — panel tabs do not travel the descriptor path, which 2.0.3 missed. Ships with the `PluginIcon.Stroked` / `PluginIcon.Filled` factories. | Yes, if used (`2.0.4`) |
 
 ### Migrating to 2.0
 
