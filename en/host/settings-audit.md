@@ -154,6 +154,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 |---|---|---|---|
 | General | Startup and Window | Start automatically at system boot, restore last session, startup window state, minimize to tray when closing the window, confirm before exiting the application | The "Exit confirmation" description should explain tray behavior |
 | General | Language | Interface language | The settings page must be localized in sync |
+| General | Behavior | Follow the active terminal tab (`General.FollowActiveTerminalInExplorer`), collapse groups on startup (`General.CollapseGroupsByDefault`, off by default) | The collapse option only decides the initial state **the first time a group is seen in this run**; manual expand/collapse is remembered in-process and a full tree rebuild does not fold it back |
 | General | Data Management | Import settings, export settings, clear recent connections, restore defaults | Restore defaults must require confirmation; export scope must be accurate |
 | General | Application Updates | Check for updates at startup, update channel, download automatically | Hide the whole group until the feature is implemented |
 | Appearance | Application Theme | Theme mode, theme color, interface font, interface font size | Keep real-time preview |
@@ -170,7 +171,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | Connection | Automatic Reconnect | Automatic reconnect, maximum attempts, reconnect interval | Hide subordinate settings when automatic reconnect is disabled |
 | Connection | Authentication Preferences | Remember password, default authentication key | Provide a link to Key Management |
 | File Transfer | Paths and Editor | Local download directory, default editor | Retain |
-| File Transfer | Transfer Behavior | Maximum concurrency, preserve timestamps, conflict handling, show hidden files, completion notification | The hidden-file state must be unified |
+| File Transfer | Transfer Behavior | Maximum concurrency, preserve timestamps, conflict handling, show hidden files, completion notification, delete remote folders with rm -rf (`Transfer.UseRecursiveDeleteCommand`, on by default) | The hidden-file state must be unified; the `rm -rf` entry must state three things: it applies **only to SSH sessions that have an exec channel** (standalone SFTP / FTP / plugin protocols always walk the tree over SFTP), it **falls back to the SFTP walk automatically** when the command is unavailable or exits non-zero, and **there is no per-entry progress** on that path (the bar goes indeterminate, and cancelling can only close the channel). The delete confirmation prompt is unchanged |
 | File Transfer | Bandwidth Limits | Master switch, upload limit, download limit | Hide both rate fields when disabled |
 | File Transfer | Transfer Logs | Record logs, retention days, storage path | Hide subordinate settings when logging is disabled |
 | File Transfer | Resume and Retry | Interrupted transfer resume, transfer retries, clean up temporary files | Show only after all are implemented |
@@ -319,3 +320,31 @@ Background: after the user enabled "Require manual fingerprint confirmation on f
 - **Webhook**: the complete feature path was confirmed (security event JSON POST + 5-second timeout + silent failure), so it was retained; the URL input area was changed to a subordinate block with a "Webhook URL" label and payload format description, shown after the switch is enabled.
 - **Cloud Sync (new feature, user-requested)**: GitHub Gist multi-device synchronization (settings, connections including tunnels, and snippets), with native Gist revisions as version history, optional PBKDF2+AES-GCM end-to-end encryption, as described on Settings → Cloud Sync; sync configuration and tokens are stored only locally.
 - Other changes: added a "Support and Donations" page to Settings; confirmed that the Shortcuts page is display-only (A-08 closed); trusted host addresses are masked by default.
+
+### 2026-09-20 Fourth batch (#474: collapse groups on startup + delete remote folders with rm -rf)
+
+Two new settings, both part of user request #474 (host side: `plan.md` §82).
+
+- **`General.CollapseGroupsByDefault` (General, off by default)**: the explorer loads its groups collapsed.
+  It only decides the initial state **the first time a group is seen in this run** — whatever the user expands or
+  collapses by hand is remembered in-process, so the full tree rebuilds triggered by creating / editing / deleting a
+  connection or by a cloud-sync write-back do not fold it back. The memory is not persisted; a restart returns to what
+  the setting says.
+  ⚠️ On its own this option is of limited use: it is only complete together with pinned connections (frequently used
+  connections are hoisted to the very top of the tree and stay visible while everything is collapsed). See
+  [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §4.
+- **`Transfer.UseRecursiveDeleteCommand` (File Transfer > Transfer Behavior, on by default)**: deleting a remote folder
+  first tries a single `rm -rf` instead of walking the tree entry by entry over SFTP.
+  - **Why it defaults to on**: the SFTP path first lists the whole tree to compute a total (for the progress bar) and
+    then sends one `SSH_FXP_REMOVE`/`RMDIR` per entry, so round trips scale with the file count; `rm -rf` is one round
+    trip. The result is identical.
+  - **Scope**: it applies only to **SSH sessions that have an exec channel**. Standalone SFTP profiles, FTP and plugin
+    protocols such as S3 have no command channel and always walk the tree over SFTP. Three more gates: real directories
+    only (symbolic links are still deleted as leaves, unchanged semantics), the path must be absolute, and it must not
+    be the root directory.
+  - **Failure means fallback**: if the command is missing, blocked by policy, or exits non-zero after deleting only part
+    of the tree, it falls back to the SFTP walk — and the fallback surfaces the real error rather than a context-free
+    `rm: exit 1`.
+  - **Known cost (stated in the setting description)**: there is no per-entry progress on this path (the bar goes
+    indeterminate), and cancelling can only close the channel — the remote `rm` may already have finished.
+    **The delete confirmation prompt is unchanged.**

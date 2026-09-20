@@ -68,7 +68,7 @@ These are **not "not implemented"; they are "implemented but not connected"**. U
 |---|---|---|
 | Create folder/file | ✅ Complete on remote | The local pane has **create folder only, not create file** |
 | Rename | ✅ Both sides | |
-| Delete, recursive + progress + cancellation | ✅ Both sides | Good quality, with weighted progress on the remote side |
+| Delete, recursive + progress + cancellation | ✅ Both sides | Good quality, with weighted progress on the remote side. **Deleting a folder on an SSH session takes an `rm -rf` fast path** (2026-09-20, `Transfer.UseRecursiveDeleteCommand`, on by default): the SFTP walk costs one round trip per entry while `rm -rf` costs one in total; it falls back to the SFTP walk when the command is unavailable or exits non-zero. The cost is that this path has no per-entry progress (the bar goes indeterminate); the confirmation prompt is unchanged |
 | Move/copy, remote → remote | ⚠️ Requires typing an absolute path | No directory picker and no drag-and-drop move |
 | chmod | ⚠️ Single file only | Has a 9-cell rwx matrix with octal synchronization, but **no batch operation, recursive application, or setuid/sticky bits** |
 | **chown, change owner/group** | ❌ None | `ISftpService` has no interface; Owner/Group in the properties dialog are read-only |
