@@ -16,17 +16,27 @@
 
 | 形态 | 例子 | 说明 |
 |---|---|---|
-| `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | 最常见；堡垒机客户端的默认写法 |
-| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | 带 URL 时与 `-url` 等价（应用本就以标签页打开）；它也可能带的是**标签名**，见下 |
+| `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | 最常见；堡垒机客户端的默认写法。值**不挑剔长相**，`-url 10.0.3.21:2222` 这种省了 scheme 的照收（按 `ssh` 兜底） |
+| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | 带 scheme 的 URL 时与 `-url` 等价（应用本就以标签页打开）；不带 scheme 的一律当**标签名**，见下 |
 | 裸 URL | `VelaShell.exe ssh://root@10.0.3.21` | 部分调用方把 URL 直接放在第一个参数上 |
 | 会话文件 | `VelaShell.exe -f C:\Temp\session.xsh` | 读 UTF-16 的 `.xsh`，取主机 / 端口 / 用户名 / 协议 |
 | 显式选项 | `-l <user>` `-p <port>` `-pw <password>` `-i <keyfile>` | 覆盖 URL 中的同名字段，优先级与 Xshell 一致 |
 
-同一条命令行里出现多个候选目标时，按 **`-url` > 裸 URL > `-newtab`** 取用。`-newtab` 排在最后，
-是因为不少调用方（如 JumpServer Client）拿它传的是**标签名**而不是地址：
-`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:一次性口令@堡垒机:2222`。
-那个名字里带 `@`，光看长相与一条省略了 scheme 的 URL 没有区别，因此 `-newtab` 的值还得**真能解析出主机**
-才会被当成目标；解析不出就只当标签名丢掉。
+同一条命令行里出现多个候选目标时，按 **`-url` > 裸 URL > `-newtab`** 取用，并且是**逐条试**：
+排在前面那条解析不出主机时，接着试下一条，最后才退到 `-f` 会话文件——少了这层退让，一个写坏的 `-url`
+会把整条命令行拖成「什么都不发生」。
+
+`-newtab` 排在最后，是因为 Xshell 官方语义里它的参数本就是**会话名**，而不少调用方（如 JumpServer Client）
+拿它传的正是标签名：`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:一次性口令@堡垒机:2222`。
+标签名里带 `@`，光看长相与一条省略了 scheme 的 URL 没有区别，因此 **`-newtab` 的值必须带 `://` 才当目标**；
+`-newtab root@webserver01` 这种一律按标签名丢掉，猜错的代价是连到一台根本不存在的主机上。
+
+几条容易被忽略的细节：
+
+- **值以 `-` 开头不会被吞掉**。一次性口令是随机串，`-pw -Abc123` 里那个 `-Abc123` 就是口令。
+  判断「下一个 token 是不是选项」认的是**名字**（含 `-e` / `-s` 这些我们不实现的），而不是开头有没有破折号。
+- **IPv6 的 zone id 照常工作**：`ssh://root@[fe80::1%25eth0]:2222`，按 RFC 6874 还原成 `fe80::1%eth0`。
+- 主机名大小写原样保留；scheme 一律转小写。
 
 支持的 scheme：`ssh`、`sftp`、`ftp`、`ftps`。`telnet` / `rlogin` 会被识别但给出「不支持的协议」提示——
 **刻意不静默丢弃**，否则用户在网页上点了半天完全没有反应。
