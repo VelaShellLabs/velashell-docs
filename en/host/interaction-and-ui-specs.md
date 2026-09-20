@@ -565,7 +565,7 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
 
 - **Step 1 (`oNZIM`, 420px)**: header title + session information bar (`bg-input`: host icon + `user@host`) + password input with visibility toggle + “Remember password” checkbox + `Cancel`/`Connect` footer.
 - **Step 2 (`twD13`)**: second-factor verification (2FA / OTP / key passphrase / host fingerprint verification). Information bar + input + `Previous`/`Verify`.
-- **First host fingerprint confirmation**: on the first connection to an unknown host, show a “Host Trust” confirmation (fingerprint + Accept and Save/Reject), linked to §15 Host Trust Center.
+- **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
 
 **Connection state machine**: `Idle → Connecting (yellow) → Authenticating → Connected (green)` / any failure `→ Disconnected (red)` with reason and retry.
 

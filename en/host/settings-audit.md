@@ -348,3 +348,33 @@ Two new settings, both part of user request #474 (host side: `plan.md` §82).
   - **Known cost (stated in the setting description)**: there is no per-entry progress on this path (the bar goes
     indeterminate), and cancelling can only close the channel — the remote `rm` may already have finished.
     **The delete confirmation prompt is unchanged.**
+
+### 2026-09-20 Fifth batch (#476: fingerprint changes now ask instead of blocking)
+
+The default of `Security.BlockOnFingerprintChange` **flipped from on to off** (host side: `plan.md` §83).
+
+- **Why**: "the machine was replaced, the IP did not change" is the most common legitimate fingerprint
+  change there is. The old default (block) reported it as a connection error — and specifically as
+  Tmds.Ssh's English `UntrustedPeer`, which neither says the host key changed nor suggests what to do
+  next; the only way out was to delete the record from `.velashell` by hand. Other SSH clients raise an
+  "accept and overwrite / reject" dialog here, and VelaShell already had that dialog (the three-way
+  prompt) — the default value was simply keeping it from ever showing.
+- **What it does now**: a changed fingerprint goes through the same three-way prompt as first-connection
+  confirmation (trust permanently = overwrite known_hosts / trust once / cancel). The dialog gained two
+  things: **the recorded fingerprint from known_hosts** next to the current one (you need both to tell
+  your own reinstall apart from an interception), and a line of guidance naming those two possibilities.
+- **One-time migration**: the `true` sitting in existing configs cannot be told apart from the old
+  default, so this follows the same pattern as session recording and the proxy default — turn it off
+  once, stamp `Security.FingerprintChangeDefaultMigrated`, and respect the user from then on. Anyone
+  wanting strict fail-closed behaviour turns "Block and alert on fingerprint change" back on and gets
+  exactly the old behaviour.
+- **Rejections say something useful**: whether the policy blocked it or the user cancelled, the error is
+  now localized text naming the host, both fingerprints, and the Settings → Security & Audit → Trusted
+  hosts route to remove the record.
+- **Jump chains use the same policy**: the jump hop used to run a separate check that silently returned
+  false for unknown *and* changed keys — so a machine only ever used as a jump host failed on its first
+  use. It now goes through the same `AddHostAuthentication`.
+- **The connect timeout during the prompt**: Tmds.Ssh 0.24's `ConnectTimeout` covers the whole handshake,
+  **including** the HostAuthentication callback, so the timer keeps running while the dialog is open.
+  Think for fifteen seconds and the connection is already timed out by the time you click. The decision
+  has taken effect by then, so the wrapper **reconnects once** on this particular failure (once only).
