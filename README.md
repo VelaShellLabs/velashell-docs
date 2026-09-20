@@ -28,7 +28,7 @@ zh/                    en/                    内容
 | S3 完整支持实施报告 | [`zh/host/S3协议完整支持-实施报告-2026-08.md`](zh/host/S3协议完整支持-实施报告-2026-08.md) |
 | 系统密钥链与 sudo 凭据填充可行性调研 | [`zh/host/系统密钥链与sudo凭据填充可行性调研.md`](zh/host/系统密钥链与sudo凭据填充可行性调研.md) |
 | 凭据管理器集成设计 | [`zh/host/凭据管理器集成设计.md`](zh/host/凭据管理器集成设计.md) |
-| 三份发版流程 `release-process.md` | [`zh/sdk/`](zh/sdk/release-process.md) · [`zh/cli/`](zh/cli/release-process.md) · [`zh/templates/`](zh/templates/release-process.md) |
+| 三份发版流程 `release-process.md` | [`sdk`](zh/sdk/release-process.md) · [`cli`](zh/cli/release-process.md) · [`templates`](zh/templates/release-process.md) |
 
 ## 快速入口
 
@@ -94,11 +94,10 @@ flowchart TB
 | [velashell-plugin-sdk](https://github.com/VelaShellLabs/velashell-plugin-sdk) | `VelaShell.PluginSdk`、`.Testing` |
 | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | `vela-plugin`、`VelaShell.PluginSdk.Build` |
 | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | `dotnet new velaplugin` 模板 |
-| [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins) | 第一方插件(Redis / S3 / Telnet / Serial) |
-| [VelaShell.Plugin.DockerPanel](https://github.com/VelaShellLabs/VelaShell.Plugin.DockerPanel) | Docker 管理面板插件(自成一仓,已发布 `0.3.1`) |
+| [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins) | 第一方插件:Redis / S3 / Telnet / 串口 / [Docker 管理面板](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.DockerPanel) |
 | [velashell-markets](https://github.com/VelaShellLabs/velashell-markets) | 插件市场:上传、审核、检索与分发 |
-| [velashell-identity](https://github.com/joesdu/velashell-identity) | 统一认证服务(OIDC / OpenIddict):生态的信任根,下游只验令牌 |
-| [velashell-feeds](https://github.com/joesdu/velashell-feeds) | 资讯服务:CVE 聚合与公告/广告投放,给消息中心供稿 |
+| [velashell-identity](https://github.com/VelaShellLabs/velashell-identity) | 统一认证服务(OIDC / OpenIddict):生态的信任根,下游只验令牌 |
+| [velashell-feeds](https://github.com/VelaShellLabs/velashell-feeds) | 资讯服务:CVE 聚合与公告/广告投放,给消息中心供稿 |
 
 ## 改文档
 

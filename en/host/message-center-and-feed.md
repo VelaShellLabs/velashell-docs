@@ -75,7 +75,7 @@ neighbouring page.
 
 ## 3. Feed contract (what the backend publishes)
 
-> **An official implementation now exists**: [velashell-feeds](https://github.com/joesdu/velashell-feeds),
+> **An official implementation now exists**: [velashell-feeds](https://github.com/VelaShellLabs/velashell-feeds),
 > deployed at <https://feeds.easilynet.top/feed.json>. It aggregates CISA KEV and NVD advisories and
 > ships an admin console for placing announcements and ads (reusing the plugin market's identity
 > service, with an administrator allow-list). Self-hosted feeds are still fine — the format in this
