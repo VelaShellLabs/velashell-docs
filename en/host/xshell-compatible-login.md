@@ -19,10 +19,17 @@ compatibility layer.
 | Form | Example | Notes |
 |---|---|---|
 | `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | The common case; what jump-server clients emit by default |
-| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | Equivalent to `-url` (sessions always open as tabs here) |
+| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | Equivalent to `-url` when it carries a URL (sessions always open as tabs here); it may also carry a **tab label**, see below |
 | Bare URL | `VelaShell.exe ssh://root@10.0.3.21` | Some callers put the URL straight into the first argument |
 | Session file | `VelaShell.exe -f C:\Temp\session.xsh` | Reads the UTF-16 `.xsh` for host / port / user / protocol |
 | Explicit options | `-l <user>` `-p <port>` `-pw <password>` `-i <keyfile>` | Override the matching URL fields, same precedence as Xshell |
+
+When one command line offers several candidate targets, they are taken in the order **`-url` > bare URL >
+`-newtab`**. `-newtab` ranks last because a fair number of callers (JumpServer Client among them) use it for a
+**tab label** rather than an address:
+`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:one-time@jump-host:2222`. That label contains an `@`, so
+on looks alone it is indistinguishable from a scheme-less URL; a `-newtab` value therefore has to **actually parse
+into a host** before it is treated as a target, and is dropped as a mere label otherwise.
 
 Supported schemes: `ssh`, `sftp`, `ftp`, `ftps`. `telnet` / `rlogin` are recognised and reported as unsupported —
 deliberately *not* dropped silently, otherwise the user clicks on the web page and nothing whatsoever happens.

@@ -17,10 +17,16 @@
 | 形态 | 例子 | 说明 |
 |---|---|---|
 | `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | 最常见；堡垒机客户端的默认写法 |
-| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | 与 `-url` 等价（应用本就以标签页打开） |
+| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | 带 URL 时与 `-url` 等价（应用本就以标签页打开）；它也可能带的是**标签名**，见下 |
 | 裸 URL | `VelaShell.exe ssh://root@10.0.3.21` | 部分调用方把 URL 直接放在第一个参数上 |
 | 会话文件 | `VelaShell.exe -f C:\Temp\session.xsh` | 读 UTF-16 的 `.xsh`，取主机 / 端口 / 用户名 / 协议 |
 | 显式选项 | `-l <user>` `-p <port>` `-pw <password>` `-i <keyfile>` | 覆盖 URL 中的同名字段，优先级与 Xshell 一致 |
+
+同一条命令行里出现多个候选目标时，按 **`-url` > 裸 URL > `-newtab`** 取用。`-newtab` 排在最后，
+是因为不少调用方（如 JumpServer Client）拿它传的是**标签名**而不是地址：
+`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:一次性口令@堡垒机:2222`。
+那个名字里带 `@`，光看长相与一条省略了 scheme 的 URL 没有区别，因此 `-newtab` 的值还得**真能解析出主机**
+才会被当成目标；解析不出就只当标签名丢掉。
 
 支持的 scheme：`ssh`、`sftp`、`ftp`、`ftps`。`telnet` / `rlogin` 会被识别但给出「不支持的协议」提示——
 **刻意不静默丢弃**，否则用户在网页上点了半天完全没有反应。
