@@ -53,7 +53,9 @@ flowchart TB
         AI["AI 插件<br/>（同仓构建、同版发布）"]
         P3["第三方 / 第一方插件<br/>Redis · S3 · Telnet · Serial · DockerPanel"]
         VS --- AI
-        VS -.装载 .vpx.- P3
+        %% 点线边的文字一律走 |…| 标签:写成 -.装载 .vpx.- 会让 GitHub 的 mermaid 报
+        %% Lexical error —— 无箭头的 .- 收尾本就不接文字,文字里再带个「.」更没得救。
+        VS -.->|装载 .vpx| P3
     end
 
     subgraph Author["插件作者"]
