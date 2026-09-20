@@ -115,6 +115,20 @@ From top to bottom:
    - The current session row is highlighted with `bg-active` and a vertical accent bar on the left.
    - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging.
    - By default, follows the active terminal tab: automatically expands the parent group, selects the corresponding connection, and scrolls to it without taking terminal keyboard focus. This can be disabled under “Settings → General → Behavior”.
+   - **Pinned connections** (`pin` icon, “Pin to Top / Unpin” in the context menu): a pinned connection is hoisted to
+     **the very top of the tree**, sorted by name, with an accent-colored `pin` badge and the same indent as a group row.
+     - Hoisting to the top rather than floating within its group is what makes it work together with “collapse groups on
+       startup” below: **once every group is collapsed, an item that only floats inside its group is still invisible**,
+       which is no pin at all.
+     - Pinning changes **where the row is drawn**, not the data: the connection still belongs to its group (`GroupId` is
+       untouched) and the group row still counts its members (so expanding a group that has a pinned member shows fewer
+       rows than the count — that is correct); unpinning returns it to its group. Drop-target resolution and “delete the
+       group once it is empty” are unaffected.
+   - **Collapse groups on startup** (“Settings → General”, off by default): groups load collapsed.
+     - It only decides the initial state **the first time a group is seen in this run**. Whatever the user expands or
+       collapses by hand is remembered in-process, so the full tree rebuilds triggered by creating / editing / deleting a
+       connection or by a cloud-sync write-back do **not** fold it back — otherwise every new connection would mean
+       re-expanding the group you just opened. The memory is not persisted: a restart returns to what the setting says.
 3. **Session list / Quick Connect area (320px, top divider)**:
    - Header (36px): “Quick Connect” title + collapse button.
    - Quick Connect input (`bg-input`, 32px): enter `user@host[:port]` directly and press Enter to connect.
@@ -238,7 +252,7 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 ## 6. File Browser / SFTP (Lower Right Area, Default 220px, Collapsible/Resizable)
 
-- **Header (36px)**: left = clickable current-path breadcrumb for level-by-level navigation + refresh; right = icons for view switching, upload, new folder, hidden-file toggle, and so on.
+- **Header (36px)**: left = clickable current-path breadcrumb for level-by-level navigation, then a pencil button (or Ctrl+L) that switches to manual path entry (Enter navigates, Esc cancels), then a `copy` button that **copies the full remote path of the current directory in one click** (the same command as “Copy Current Folder Path” in the empty-area context menu — previously you had to enter edit mode before you could select and copy it), and finally refresh; right = icons for view switching, upload, new folder, hidden-file toggle, and so on.
 - **Column header (26px, `bg-surface`)**: `Name(280) | Size(100) | Permissions(120) | Modified`. Columns can be sorted by clicking.
 - **File list (`fill_container`, scrollable)**: 28px per row. Icon (folder/file type) + name + size + permissions (`drwxr-xr-x`) + time. The first row may be `..` to return to the parent directory.
 - Interaction:
@@ -452,6 +466,7 @@ Right-click a session row in the sidebar to open it (200px, `bg-surface`, corner
 - Open in New Tab / Open in New Window
 - Edit Connection (opens the §13 form with fields prefilled)
 - Duplicate Session / Copy Address
+- Pin to Top / Unpin (the label follows the current state; a pinned row is hoisted to the very top of the tree, see §4)
 - Join Sync Group
 - Open SFTP
 - Move to Group ▸ (submenu)
