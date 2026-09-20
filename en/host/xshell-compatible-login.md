@@ -18,18 +18,31 @@ compatibility layer.
 
 | Form | Example | Notes |
 |---|---|---|
-| `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | The common case; what jump-server clients emit by default |
-| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | Equivalent to `-url` when it carries a URL (sessions always open as tabs here); it may also carry a **tab label**, see below |
+| `-url` | `VelaShell.exe -url ssh://root:one-time@10.0.3.21:2222` | The common case; what jump-server clients emit by default. The value is **not** screened by looks — `-url 10.0.3.21:2222` with no scheme is accepted too (defaults to `ssh`) |
+| `-newtab` | `VelaShell.exe -newtab ssh://root@10.0.3.21` | Equivalent to `-url` when it carries a URL *with a scheme* (sessions always open as tabs here); anything without one is treated as a **tab label**, see below |
 | Bare URL | `VelaShell.exe ssh://root@10.0.3.21` | Some callers put the URL straight into the first argument |
 | Session file | `VelaShell.exe -f C:\Temp\session.xsh` | Reads the UTF-16 `.xsh` for host / port / user / protocol |
 | Explicit options | `-l <user>` `-p <port>` `-pw <password>` `-i <keyfile>` | Override the matching URL fields, same precedence as Xshell |
 
 When one command line offers several candidate targets, they are taken in the order **`-url` > bare URL >
-`-newtab`**. `-newtab` ranks last because a fair number of callers (JumpServer Client among them) use it for a
-**tab label** rather than an address:
-`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:one-time@jump-host:2222`. That label contains an `@`, so
-on looks alone it is indistinguishable from a scheme-less URL; a `-newtab` value therefore has to **actually parse
-into a host** before it is treated as a target, and is dropped as a mere label otherwise.
+`-newtab`**, and they are tried **one after another**: if the higher-ranked one yields no host, the next is tried,
+and `-f` session files come last of all. Without that fallback a single malformed `-url` drags the whole command
+line down to "nothing happens at all".
+
+`-newtab` ranks last because Xshell's own semantics give it a **session name**, and a fair number of callers
+(JumpServer Client among them) do send a tab label there:
+`-newtab root@Linux[2026_09_20_09_45_18] -url ssh://JMS-x:one-time@jump-host:2222`. A label contains an `@`, so on
+looks alone it is indistinguishable from a scheme-less URL; a `-newtab` value therefore **must carry `://`** to
+count as a target. `-newtab root@webserver01` is dropped as a label — guessing wrong there means connecting to a
+host that does not exist.
+
+Three details that are easy to miss:
+
+- **A value starting with `-` is not swallowed.** One-time secrets are random strings, so in `-pw -Abc123` the
+  secret really is `-Abc123`. Whether the next token is an option is decided by its **name** (including `-e` / `-s`,
+  which we deliberately do not implement), not by a leading dash.
+- **IPv6 zone ids work**: `ssh://root@[fe80::1%25eth0]:2222`, unescaped back to `fe80::1%eth0` per RFC 6874.
+- Host names keep their case; schemes are lower-cased.
 
 Supported schemes: `ssh`, `sftp`, `ftp`, `ftps`. `telnet` / `rlogin` are recognised and reported as unsupported —
 deliberately *not* dropped silently, otherwise the user clicks on the web page and nothing whatsoever happens.
