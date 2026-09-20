@@ -89,7 +89,7 @@ from somebody else**. Risks and mitigations, item by item:
 | A malicious page forging an `ssh://` link that points at an attacker-controlled host | Yes | The dialog shows the target verbatim, and scheme registration is off by default — without it, that entry point does not exist |
 | Another user on the machine sniffing or hijacking the forwarding channel | Yes | `CurrentUserOnly` named pipe (Windows ACL / Unix 0700 plus owner check) |
 | The one-time secret leaking into settings, logs or synced data | Yes | See the four guarantees above |
-| External launches bypassing host-key verification | Yes | They do not — external launches reuse the same connection pipeline, so first-fingerprint confirmation and change blocking still apply |
+| External launches bypassing host-key verification | Yes | They do not — external launches reuse the same connection pipeline, so first-fingerprint confirmation and the fingerprint-change decision still apply |
 
 **Recommendations for administrators**
 

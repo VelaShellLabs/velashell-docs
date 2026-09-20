@@ -426,7 +426,7 @@ sequenceDiagram
     alt first connection
         HK-->>SSH: TOFU record / manual three-way choice
     else fingerprint changed
-        HK-->>SSH: refuse immediately (fail-closed)
+        HK-->>SSH: manual three-way choice (default) / refuse outright (blocking switch on)
     end
     SSH-->>VM: connected (writes audit_log)
     VM->>Br: build the bridge, read loop

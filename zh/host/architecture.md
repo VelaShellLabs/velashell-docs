@@ -372,7 +372,7 @@ sequenceDiagram
     alt 首次连接
         HK-->>SSH: TOFU 记录 / 人工三选一
     else 指纹变化
-        HK-->>SSH: 立即拒绝（fail-closed）
+        HK-->>SSH: 人工三选一（默认）/ 直接拒绝（开了阻断开关）
     end
     SSH-->>VM: 连接成功（写 audit_log）
     VM->>Br: 建桥，只读循环
