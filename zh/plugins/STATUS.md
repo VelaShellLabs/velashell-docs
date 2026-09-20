@@ -42,7 +42,7 @@ inProcess 停靠 / 隔离独立窗口)、可靠性(心跳/自愈/回收)、数�
 答完了直接作为下一轮发出去,被停掉或出错了原样放回输入框。onCommand 惰性激活,五语文案。
 验收:VelaShell.Plugin.Ai.Tests 44 项(工具箱审批闸门/能力桥接语义/设置与机密存取/会话历史时序读写/
 @ 引用语法/面板 headless 交互),插话另有 13 项(拿真的 `FunctionInvokingChatClient` 验"下一步之前
-真的进了上下文",以及排队/撤回/停止归还的面板接线)。**协作接入(2026-09-02)**:同一个插件里长出两条方向相反的路 —— 往外是 **IM 桥接**(飞书/钉钉/Telegram/企微四家,分别走长连接/Stream/长轮询/公网回调四种入站传输),团队在群里 @ 机器人,agent 在已连上的会话上干活、结果回帖;往内是**对外 MCP 服务端**(只绑 127.0.0.1 + 强制令牌 + 默认只读挡位),让 Claude Code / Codex 这类外部 agent 调 VelaShell 的工具,工具直接复用 `AgentToolbox`。安全默认刻意保守:白名单为空谁都不理、桥接默认只读挡位、`/mode` 默认只能往低了调、审批走文本回复(超时按拒绝)、审批人可与"能说话的人"分开配。授权一个群不用抄 id —— 设置页生成六位配对码在群里发 `/pair`,或在"敲过门的聊天"里点一下允许。**机器不在线也能干活(2026-09-03)**:`AgentToolbox` 接上 `list_saved_sessions` / `open_session` / `close_session`(SDK 2.0.2 + 宿主实现),值班的人昨晚关了标签页时,机器人可以自己按**已保存的配置**连一台,而不是回一句"你先去连一台"。`open_session` 是唯一要过两道人的工具:这轮对话的审批 + 宿主自己的确认框(显示 agent 给的理由原文,可选「始终允许」—— 无人值守正是靠它才走得通);计划模式不注册,MCP 那条路只在「绕过审批」时才走得通。`close_session` 免审批但只关得掉它自己开的那些。详见[协作接入](协作接入.md)。**容器管理插件已完成(2026-09-03,`0.3.1`)**:[VelaShell.Plugin.DockerPanel](https://github.com/VelaShellLabs/VelaShell.Plugin.DockerPanel) —— 经 SSH 会话开一条到远端 `/var/run/docker.sock` 的直连通道说 Docker Engine HTTP API(服务器上什么都不用改,不必把 daemon 暴露在 2375/2376,也不需要第二套凭据);这条通道也**不是**本地端口转发,同机其它进程连不上去。总览 / 容器 / 镜像 / 卷 / 网络 / Compose / 系统七页俱全,外加实时统计、多容器合并日志流、容器内文件浏览与编辑、内置 TTY 控制台。不随安装包预装,从插件商店按需安装。
+真的进了上下文",以及排队/撤回/停止归还的面板接线)。**协作接入(2026-09-02)**:同一个插件里长出两条方向相反的路 —— 往外是 **IM 桥接**(飞书/钉钉/Telegram/企微四家,分别走长连接/Stream/长轮询/公网回调四种入站传输),团队在群里 @ 机器人,agent 在已连上的会话上干活、结果回帖;往内是**对外 MCP 服务端**(只绑 127.0.0.1 + 强制令牌 + 默认只读挡位),让 Claude Code / Codex 这类外部 agent 调 VelaShell 的工具,工具直接复用 `AgentToolbox`。安全默认刻意保守:白名单为空谁都不理、桥接默认只读挡位、`/mode` 默认只能往低了调、审批走文本回复(超时按拒绝)、审批人可与"能说话的人"分开配。授权一个群不用抄 id —— 设置页生成六位配对码在群里发 `/pair`,或在"敲过门的聊天"里点一下允许。**机器不在线也能干活(2026-09-03)**:`AgentToolbox` 接上 `list_saved_sessions` / `open_session` / `close_session`(SDK 2.0.2 + 宿主实现),值班的人昨晚关了标签页时,机器人可以自己按**已保存的配置**连一台,而不是回一句"你先去连一台"。`open_session` 是唯一要过两道人的工具:这轮对话的审批 + 宿主自己的确认框(显示 agent 给的理由原文,可选「始终允许」—— 无人值守正是靠它才走得通);计划模式不注册,MCP 那条路只在「绕过审批」时才走得通。`close_session` 免审批但只关得掉它自己开的那些。详见[协作接入](协作接入.md)。**容器管理插件已完成(2026-09-03,`0.3.1`)**:[VelaShell.Plugin.DockerPanel](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.DockerPanel) —— 经 SSH 会话开一条到远端 `/var/run/docker.sock` 的直连通道说 Docker Engine HTTP API(服务器上什么都不用改,不必把 daemon 暴露在 2375/2376,也不需要第二套凭据);这条通道也**不是**本地端口转发,同机其它进程连不上去。总览 / 容器 / 镜像 / 卷 / 网络 / Compose / 系统七页俱全,外加实时统计、多容器合并日志流、容器内文件浏览与编辑、内置 TTY 控制台。不随安装包预装,从插件商店按需安装。
 
 质量基线(每轮全量回归):全仓构建 0 警告 0 错误;**测试 2107 项通过**(2026-08-18,
 另 79 项按环境跳过 —— 绝大多数是需要真机 Redis 的集成测试)。插件相关覆盖:
@@ -86,7 +86,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | UI 挂载点 | 命令面板、停靠文档、独立窗口、插件管理页 | 侧栏视图、状态栏、设置页、右键菜单贡献点(蓝图 08) |
 | 跨进程 dock 停靠 | RPC 协议层保留(EmbedRoutingTests),但**宿主 Win32 实现已移除**:跨进程窗口收养与 dock reparenting 根本冲突(卡顿/窗口飘出),**弃用** | 隔离插件一律独立卡片窗口;真·dock 标签用 inProcess;跨平台稳态 = 共享内存表面(蓝图 08 §4,远期) |
 | 发布形态 | 目录即插件 + **.vpx 专属容器一键装/卸**;**SDK/工具/模板五个 NuGet 包**(见下节);**发布产物携带 `plugins/<目录名>/` 与 `VelaShell.PluginHost.*`**(前者按各插件 `<VelaPluginShip>` 取舍,示例插件不进包,目录名 = id 把点换成短横以避开 macOS codesign 的嵌套 bundle 误判;为让宿主进程在磁盘上有真实可执行体,主程序 2026-08-12 起改为摊开发布) | 插件源(registry)与发布者验证(蓝图 10 §3,分期推迟) |
-| 插件商店 / 插件源 | **商店已上线**([market.easilynet.top](https://market.easilynet.top),仓库 [velashell-markets](https://github.com/VelaShellLabs/velashell-markets):上传、审核、检索与分发,认证走 [velashell-identity](https://github.com/joesdu/velashell-identity));**宿主已内置只读商店客户端**(2026-09-11):打开插件管理页时按 id 批量问一次 `GET /api/plugins/latest`,有新版可在页内下载安装,宿主太旧的**给提示不给按钮**;`.vpx` 验签与**发布者连续性**(同 id 的后续版本必须仍由钉住的那把私钥签名,换钥或去签名要用户看过两个指纹再点头)已落地 | **信任根**:商店说的「这个 id 属于这把钥匙」本身也是 TOFU,缺一份由发布者身份背书的 id↔公钥映射;而且今天只有**更新**路径去查商店,装包路径没查。浏览 / 搜索 / 评价仍在浏览器里,应用内没有商店浏览页(蓝图 10 §4「浏览」) |
+| 插件商店 / 插件源 | **商店已上线**([market.easilynet.top](https://market.easilynet.top),仓库 [velashell-markets](https://github.com/VelaShellLabs/velashell-markets):上传、审核、检索与分发,认证走 [velashell-identity](https://github.com/VelaShellLabs/velashell-identity));**宿主已内置只读商店客户端**(2026-09-11):打开插件管理页时按 id 批量问一次 `GET /api/plugins/latest`,有新版可在页内下载安装,宿主太旧的**给提示不给按钮**;`.vpx` 验签与**发布者连续性**(同 id 的后续版本必须仍由钉住的那把私钥签名,换钥或去签名要用户看过两个指纹再点头)已落地 | **信任根**:商店说的「这个 id 属于这把钥匙」本身也是 TOFU,缺一份由发布者身份背书的 id↔公钥映射;而且今天只有**更新**路径去查商店,装包路径没查。浏览 / 搜索 / 评价仍在浏览器里,应用内没有商店浏览页(蓝图 10 §4「浏览」) |
 
 ### ❌ 未开始
 
@@ -96,7 +96,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | 能力域:localFs / audio / net / ai | 07/11 | 未开口。建议 `vela.ai` 随 AI 插件动工时定接口(terminal、timeSeries、protocols、workspaces 域已完成) |
 | 插件管理页 日志查看 | 02/06 | 列表/启停/撤授权已做;查看每插件日志尾部待后续 |
 | SonnetDB 高阶模型开放 | — | 时序/全文/向量等暂不对插件开口,按真实需求再议(apiLevel 只增纪律) |
-| 第一方业务插件 | 15 | **已不属于本栏**:AI 助手(随主程序发布)、Redis / S3 / Telnet / 串口([velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins))、Docker 管理面板([VelaShell.Plugin.DockerPanel](https://github.com/VelaShellLabs/VelaShell.Plugin.DockerPanel),`0.3.1`)均已落地 |
+| 第一方业务插件 | 15 | **已不属于本栏**:AI 助手(随主程序发布)、Redis / S3 / Telnet / 串口([velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins))、Docker 管理面板([VelaShell.Plugin.DockerPanel](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.DockerPanel),`0.3.1`)均已落地 |
 
 ## 三、刻意的架构决策(勿"纠正")
 
