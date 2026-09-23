@@ -2,9 +2,9 @@
 
 English: [`../../../en/xserver/design/architecture.md`](../../../en/xserver/design/architecture.md)
 
-> 状态:**M1(核心协议)已完成**,2026-09-23 立项。宿主尚未接入 —— 目前宿主的「X Server」
+> 状态:**M1(核心协议)与 M2(现代工具包)已完成**,2026-09-23 立项。宿主尚未接入 —— 目前宿主的「X Server」
 > 按钮拉起的是用户自己装的 VcXsrv(见 [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.2)。
-> 本库完成到 M2 之后替换那条路径,用户就不必再装任何东西。
+> M3 把本库接进宿主、替换那条路径之后,用户就不必再装任何东西。
 
 ## 1. 为什么要做
 
@@ -39,8 +39,9 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 与 `VelaShell.Ssh` 同一套纪律(见宿主仓库 `src/VelaShell.XServer/AGENTS.md`):
 
 1. **实现依据只能是公开规范**:X.Org 发布的 *X Window System Protocol, X Version 11*(含附录 B 编码)、
-   各扩展规范(*BIG-REQUESTS*、*XC-MISC*、*X Nonrectangular Window Shape Extension*、*The X Rendering Extension*、
-   *The X Keyboard Extension: Protocol Specification*、*MIT-SHM* 等)、ICCCM 与 EWMH。
+   各扩展规范(*BIG-REQUESTS*、*XC-MISC*、*X Nonrectangular Window Shape Extension*、*X Fixes Extension*、
+   *The X Resize and Rotate Extension*、*The X Rendering Extension*(及其引用的 PDF Reference 混合模式公式)、
+   *The X Keyboard Extension: Protocol Specification*、*MIT-SHM* 等)、ICCCM、EWMH 与 freedesktop.org 的 XSETTINGS 规范。
    **每个协议实现文件的头部写明它实现的是哪份规范的哪一节。**
 2. **写实现时不打开任何其它 X 服务端的源码**(X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv)。
 3. 规范里的常量(操作码、事件码、错误码、预定义原子、掩码位)按规范取值 —— 那是协议,不受版权保护,
@@ -54,11 +55,13 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 Protocol/     常量(操作码、事件码、错误码、掩码、预定义原子)、字节序感知的请求读取与回复 / 事件 / 错误写出
 Server/       X11Server:监听(TCP 6000+N)与 ServeAsync(任意双工流)、连接建立与授权(MIT-MAGIC-COOKIE-1 / 仅本机)、
               单线程执行循环、客户端表与序号、GrabServer、BIG-REQUESTS 长度;请求处理按领域拆成 partial 文件
-              (Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input / Extensions)
-Windowing/    窗口模型(树、几何、属性、事件选择、被动抓取、顶层缓冲)
-Resources/    GC、像素图、颜色表、光标、字体句柄、颜色名表
+              (Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input / Extensions,
+              以及各扩展:Shape / XFixes / RandR / Render,剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
+Windowing/    窗口模型(树、几何、属性、事件选择、被动抓取、顶层缓冲、SHAPE 的三种形状)
+Resources/    GC、像素图、颜色表、光标、字体句柄、颜色名表、RENDER 的 picture 与字形集
 Drawing/      32 位软件帧缓冲、区域(Region)、光栅化:16 种光栅操作、平面掩码、填充样式、裁剪;
-              点 / 线(细线 Bresenham + 宽线多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字
+              点 / 线(细线 Bresenham + 宽线多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字;
+              RENDER:像素格式、合成运算与混合模式、取样源(图像 / 纯色 / 渐变,repeat、变换、过滤)、梯形覆盖率
 Fonts/        BDF 解析、内置 misc-fixed 字体、XLFD 名称匹配、合成的 cursor 与 nil2 字体
 Input/        键码 ↔ 键值表(evdev 风格键码)、修饰键映射、抓取的数据结构
 Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOptions、XKeycodes
@@ -85,8 +88,10 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 | 方向 | 内容 |
 | --- | --- |
-| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;损伤矩形(随后宿主从该窗口的像素缓冲拷贝);光标形状;响铃 |
-| 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5);按键(X 键码);焦点进出 |
+| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);损伤矩形(随后宿主从该窗口的像素缓冲拷贝);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
+| 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5);按键(X 键码);焦点进出;系统剪贴板有了新文本(`SetClipboardText`) |
+
+剪贴板互通由 `XServerOptions.SyncClipboard`(CLIPBOARD,默认开)与 `SyncPrimary`(PRIMARY,默认关)控制。
 
 **每个顶层窗口有一块自己的像素缓冲**(相当于常开的 backing store + Composite):子窗口画在所属顶层的
 缓冲里,裁剪到自己的可见区域。好处是被别的原生窗口遮住的内容不丢,换来的只是内存 —— 不必在每次
@@ -106,15 +111,23 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **字体**:核心字体来自内置 BDF(`fixed` / `6x13` / `9x15` / `10x20` 等及其 XLFD 名);以后宿主可以经字体提供者
   接口追加(比如把 Cascadia Mono 栅格化成位图字体)。`cursor` 字体是虚拟的:只有度量,光标形状按字形号
   交给宿主映射成系统光标。现代工具包不用核心字体(走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
+- **RENDER 按浮点逐像素合成**:预乘 alpha,每通道 0–1,加两条快路径(纯色 Src / 不透明 Over 整块填;Over / Add
+  下全透明的源像素跳过)。梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率。正确性优先,真成瓶颈再按格式特化。
+  源 picture 的裁剪、alpha-map、poly-edge / poly-mode / dither 接受但不生效。
+- **RANDR 只读**:一台覆盖整个根窗口的虚拟显示器。rootless 模式下窗口摆在哪由宿主决定,客户端问显示器只为取尺寸与 DPI。
+- **服务端兼任 XSETTINGS 管理器**:占有 `_XSETTINGS_S0`、发布 `Xft/DPI` 等几项。真实桌面总有一个设置守护进程,
+  GTK / Qt 启动时会去找;真正的守护进程来抢这个选区时照常让出。
+- **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD 并按 ICCCM 回应;X → 宿主时服务端以一个隐藏的 InputOnly 窗口为
+  请求方取回(UTF8_STRING → STRING 退路,支持 INCR)。宿主把刚收到的文本写回来时不抢选区,避免与客户端来回争抢。
 
 ## 8. 里程碑
 
 | 里程碑 | 内容 | 验收 |
 | --- | --- | --- |
 | **M1 核心协议** ✅ | 全部核心请求;BIG-REQUESTS、XC-MISC;窗口 / 事件 / 属性 / 选区;软件绘图;内置字体;键盘映射;无头测试宿主 | Docker 里 `xdpyinfo`、`xterm`、`xeyes`、`xclock`、`xlogo` 连上、画出内容、零协议错误(已达成,见 §10) |
-| **M2 现代工具包** | XFIXES、SHAPE、RENDER、最小 XKB、RANDR(只读)、XInput2;剪贴板与宿主互通 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、一个 Qt5 程序启动并画出内容) |
+| **M2 现代工具包** ✅ | SHAPE、XFIXES、RANDR(只读)、RENDER;剪贴板与宿主互通;XSETTINGS 管理器 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、`qt5ct` 画出内容、零协议错误 —— 已达成,见 §10) |
 | **M3 接入宿主** | Avalonia 宿主(原生窗口、输入、HiDPI);替换 VcXsrv 路径;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序 |
-| M4 | MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取 | 视需求 |
+| M4 | XKB 与 XInput2(原计划在 M2,见 §10)、MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取 | 视需求 |
 
 ## 9. 测试策略
 
@@ -140,3 +153,17 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **合成字体**:`cursor`(只有度量,光标形状按字形号交给宿主)与 `nil2`(xterm 的隐形指针用,全空字形)不来自 BDF。
 - **M1 验收(2026-09-23)**:单元测试 40 条;真实客户端 `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` 零协议错误、
   画出内容;键盘注入经 xterm 到容器里的 sh 往返成功。
+- **扩展的编号**:主操作码按实现顺序从 128 起分配 —— BIG-REQUESTS 128、XC-MISC 129、SHAPE 130、XFIXES 131、RANDR 132、
+  RENDER 133;事件码 SHAPE 64、XFIXES 65–66、RANDR 67–68;错误码 XFIXES 128、RANDR 129–132、RENDER 133–137。
+  客户端一律经 `QueryExtension` 取号,这些值只是本实现的分配。服务端自己的资源(RANDR 的 CRTC / 输出 / 模式、RENDER 的格式、
+  选区用的隐藏窗口)取 `0x40`–`0x56`,落在任何客户端的 resource-base 之外。
+- **XKB 与 XInput2 移出 M2**:实测 Qt5 没有 XKB 时退回核心协议的键位表(只打一行 `XKeyboard extension not present`),
+  GTK3 没有 XInput2 时用核心指针事件,键盘与点击都正常。两者都**不能只做一半** —— 扩展一出现在 `QueryExtension` 里,
+  客户端就改走它的代码路径;XKB 的 `GetMap` / `GetNames` / `GetCompatMap` 任何一个回复不对,xkbcommon-x11 建键位表失败,
+  键盘反而更糟。要做就一次做到 `xkb_x11_keymap_new_from_device` 能成功。Qt6 按其源码同样保留了核心键位表的退路,但还没实测。
+- **XSETTINGS 由服务端提供**:GTK / Qt 启动时找 `_XSETTINGS_S0` 的属主,找不到会各踩一次 BadWindow / BadAtom。
+  服务端占有它、只发布字体渲染相关的几项;HiDPI 的 `Gdk/WindowScalingFactor` 等 M3 接入宿主时再加。
+- **诊断日志带请求轨迹**:`XServerOptions.Log` 打印协议错误时附上该客户端最近 8 条请求的操作码 —— 上面那两个错误就是这样定位的。
+- **M2 验收(2026-09-23)**:单元测试 73 条;interop 用例 8 条(新增 `xclock -render`、`xeyes -render`、Xft 字体的 `xterm`),
+  全部零协议错误;手动验证 `zenity`(GTK3)、`gedit`(GTK3,键盘注入打字)、`qt5ct`(Qt5)零协议错误,
+  `xclip` 双向互通(含 12 MB 文本),`xrandr` 读得到配置。

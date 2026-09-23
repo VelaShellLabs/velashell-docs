@@ -2,9 +2,9 @@
 
 中文:[`../../../zh/xserver/design/architecture.md`](../../../zh/xserver/design/architecture.md)
 
-> Status: **M1 (core protocol) complete**; project started 2026-09-23. Not yet wired into the host — today the host's
-> "X Server" button launches the VcXsrv the user installed (see [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2).
-> Once this library reaches M2 it replaces that path, and users no longer need to install anything.
+> Status: **M1 (core protocol) and M2 (modern toolkits) complete**; project started 2026-09-23. Not yet wired into the
+> host — today the host's "X Server" button launches the VcXsrv the user installed (see [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2).
+> Once M3 wires this library into the host and replaces that path, users no longer need to install anything.
 
 ## 1. Why build it
 
@@ -43,9 +43,10 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
 
 1. **Only public specifications are implementation sources**: X.Org's *X Window System Protocol, X Version 11*
    (including Appendix B, the encoding), the extension specifications (*BIG-REQUESTS*, *XC-MISC*,
-   *X Nonrectangular Window Shape Extension*, *The X Rendering Extension*, *The X Keyboard Extension: Protocol
-   Specification*, *MIT-SHM*, …), ICCCM and EWMH. **Every protocol file's header names the specification and section
-   it implements.**
+   *X Nonrectangular Window Shape Extension*, *X Fixes Extension*, *The X Resize and Rotate Extension*,
+   *The X Rendering Extension* (and the PDF Reference blend-mode formulas it cites), *The X Keyboard Extension:
+   Protocol Specification*, *MIT-SHM*, …), ICCCM, EWMH and freedesktop.org's XSETTINGS specification. **Every protocol
+   file's header names the specification and section it implements.**
 2. **No other X server's source is opened while implementing** (X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv).
 3. Constants from the specifications (opcodes, event codes, error codes, predefined atoms, mask bits) take their
    specified values — they are protocol facts, not copyrightable, and must not be changed to "look different".
@@ -60,12 +61,14 @@ Protocol/     Constants (opcodes, event codes, error codes, masks, predefined at
 Server/       X11Server: listening (TCP 6000+N) and ServeAsync (any duplex stream), connection setup and
               authorization (MIT-MAGIC-COOKIE-1 / local only), single-threaded execution loop, client table and
               sequence numbers, GrabServer, BIG-REQUESTS lengths; request handlers split into partial files by area
-              (Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input / Extensions)
-Windowing/    Window model (tree, geometry, attributes, event selections, passive grabs, top-level buffer)
-Resources/    GCs, pixmaps, colormaps, cursors, font handles, colour-name table
+              (Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input / Extensions, plus one per
+              extension: Shape / XFixes / RandR / Render, clipboard exchange in Clipboard, the XSETTINGS manager in XSettings)
+Windowing/    Window model (tree, geometry, attributes, event selections, passive grabs, top-level buffer, the three SHAPE shapes)
+Resources/    GCs, pixmaps, colormaps, cursors, font handles, colour-name table, RENDER pictures and glyph sets
 Drawing/      32-bit software framebuffer, regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
               points / lines (thin Bresenham + wide-line polygons) / rectangles / scan-line polygon fill / arcs /
-              image blocks / text
+              image blocks / text; RENDER: pixel formats, compositing operators and blend modes, sources (image / solid /
+              gradients with repeat, transform, filter), trapezoid coverage
 Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching, synthesized cursor and nil2 fonts
 Input/        Keycode ↔ keysym table (evdev-style keycodes), modifier mapping, grab data structures
 Host/         Host-facing API: IXServerHost, XTopLevelWindow, XServerOptions, XKeycodes
@@ -95,8 +98,11 @@ The library defines the interface and the host implements it; notifications flow
 
 | Direction | Content |
 | --- | --- |
-| Library → host | Top-level window mapped / unmapped / destroyed; geometry changes (client ConfigureWindow); title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent, override-redirect; damage rectangles (the host then copies from that window's pixel buffer); cursor shape; bell |
-| Host → library | The user moved / resized the native window (the library updates geometry and sends ConfigureNotify / Expose); close button (ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected); pointer motion / buttons / wheel (as buttons 4/5); keys (X keycodes); focus in / out |
+| Library → host | Top-level window mapped / unmapped / destroyed; geometry changes (client ConfigureWindow); title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent, override-redirect; non-rectangular outline (`XTopLevelWindow.Shape`, the SHAPE bounding shape, null when rectangular); damage rectangles (the host then copies from that window's pixel buffer); cursor shape (cursor-font glyph number, −1 default arrow, −2 hidden); bell; an X client copied text (`ClipboardChanged`) |
+| Host → library | The user moved / resized the native window (the library updates geometry and sends ConfigureNotify / Expose); close button (ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected); pointer motion / buttons / wheel (as buttons 4/5); keys (X keycodes); focus in / out; the system clipboard has new text (`SetClipboardText`) |
+
+Clipboard exchange is controlled by `XServerOptions.SyncClipboard` (CLIPBOARD, on by default) and `SyncPrimary`
+(PRIMARY, off by default).
 
 **Every top-level window owns a pixel buffer** (effectively always-on backing store + Composite): child windows draw
 into their top-level's buffer, clipped to their visible region. Content hidden behind other native windows is never
@@ -121,15 +127,28 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   host may add more through a font-provider interface (e.g. rasterizing Cascadia Mono into bitmap fonts). The `cursor`
   font is virtual: metrics only, and the host maps glyph numbers to system cursors. Modern toolkits do not use core
   fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
+- **RENDER composites per pixel in floating point**: premultiplied alpha, 0–1 per channel, with two fast paths (solid
+  Src / opaque Over fill whole spans; fully transparent source pixels under Over / Add are skipped). Trapezoids and
+  triangles use 16 sub-scanlines per row with analytic horizontal coverage. Correctness first; specialize per format
+  only if it becomes a bottleneck. Source-picture clipping, alpha maps, poly-edge / poly-mode / dither are accepted but
+  have no effect.
+- **RANDR is read-only**: one virtual monitor covering the whole root window. In rootless mode the host decides where
+  windows go; clients only ask about monitors to learn size and DPI.
+- **The server doubles as the XSETTINGS manager**: it owns `_XSETTINGS_S0` and publishes `Xft/DPI` and a few more.
+  Real desktops always run a settings daemon and GTK / Qt look for one at startup; a real daemon taking the selection
+  over is let through.
+- **Clipboard**: host → X, the server itself owns CLIPBOARD and answers per ICCCM; X → host, the server fetches the text
+  with a hidden InputOnly window as requestor (UTF8_STRING with STRING fallback, INCR supported). When the host writes
+  back the text it just received, the server does not take the selection, so the two sides never fight over it.
 
 ## 8. Milestones
 
 | Milestone | Content | Acceptance |
 | --- | --- | --- |
 | **M1 core protocol** ✅ | All core requests; BIG-REQUESTS, XC-MISC; windows / events / properties / selections; software drawing; built-in fonts; keyboard mapping; headless test host | `xdpyinfo`, `xterm`, `xeyes`, `xclock`, `xlogo` in Docker connect, draw, and cause zero protocol errors (achieved, see §10) |
-| **M2 modern toolkits** | XFIXES, SHAPE, RENDER, minimal XKB, RANDR (read-only), XInput2; clipboard exchange with the host | Simple GTK3 / Qt5 programs work (`zenity`, `gedit`, one Qt5 program starts and draws) |
+| **M2 modern toolkits** ✅ | SHAPE, XFIXES, RANDR (read-only), RENDER; clipboard exchange with the host; XSETTINGS manager | Simple GTK3 / Qt5 programs work (`zenity`, `gedit`, `qt5ct` draw with zero protocol errors — achieved, see §10) |
 | **M3 host integration** | Avalonia host (native windows, input, HiDPI); replace the VcXsrv path; trim the settings page | The host's "X Server" button no longer depends on an external program |
-| M4 | MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs | As needed |
+| M4 | XKB and XInput2 (originally planned for M2, see §10), MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs | As needed |
 
 ## 9. Test strategy
 
@@ -161,3 +180,23 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   invisible pointer, all-blank glyphs) do not come from BDF files.
 - **M1 acceptance (2026-09-23)**: 40 unit tests; real clients `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` cause
   zero protocol errors and draw content; keyboard injection round-trips through xterm to `sh` in the container.
+- **Extension numbering**: major opcodes are assigned from 128 in implementation order — BIG-REQUESTS 128, XC-MISC 129,
+  SHAPE 130, XFIXES 131, RANDR 132, RENDER 133; event codes SHAPE 64, XFIXES 65–66, RANDR 67–68; error codes XFIXES 128,
+  RANDR 129–132, RENDER 133–137. Clients always obtain them through `QueryExtension`; these values are only this
+  implementation's allocation. Server-owned resources (RANDR's CRTC / output / mode, RENDER's formats, the hidden window
+  used for selections) take `0x40`–`0x56`, outside every client's resource base.
+- **XKB and XInput2 moved out of M2**: in practice Qt5 without XKB falls back to the core-protocol keymap (printing one
+  `XKeyboard extension not present` line), and GTK3 without XInput2 uses core pointer events; keyboard and clicks work.
+  Neither **can be done halfway** — once an extension shows up in `QueryExtension` clients switch to its code path, and
+  if any of XKB's `GetMap` / `GetNames` / `GetCompatMap` replies is wrong, xkbcommon-x11 fails to build a keymap and
+  the keyboard gets worse than today. If it is done, it must go all the way to `xkb_x11_keymap_new_from_device`
+  succeeding. Qt6's source keeps the same core-keymap fallback, but that is not yet verified in practice.
+- **XSETTINGS comes from the server**: GTK / Qt look for the owner of `_XSETTINGS_S0` at startup and each hit a
+  BadWindow / BadAtom when there is none. The server owns it and publishes only font-rendering settings; HiDPI's
+  `Gdk/WindowScalingFactor` and friends come with the M3 host integration.
+- **Diagnostic log carries a request trail**: when `XServerOptions.Log` prints a protocol error it appends the opcodes
+  of that client's last 8 requests — that is how the two errors above were pinned down.
+- **M2 acceptance (2026-09-23)**: 73 unit tests; 8 interop cases (new: `xclock -render`, `xeyes -render`, `xterm`
+  with an Xft font), all with zero protocol errors; verified by hand: `zenity` (GTK3), `gedit` (GTK3, typing via
+  key injection) and `qt5ct` (Qt5) with zero protocol errors, `xclip` both directions (including 12 MB of text),
+  `xrandr` reads the configuration.
