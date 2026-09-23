@@ -382,7 +382,7 @@ The default of `Security.BlockOnFingerprintChange` **flipped from on to off** (h
 ### 2026-09-23 Sixth batch (new “X Server” page)
 
 A new top-level section **X Server** (after “Proxy”) configures the local X server — on Windows, the VcXsrv the user
-installed (host side: `plan.md` §98). All new settings live in `AppSettings.XServer` (`XServerOptions`); configs saved
+installed (host side: `plan.md` §100). All new settings live in `AppSettings.XServer` (`XServerOptions`); configs saved
 before this section existed get the defaults from `Normalize`.
 
 | Setting | Default | VcXsrv argument | Notes |

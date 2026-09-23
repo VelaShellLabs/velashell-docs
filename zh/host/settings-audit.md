@@ -367,7 +367,7 @@
 ### 2026-09-23 第六批(新增「X Server」页)
 
 新增一级分区 **X Server**(排在「网络代理」之后),配置本机 X 服务端 —— Windows 上是用户自己装的 VcXsrv
-(宿主侧见 `plan.md` §98)。新增的设置全部落在 `AppSettings.XServer`(`XServerOptions`),老配置里没有这一节时
+(宿主侧见 `plan.md` §100)。新增的设置全部落在 `AppSettings.XServer`(`XServerOptions`),老配置里没有这一节时
 由 `Normalize` 补上默认值。
 
 | 设置 | 默认 | 对应 VcXsrv 参数 | 备注 |
