@@ -208,6 +208,26 @@ ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "口�
 > 所以它一直就能读；OpenSSH 的 `bcrypt_pbkdf` 谁都不给，所以那一条是自己写的
 > —— 全库唯一的一处，见上面那个注。
 
+### 把私钥加进 agent（`ssh-add`）
+
+加密私钥解开一次、交给 agent 保管，之后认证与转发都经 agent 签名：
+
+```csharp
+var key = (InMemorySshSigner)await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: "口令", ct);
+
+await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
+
+// ssh-add -t 3600 -c：一小时后自动删除、每次签名都要确认
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+```
+
+- 只接受进程内私钥（`InMemorySshSigner`）；证书加钥暂不支持。
+- **库从不自动加钥**，什么时候往使用者的 agent 里放东西由调用方决定。
+- 有的 agent 不支持约束，会整条拒绝（`SshAgentException`）。加进去的钥活多久由 agent 决定 ——
+  Windows 的 OpenSSH agent 会存进注册表，重启后仍在。规格见 [spec/07 §7.3](spec/07-forwarding.md)。
+
 ---
 
 ## 四 跑命令

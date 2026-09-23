@@ -417,7 +417,7 @@ src/
 | Custom shortcuts | Product decision (2026-07-12): the “Shortcuts” settings page is for reference display only; its entries are maintained against the real bindings |
 | Redaction of recorded input | No longer needed: session recording captures only the terminal output stream, and password input has no echo by default (settings-audit R-12) |
 
-> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup, and automatic loading of keys into the Agent. Session recording was implemented on 2026-07-12 (§4.11 / §8-17).
+> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup. (Automatic loading of keys into the Agent was implemented on 2026-09-23, Settings → Key Management.) Session recording was implemented on 2026-07-12 (§4.11 / §8-17).
 
 ---
 
