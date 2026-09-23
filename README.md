@@ -18,6 +18,7 @@ zh/                    en/                    内容
   cli/                   cli/                 vela-plugin 命令行手册、发版流程
   templates/             templates/           插件开发指南、打包与发布、发版流程
   ssh/                   ssh/                 宿主的 SSH 库 VelaShell.Ssh 的架构、行为规格与上手
+  xserver/               xserver/             可嵌入的 X11 服务端库 VelaShell.XServer 的架构与里程碑
 ```
 
 中英两棵树同构:中文是原文,英文是翻译。**当前有 8 篇只有中文版**:
@@ -43,6 +44,7 @@ zh/                    en/                    内容
 | 让团队从 IM 里用 / 让别的 agent 调 | [协作接入](zh/plugins/协作接入.md) · [Collaboration](en/plugins/collaboration.md) |
 | 理解宿主的分层与依赖方向 | [架构](zh/host/architecture.md) · [Architecture](en/host/architecture.md) |
 | 改宿主的 SSH 库(协议、SFTP、转发) | [SSH 库](zh/ssh/) · [SSH library](en/ssh/) |
+| 改 X11 服务端库(本机显示远端图形程序) | [X 服务端库](zh/xserver/) · [X server library](en/xserver/) |
 | 把 Xshell / WinSCP / `~/.ssh/config` 的会话搬过来 | [会话导入](zh/host/会话导入.md) · [Session import](en/host/session-import.md) |
 | 看整个生态怎么拼起来 | 下面这张图 |
 
