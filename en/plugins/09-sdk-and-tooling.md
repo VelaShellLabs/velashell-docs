@@ -8,7 +8,7 @@
 >   (**the only package a plugin project references**: MSBuild props/targets, dependency pinning,
 >   and the packer that ships inside it), `VelaShell.Plugin.Cli` (dotnet tool `vela-plugin`),
 >   and `VelaShell.Plugin.Templates` (`dotnet new`). There is no `VelaShell.PluginProtocol`
->   package — the RPC wire protocol lives in the contract assembly (a hand-rolled lightweight
+>   package — the RPC wire protocol lives in the contract assembly (a lightweight
 >   protocol rather than StreamJsonRpc, see the note in 05).
 > - The templates are **`velaplugin` and `velaplugin-ui`**; `velaplugin-automation` waits for the
 >   automation capability domain.

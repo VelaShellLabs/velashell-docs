@@ -2,7 +2,7 @@
 
 English: [`../../en/ssh/`](../../en/ssh/)
 
-`VelaShell.Ssh` 是宿主自研的 SSH 客户端库(替换了 Tmds.Ssh):远程命令、交互式 shell、
+`VelaShell.Ssh` 是宿主的 SSH 客户端库(替换了 Tmds.Ssh):远程命令、交互式 shell、
 SFTP、端口转发与隧道,全异步、低分配、AOT 友好。它是**独立实现**,不是任何现有库的 fork。
 
 | 文档 | 内容 |

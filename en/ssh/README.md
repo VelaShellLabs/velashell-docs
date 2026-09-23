@@ -2,7 +2,7 @@
 
 中文:[`../../zh/ssh/`](../../zh/ssh/)
 
-`VelaShell.Ssh` is the host's in-house SSH client library (it replaced Tmds.Ssh): remote commands,
+`VelaShell.Ssh` is the host's SSH client library (it replaced Tmds.Ssh): remote commands,
 interactive shells, SFTP, port forwarding and tunnels — fully async, low-allocation, AOT-friendly.
 It is an **independent implementation**, not a fork of any existing library.
 

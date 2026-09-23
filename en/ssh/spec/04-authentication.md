@@ -7,7 +7,7 @@
 > Implementation: `Auth/` (L7).
 >
 > **The two most important sections in this file are §3.3 (partial success) and §6 (keyboard-interactive).**
-> Together they decide whether 2FA / OTP works at all — and that is one of the top reasons we built our own implementation.
+> Together they decide whether 2FA / OTP works at all — and that is one of the top reasons we decided to write the SSH library ourselves.
 >
 > 中文：[`../../../zh/ssh/spec/04-authentication.md`](../../../zh/ssh/spec/04-authentication.md)
 
@@ -316,7 +316,7 @@ is the kind of failure users find hardest to recover from on their own.
 
 ## 6 `keyboard-interactive` (RFC 4256) — where 2FA / OTP lands
 
-> **This is one of the top reasons for building our own implementation.** Google Authenticator, Duo,
+> **This is one of the top reasons for writing the SSH library ourselves.** Google Authenticator, Duo,
 > and RSA SecurID on bastion hosts all go through this path.
 
 ### 6.1 Request

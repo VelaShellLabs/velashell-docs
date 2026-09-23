@@ -193,14 +193,14 @@ None of the five resx files currently contains any FTP keys, not even an "unsupp
 | `GetWorkingDirectoryAsync` | `GetWorkingDirectory` |
 | Verification, optional enhancement | Built-in MD5 / CRC32 / SHA-1/256/512 |
 
-It also includes parsing for 30+ server-specific LIST dialects, automatic capability discovery, throttling, and reconnect handling. **These are precisely the most time-consuming and error-prone parts of a custom implementation.**
+It also includes parsing for 30+ server-specific LIST dialects, automatic capability discovery, throttling, and reconnect handling. **These are precisely the most time-consuming and error-prone parts to write from scratch.**
 
 ### 4.2 Options Not Recommended
 
 | Option | Conclusion |
 |---|---|
 | `FtpWebRequest` (built into BCL) | **Deprecated** (`SYSLIB0014`, marked obsolete since .NET 6), with no MLSD and insufficient FTPS control. Not usable. |
-| Custom FTP client | The protocol surface is an order of magnitude larger than Telnet: dual control/data connections, PASV/EPSV/PORT/EPRT, RFC 4217 FTPS AUTH/PBSZ/PROT, RFC 3659 MLSD/REST/SIZE/MDTM, plus vendor-specific LIST dialects. The Telnet conclusion that a custom implementation was more cost-effective **does not apply here**. |
+| Writing an FTP client from scratch | The protocol surface is an order of magnitude larger than Telnet: dual control/data connections, PASV/EPSV/PORT/EPRT, RFC 4217 FTPS AUTH/PBSZ/PROT, RFC 3659 MLSD/REST/SIZE/MDTM, plus vendor-specific LIST dialects. The Telnet conclusion that implementing it ourselves was more cost-effective **does not apply here**. |
 | Other .NET FTP libraries | *Unverified*. Their maintenance status and licenses were not verified individually. FluentFTP has a clear advantage in activity, licensing, and download volume. |
 
 ### 4.3 ⚠️ `FluentFTP.GnuTLS` Is LGPL, Do Not Add It Casually

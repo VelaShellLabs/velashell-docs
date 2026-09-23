@@ -6,7 +6,7 @@
 > 2. The interaction specification `docs/interaction-and-ui-specs.md` (the sole visual and interaction baseline);
 > 3. **A file-by-file walkthrough of the existing codebase** (6 src projects + 6 test projects, ~129 .cs files / ~22 .axaml files).
 >
-> Goal: without discarding existing usable capabilities (the custom VT engine, SSH, Dock split panes, command palette, theme/i18n scaffolding, and 359 passing tests), provide an **engineering architecture** capable of supporting the 26 goals you listed, and map every lag or defect you reported to its **root cause** and an **architecture-level remediation**.
+> Goal: without discarding existing usable capabilities (the VT engine, SSH, Dock split panes, command palette, theme/i18n scaffolding, and 359 passing tests), provide an **engineering architecture** capable of supporting the 26 goals you listed, and map every lag or defect you reported to its **root cause** and an **architecture-level remediation**.
 >
 > Updated: 2026-07-07; corrected on 2026-07-10 to reflect the implementation state (§1 inventory, §4.8 conflict policy, §11 explicit non-goals);
 > corrected again on 2026-07-22: the target framework has switched to **net11.0** (§2.1 decision completed), the SSH transport layer has migrated from SSH.NET to **Tmds.Ssh** (§2.2, §3), and `StatusMetricChip` has been removed (§6).
@@ -31,11 +31,11 @@ Priority: **P0 = rendering pipeline + lifecycle decoupling + IME + scrolling** (
 
 | Capability | Status | Key files |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| VT parsing/emulation/screen buffer/scrollback history | ✅ Complete (custom implementation, not a wrapper) | `Terminal/Emulation/{VtParser,TerminalEmulator,TerminalScreen}.cs` |
+| VT parsing/emulation/screen buffer/scrollback history | ✅ Complete (not a wrapper) | `Terminal/Emulation/{VtParser,TerminalEmulator,TerminalScreen}.cs` |
 | Custom-rendered terminal control | ✅ Usable, but has **structural performance and scrolling problems** | `Terminal/Rendering/VelaTerminalControl.cs` |
 | SSH connection + shell I/O (async) | ✅ | `Infrastructure/Ssh/*`, `Terminal/SshTerminalBridge.cs` |
 | Password / private-key authentication | ✅ | `Infrastructure/DependencyInjection/*` |
-| Split panes / tab docking (custom VelaDock, floating windows disabled by product decision) | ✅ | `App/Docking/*` (Model + Controls), `App/Controls/ReparentingHost.cs` |
+| Split panes / tab docking (VelaDock, floating windows disabled by product decision) | ✅ | `App/Docking/*` (Model + Controls), `App/Controls/ReparentingHost.cs` |
 | dark/light/system themes (token dictionary) | ✅ Scaffolding exists, but **real-time system following and runtime accent-color overrides are missing** | `Core/Services/ThemeService.cs`, `App/App.axaml(.cs)`, `Controls/Themes/*` |
 | i18n (five languages: en default + zh-Hans/zh-Hant/ja/ko satellite resources, 938 keys fully covered, real-time switching) | ✅ Completed on 2026-07-12: all UI copy extracted across the repository (~900 locations), axaml uses `{loc:Localize}`, C# uses `Strings.Get/Format`; key-set parity and fallback-chain tests provide coverage | `Core/Resources/Strings*.resx`, `Core/Localization/*`, `App/Localization/LocalizeExtension.cs` |
 | Command palette Ctrl+P/K | ✅ (but command sources are scattered, with no unified registry) | `App/ViewModels/CommandPalette*.cs` |
@@ -43,7 +43,7 @@ Priority: **P0 = rendering pipeline + lifecycle decoupling + IME + scrolling** (
 | SonnetDB embedded persistence (sessions/settings/known_hosts/connection history/audit) | ✅ | `Core/Data/*`, `Infrastructure/Persistence/SonnetDb*` (legacy JSON is automatically imported on first run) |
 | **SFTP + transfer queue** | ✅ Wired: browser, transfer overlay, bidirectional conflict policies (overwrite/skip/rename/ask), concurrency/throttling/logging all work | `Core/Sftp/*`, `App/ViewModels/FileBrowserViewModel.cs` |
 | Localization / host trust / shortcut services | ✅ Registered in DI | `App/App.axaml.cs`, `Infrastructure/DependencyInjection/*` |
-| Update service (custom portable self-updater) | ✅ Integrated (GitHub Releases `latest.json` manifest + SHA-256 verification + external process replaces the version and restarts after exit, automatic rollback on failure; Velopack removed on 2026-07-17) | `App/Services/UpdateService.cs`, `App/Services/Update/*` |
+| Update service (portable self-updater) | ✅ Integrated (GitHub Releases `latest.json` manifest + SHA-256 verification + external process replaces the version and restarts after exit, automatic rollback on failure; Velopack removed on 2026-07-17) | `App/Services/UpdateService.cs`, `App/Services/Update/*` |
 | Semantic highlighting / URL and error recognition (#9) | ✅ Implemented | `Terminal/Semantics/SemanticMatcher.cs` |
 | Unified overlay/floating-panel management (§17) | ✅ Not implemented (each panel is independent) | — |
 | Reconnect using the same session tab (#19) | ✅ Only the `ReconnectAttempts` field exists; no driving logic | `App/ViewModels/TerminalTabViewModel.cs` |
@@ -71,7 +71,7 @@ Original record: `11.0.100-preview.5` was installed in the environment alongside
 
 ### 2.2 Technology Stack (Keep the Current Stack to Avoid Unnecessary Migration)
 
-Avalonia 12.1.0 · ReactiveUI 23 / ReactiveUI.Avalonia 12 · **custom VelaDock docking** (`App/Docking/`, replaced Dock.Avalonia, see `docs/dock-replacement-plan.md`) · **Tmds.Ssh 0.23.0** (fully managed async-first SSH library, replaced SSH.NET; ProxyJump uses its native `SshProxy` chain) · Microsoft.Extensions.DependencyInjection · System.Text.Json · **SonnetDB.Core 3.0.1 (embedded multi-model database, the sole persistence engine)** · custom portable self-updater (`App/Services/Update/`, Velopack removed) · MSTest. **Do not add large dependencies**. Icons use **Avalonia's built-in `PathIcon` + Fluent/lucide geometry** (your #24).
+Avalonia 12.1.0 · ReactiveUI 23 / ReactiveUI.Avalonia 12 · **VelaDock docking** (`App/Docking/`, replaced Dock.Avalonia, see `docs/dock-replacement-plan.md`) · **Tmds.Ssh 0.23.0** (fully managed async-first SSH library, replaced SSH.NET; ProxyJump uses its native `SshProxy` chain) · Microsoft.Extensions.DependencyInjection · System.Text.Json · **SonnetDB.Core 3.0.1 (embedded multi-model database, the sole persistence engine)** · portable self-updater (`App/Services/Update/`, Velopack removed) · MSTest. **Do not add large dependencies**. Icons use **Avalonia's built-in `PathIcon` + Fluent/lucide geometry** (your #24).
 
 ---
 
@@ -417,7 +417,7 @@ src/
 | Custom shortcuts | Product decision (2026-07-12): the “Shortcuts” settings page is for reference display only; its entries are maintained against the real bindings |
 | Redaction of recorded input | No longer needed: session recording captures only the terminal output stream, and password input has no echo by default (settings-audit R-12) |
 
-> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the custom update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup, and automatic loading of keys into the Agent. Session recording was implemented on 2026-07-12 (§4.11 / §8-17).
+> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup, and automatic loading of keys into the Agent. Session recording was implemented on 2026-07-12 (§4.11 / §8-17).
 
 ---
 

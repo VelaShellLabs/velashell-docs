@@ -7,7 +7,7 @@
 > 对应实现：`Auth/`（L7）。
 >
 > **本文件里最重要的两节是 §3.3（部分成功）与 §6（keyboard-interactive）。**
-> 它们合起来就是 2FA / OTP 能不能用 —— 而这正是我们自研的头号动因之一。
+> 它们合起来就是 2FA / OTP 能不能用 —— 而这正是我们决定自己实现 SSH 库的头号动因之一。
 
 ---
 
@@ -314,7 +314,7 @@ string    公钥 blob
 
 ## 六 `keyboard-interactive`（RFC 4256）—— 2FA / OTP 的落点
 
-> **这是自研的头号动因之一。** 堡垒机上的 Google Authenticator、Duo、
+> **这是自己实现 SSH 库的头号动因之一。** 堡垒机上的 Google Authenticator、Duo、
 > RSA SecurID 走的都是这条路。
 
 ### 6.1 请求

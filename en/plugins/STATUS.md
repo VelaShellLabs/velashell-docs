@@ -37,7 +37,7 @@ Quality baseline (full regression each round): full-repository build with 0 warn
 | --- | --- | --- | --- |
 | SDK contract and manifest | 03/09 | `plugin-sdk/VelaShell.PluginSdk` (BCL only); validation of every manifest field (20+ malformed cases rejected with readable errors) | PluginManifestReaderTests, LazyActivationTests |
 | In-process host | 02 | Collectible ALC, fault guard, zero startup overhead for background activation | PluginManagerTests (real ALC e2e) |
-| Isolated-process host | 02/04/05 | PluginHost process + custom lightweight RPC over named pipes (deliberately does not use StreamJsonRpc; see the note in 05); token handshake, parent-process watchdog, credentials never leave the main process | IsolatedPluginTests, RpcConnectionTests |
+| Isolated-process host | 02/04/05 | PluginHost process + lightweight RPC over named pipes (deliberately does not use StreamJsonRpc; see the note in 05); token handshake, parent-process watchdog, credentials never leave the main process | IsolatedPluginTests, RpcConnectionTests |
 | Reliability | 04 | Heartbeat (force-kill after 2 failures at 30s intervals), crash-backoff automatic restart (1s/5s/30s, Faulted after the window limit), idle reclamation (recyclable) | Process-kill self-healing e2e, reclamation/relaunch e2e |
 | Lazy activation | 03 | `onStartup` / `onCommand:<id>` + `contributes.commands` placeholder commands | LazyActivationTests |
 | UI (full Avalonia) | 08 (redirected) | VelaUI declarative tree **not implemented by user decision**; plugins use full Avalonia directly (compile-time AXAML/bundled styles/i18n/third-party packages), constrained only by matching the host's Avalonia version (forced ALC sharing) | PluginPanelUiTests |
@@ -76,7 +76,7 @@ Quality baseline (full regression each round): full-repository build with 0 warn
 ## III. Deliberate Architectural Decisions (Do Not "Correct")
 
 1. **The VelaUI-lite declarative tree was removed**—plugin UI = full Avalonia (user decision, converged over three rounds).
-2. **Custom lightweight RPC protocol** instead of StreamJsonRpc + MessagePack (zero-dependency discipline; see the note in 05).
+2. **A lightweight RPC protocol** instead of StreamJsonRpc + MessagePack (zero-dependency discipline; see the note in 05).
 3. **Both host modes coexist**, with manifest `hostMode` selecting the mode; plugin source requires zero changes between the two modes.
 4. **Plugins never connect directly to SonnetDB**: capability instances are namespaced by plugin ID; all data from isolated processes goes through RPC.
 5. **PluginHost uses software rendering by default** (saving most of the GPU-driver mapping memory per process); `VELA_PLUGIN_GPU=1` enables it.

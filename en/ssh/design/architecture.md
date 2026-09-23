@@ -16,7 +16,7 @@
 
 ## 0 One-line conclusion
 
-**Worth doing — but the reason is not "we want to roll our own". It is that VelaShell has already written 1,200+ lines of patches to work around the underlying library,
+**Worth doing — but the reason is not "we want to write one ourselves". It is that VelaShell has already written 1,200+ lines of patches to work around the underlying library,
 and two capabilities (2FA, PTY pixel size) are stuck hard upstream.**
 
 The approach: **a brand-new API + an independent implementation + an optional compatibility shim package**.
@@ -70,7 +70,7 @@ Tmds.Ssh is **MIT**. MIT permits forking, modifying, closing the source, redistr
   2. **Dual-licensing friction** — VelaShell is dual-licensed. MIT code mixed into closed-source distributions must carry attribution forever,
      and once it is mixed at file level, every future compliance review has to re-establish "whose lines are these".
   3. **Upgrade isolation** — after a fork you must manually rebase every upstream change; within a few months it drifts beyond merging,
-     and you end up with "neither the freedom of your own implementation nor the benefits of upstream". **This is the most expensive hidden cost of forking.**
+     and you end up with "neither the freedom of writing it yourself nor the benefits of upstream". **This is the most expensive hidden cost of forking.**
 
 So the goal is not "legal"; it is **provable independence**: anyone who runs a diff / similarity scan over the two codebases
 should conclude "these are two different implementations".
@@ -82,7 +82,7 @@ should conclude "these are two different implementations".
 | 1 | **Specifications first; source code is not a basis** | The only permitted bases for implementation are RFC 4250–4254 / 4256 / 4419 / 5656 / 8308 / 8332 / 8709, the `PROTOCOL*` files in the OpenSSH repository, and draft-ietf-sshm-*. **Every protocol implementation file states in its header which section of which document it implements**; if you cannot, it means you copied someone else's code |
 | 2 | **Two-phase isolation** | The analysis phase produces **behaviour specifications** (pure natural language + message sequence tables, zero code snippets); the implementation phase looks only at the specs and RFCs. With AI assistance this rule is especially practical: analysis sessions and implementation sessions **do not share context** |
 | 3 | **An entirely separate identifier scheme** | Do not reuse the **combination** of its class names / method names / field names / enum member names. §6.1 gives a mapping table. Note the word "combination" — colliding on a generic name like `SshClient` is fine; colliding on a whole set is evidence |
-| 4 | **A genuinely different architecture, not a rename** | §4–§5 give **a different internal model** (Pipelines instead of a home-grown Sequence, a state machine instead of semaphore handshakes, a unified ledger instead of three pending mechanisms, IDuplexPipe instead of dual-buffer reads). This rule is the foundation of the others: **as long as the internal model really is different, similarity scans pass naturally** |
+| 4 | **A genuinely different architecture, not a rename** | §4–§5 give **a different internal model** (Pipelines instead of Tmds's own Sequence type, a state machine instead of semaphore handshakes, a unified ledger instead of three pending mechanisms, IDuplexPipe instead of dual-buffer reads). This rule is the foundation of the others: **as long as the internal model really is different, similarity scans pass naturally** |
 | 5 | **Test vectors only from public sources** | RFC test vectors, NIST CAVP, the **ideas** behind OpenSSH regress cases. **Do not copy its test files** — not a single one |
 | 6 | **CI similarity gate** | See §2.4 |
 | 7 | **An honest NOTICE** | See §2.5 |
@@ -428,7 +428,7 @@ adjust the window within `[256 KiB, 64 MiB]` using "slow start + congestion avoi
 **Difference: Tmds has three separately written pending mechanisms** —
 global requests use `Queue<(TaskCompletionSource, bool)>` (FIFO, aligned by order, no id),
 channel requests use the two success/failure messages,
-SFTP uses `ConcurrentDictionary<int, PendingOperation>` + a home-grown `IValueTaskSource` pool.
+SFTP uses `ConcurrentDictionary<int, PendingOperation>` + an `IValueTaskSource` pool it builds itself.
 Cancellation semantics, timeout semantics, and cleanup on disconnect are each written their own way in the three places.
 
 We build one: a pooled `IValueTaskSource<TResult>` + an id table + a single, unified path for
@@ -1236,7 +1236,7 @@ which likewise caps at 10 MB/s over a 200 ms RTT; this one still stands. **→ D
 > This is not a weekend project. **Accept this volume before deciding to do it.**
 > If the goal is only to solve 2FA and pixel dimensions, the cheaper route is to send PRs upstream — we've already sent two
 > (the #513 / #519 line), and that route works.
-> **The case for building our own has to be the whole table in §1, not one or two rows of it.**
+> **The case for writing it ourselves has to be the whole table in §1, not one or two rows of it.**
 ### 11.2.9 Six finishing items (2026-09-21)
 
 Every section from §11.2.1 to §11.2.8 ends with a "not done" list. This section settles all of
@@ -2171,7 +2171,7 @@ It isn't our PR, so only its problem description was read, not its implementatio
 self-checking our own code against RFC 4254 §6.2 / §6.7.
 
 **The main problem does not exist here.** Pixel dimensions have been first-class in this library from the start (a decision in §5.3,
-and indeed one of the two reasons we originally decided to build our own): the four fields of `TerminalSize` run through
+and indeed one of the two reasons we originally decided to write it ourselves): the four fields of `TerminalSize` run through
 `OpenShellAsync` → `pty-req` and `ResizeAsync` → `window-change`,
 both paths have cases, and `伪终端能开起来` ("a pseudo-terminal can be opened") even runs against real OpenSSH.
 

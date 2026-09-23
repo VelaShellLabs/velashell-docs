@@ -13,7 +13,7 @@
 | `VelaShell` | Desktop entry point, DI composition root, XAML views, VelaDock docking, global styles and behaviours | every layer |
 | `VelaShell.Presentation` | Cross-layer ViewModels, connection / tunnel workflow services | Core, Terminal |
 | `VelaShell.Controls` | Reusable controls, design tokens, the bundled Cascadia Mono faces | Core (shared UI contracts only) |
-| `VelaShell.Terminal` | In-house VT engine, self-drawn rendering control, X/Y/ZMODEM routing | Core |
+| `VelaShell.Terminal` | VT engine, self-drawn rendering control, X/Y/ZMODEM routing | Core |
 | `VelaShell.Core` | Domain models, service contracts, persistence abstractions, protocol engines, localization | **nothing** |
 | `VelaShell.Infrastructure` | SSH / SFTP / FTP / tunnel implementations, SonnetDB persistence, proxying, Gist sync, plugin management and capabilities | Core, Terminal (only when an adapter genuinely belongs here) |
 | `VelaShell.PluginHost` | Host process for isolated plugins | **SDK contracts only** |
@@ -190,14 +190,14 @@ flowchart TD
 
 ### Port-forwarding tunnels
 
-Local `-L`, remote `-R` and dynamic SOCKS5 `-D`. **The data plane is in-house**: Tmds.Ssh does the
+Local `-L`, remote `-R` and dynamic SOCKS5 `-D`. **The host relays the data itself**: Tmds.Ssh does the
 relaying internally and exposes no counters at all, which is why `TunnelInfo.BytesTransferred` used
 to be permanently 0.
 
 | Direction | Implementation |
 | --- | --- |
 | Local `-L` | Own `TcpListener` + `SshClient.OpenTcpConnectionAsync` (direct-tcpip, structurally identical to the library's own path, no extra hop) |
-| Dynamic `-D` | Own listener + in-house SOCKS5 server handshake (`Socks5Negotiation`, RFC 1928, CONNECT with no auth) |
+| Dynamic `-D` | Own listener + SOCKS5 server handshake (`Socks5Negotiation`, RFC 1928, CONNECT with no auth) |
 | Remote `-R` | Only the library can open the listening end → forward to a local metering listener → the host relays on to the real target (one extra loopback copy buys the same statistics) |
 
 > ⚠️ The relay preserves **half-close semantics** (`SshDataStream.WriteEof` on the SSH side,
@@ -209,7 +209,7 @@ Details in [tunnel-feature-planning.md](tunnel-feature-planning.md).
 
 ## 4. In-terminal file transfer (ZMODEM / XMODEM / YMODEM)
 
-`rz`/`sz`, `rb`/`sb` and `rx`/`sx` are **all implemented in-house**, spread across three projects
+`rz`/`sz`, `rb`/`sb` and `rx`/`sx` are **all implemented from scratch**, spread across three projects
 and sharing protocol-neutral contracts:
 
 | Location | Contents |
@@ -237,7 +237,7 @@ historical `VELASHELL_ZMODEM_TRACE=1` still works) to dump protocol frames.
 
 ## 5. Docking and the window shell
 
-### VelaDock (in-house, zero third-party dependencies)
+### VelaDock (zero third-party dependencies)
 
 It replaced `Dock.Avalonia`; the plan is in [dock-replacement-plan.md](dock-replacement-plan.md).
 
@@ -368,7 +368,7 @@ flowchart TD
     Ctx --> Iso["<b>Separate process</b><br/>VelaShell.PluginHost"]
 
     InProc --> UI1["UI joins the docking workspace directly"]
-    Iso --> RPC["in-house named-pipe RPC<br/>heartbeat · self-healing restart · idle recycling"]
+    Iso --> RPC["named-pipe RPC<br/>heartbeat · self-healing restart · idle recycling"]
     RPC --> UI2["standalone card window / embedded in host"]
 
     Ctx --> Caps["<b>Capability surface</b><br/>Sessions · Terminal · RemoteExec · RemoteFs<br/>RemoteTunnel · Protocols · Workspaces<br/>Storage · TimeSeries · Secrets<br/>Commands · Events · Ui · Clipboard · Log"]

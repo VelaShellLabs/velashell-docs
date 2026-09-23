@@ -207,7 +207,7 @@ ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "passp
 ```
 
 > The `.ppk` KDFs (SHA-1 concatenation for v2, Argon2id for v3) are provided directly by BouncyCastle,
-> so it could always be read; nobody provides OpenSSH's `bcrypt_pbkdf`, so that one was written in-house
+> so it could always be read; nobody provides OpenSSH's `bcrypt_pbkdf`, so we wrote that one ourselves
 > — the only instance in the whole library, see the note above.
 
 ---

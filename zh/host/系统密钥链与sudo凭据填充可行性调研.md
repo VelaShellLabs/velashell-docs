@@ -68,7 +68,7 @@
 三点判断：
 
 1. **没有合适的跨平台 NuGet。** 现成库要么只覆盖 Windows，要么把三平台各绑一遍且依赖沉重。
-   本仓的既有取向是自研薄封装（自研插件 RPC 而非引 StreamJsonRpc、移除 DynamicData），
+   本仓的既有取向是自己写薄封装、不引重依赖（插件 RPC 自己实现而非引 StreamJsonRpc、移除 DynamicData），
    这里同理：三个平台各一个 ~80-120 行的 P/Invoke 薄层 + 一个统一接口即可。
 2. **这会是本仓第一次写非 Windows 的原生互操作。** 现有 `LibraryImport` 全是 `user32/dwmapi/kernel32`
    （`src/VelaShell/Views/Win32WindowChrome.cs` 等），macOS/Linux 侧没有先例，CI 也没有对应的构建门禁

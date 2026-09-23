@@ -1,7 +1,7 @@
 # VelaShell Interaction Logic and UI Specification
 
 > This document is based on the `VelaShell-zh.pen` design file and is intended for delivery to an AI Agent for feature implementation.
-> Target technology stack: **Avalonia** (UI) + **custom VelaDock** (draggable/split tab docking, replacing Dock.Avalonia; floating windows are disabled by product decision) + custom VT engine (parser / buffer / emulator / render).
+> Target technology stack: **Avalonia** (UI) + **VelaDock** (draggable/split tab docking, replacing Dock.Avalonia; floating windows are disabled by product decision) + VT engine (parser / buffer / emulator / render).
 > The design file is the sole visual baseline for this document. Any item phrased as "should be changed to..." is a **refactoring requirement** for the existing design structure. Implementations must follow this document.
 
 ---
@@ -87,7 +87,7 @@ The main window is 1440×900 and can be freely resized. **〔2026-07 final, user
 - **The custom title bar spans the full-width first row** (`bg-sidebar` background + bottom divider): left = logo and product name; right = global feature button group `GQQwj` (see §4A; “broadcast” is implemented, “group sync” remains disabled) + minimize/maximize/close window controls (46×35, with system red on close hover).
 - The row below divides directly into “sidebar ‖ right area”; the right area starts with the tab bar (see §4B).
 
-- The sidebar/right boundary and the horizontal dividers within the right area are draggable (custom VelaDock / GridSplitter), allowing width/height adjustment and full-section collapsing.
+- The sidebar/right boundary and the horizontal dividers within the right area are draggable (VelaDock / GridSplitter), allowing width/height adjustment and full-section collapsing.
 - The terminal area and file area together form “one session view” and switch as a whole when the active tab changes.
 
 ---
@@ -237,7 +237,7 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 ### 5.2 Terminal Canvas
 
-- Render using the custom VT engine: draw monospaced text line by line, with support for xterm-256color, true color, cursor, selection, and hyperlink detection.
+- Render using the VT engine: draw monospaced text line by line, with support for xterm-256color, true color, cursor, selection, and hyperlink detection.
 - Support mouse selection and copy, right-click paste, Ctrl+wheel font zoom, and scrolling back through the buffer.
 - **Alt+left-drag = rectangular block selection** (#128, aligned with Windows Terminal behavior): whether Alt is held at mouse-down determines whether the operation is block selection or a normal linear selection. Changing Alt during the drag does not switch modes. Copy takes the same column range from each line, always inserting line breaks between lines. When the application enables mouse tracking (htop/vim/tmux), mouse events are given to the application; use Shift+Alt+drag to force block selection.
 - **Shift+left-click = extend the selection** (#266, aligned with Windows Terminal / xterm): when a selection already exists, Shift+click keeps the anchor in place and moves only the far end to the clicked cell (before or after the anchor — the selection flips direction accordingly); keep the button held to keep dragging and fine-tune it. To grab a long log spanning more than one screen, select the start, scroll back, then Shift+click the end. The extension reuses the linear/block mode fixed at the original mouse-down. With no selection yet, Shift+click still starts a new one, preserving the existing "hold Shift to bypass application mouse reporting and select text" semantics.
@@ -611,7 +611,7 @@ the terminal and the chrome around it are one plane, and a mismatch shows up as 
 | One Light (`one-light`) | light | One Light | One Light |
 | Rosé Pine Dawn (`rose-pine-dawn`) | light | Rosé Pine Dawn | Rosé Pine Dawn |
 | GitHub Light (`github-light`) | light | GitHub Light | GitHub Light |
-| Sakura (`sakura`) | light | pink, in-house | Sakura |
+| Sakura (`sakura`) | light | pink, no upstream palette | Sakura |
 
 - The persisted value is the id above; `dark` / `light` keep their historical values, so existing
   configurations need no migration.
@@ -689,7 +689,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 
 1. **P0 Layout skeleton**: three-area layout + Dock splitters + status bar; connect theme tokens.
 2. **P0 Top-level structure refactor**: menu bar (§4A, including the text menu + global feature button `GQQwj`) + tab bar (§4B, overflow scrolling `◀▶`, `▾` drop-down, drag reordering, splitting).
-3. **P0 Terminal engine integration**: custom VT rendering + input + selection/copy/search.
+3. **P0 Terminal engine integration**: VT rendering + input + selection/copy/search.
 4. **P1 Command palette (§8)** and **New Connection/Authentication flow (§13)**.
 5. **P1 File browser + transfer component (§6/§9)**: drag-and-drop upload/download + floating progress + automatic disappearance.
 6. **P1 Tunnel panel (§10)** and **Resource Monitor hover panel (§11)**.

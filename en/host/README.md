@@ -9,7 +9,7 @@ Architecture, design specs and research for the VelaShell main application.
 | --- | --- |
 | [architecture.md](architecture.md) | Layering, dependency direction and the SonnetDB persistence strategy |
 | [architecture-design.md](architecture-design.md) | Engineering refactor blueprint |
-| [dock-replacement-plan.md](dock-replacement-plan.md) | Replacing Dock.Avalonia with the in-house VelaDock |
+| [dock-replacement-plan.md](dock-replacement-plan.md) | Replacing Dock.Avalonia with VelaDock |
 | [design-specs.md](design-specs.md) | UI visual specs (extracted frame by frame from Pencil) |
 | [interaction-and-ui-specs.md](interaction-and-ui-specs.md) | Interaction logic and design tokens |
 | [keyboard-shortcuts.md](keyboard-shortcuts.md) | Every keyboard shortcut and mouse gesture (generated from `ShortcutCatalog`, not hand-copied) |

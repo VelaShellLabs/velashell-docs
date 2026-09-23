@@ -17,7 +17,7 @@ zh/                    en/                    内容
   sdk/                   sdk/                 插件契约 SDK 参考、发版流程
   cli/                   cli/                 vela-plugin 命令行手册、发版流程
   templates/             templates/           插件开发指南、打包与发布、发版流程
-  ssh/                   ssh/                 宿主自研 SSH 库 VelaShell.Ssh 的架构、行为规格与上手
+  ssh/                   ssh/                 宿主的 SSH 库 VelaShell.Ssh 的架构、行为规格与上手
 ```
 
 中英两棵树同构:中文是原文,英文是翻译。**当前有 8 篇只有中文版**:

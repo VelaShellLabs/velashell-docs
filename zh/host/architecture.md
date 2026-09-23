@@ -12,7 +12,7 @@
 | `VelaShell` | 桌面入口、DI 组合根、XAML 视图、VelaDock 停靠、全局样式与行为 | 所有层 |
 | `VelaShell.Presentation` | 跨层 ViewModel、连接 / 隧道工作流服务 | Core、Terminal |
 | `VelaShell.Controls` | 复用控件、设计令牌、内置 Cascadia Mono 字体 | Core（仅共享 UI 契约） |
-| `VelaShell.Terminal` | 自研 VT 引擎、自绘渲染控件、X/Y/ZMODEM 路由 | Core |
+| `VelaShell.Terminal` | VT 引擎、自绘渲染控件、X/Y/ZMODEM 路由 | Core |
 | `VelaShell.Core` | 领域模型、服务契约、持久化抽象、协议引擎、本地化 | **谁都不依赖** |
 | `VelaShell.Infrastructure` | SSH / SFTP / FTP / 隧道实现、SonnetDB 持久化、代理、Gist 同步、插件管理与能力实现 | Core、Terminal（仅当适配器确实属于这里） |
 | `VelaShell.PluginHost` | 隔离插件的宿主进程 | **只依赖 SDK 契约** |
@@ -164,13 +164,13 @@ flowchart TD
 
 ### 端口转发隧道
 
-本地 `-L` / 远程 `-R` / 动态 SOCKS5 `-D`。**数据面是自研的** ——
+本地 `-L` / 远程 `-R` / 动态 SOCKS5 `-D`。**数据面由宿主自己搬运** ——
 Tmds.Ssh 把搬运做在库内部、不暴露任何计数，`TunnelInfo.BytesTransferred` 恒为 0 就是这个原因。
 
 | 方向 | 实现 |
 | --- | --- |
 | 本地 `-L` | 自建 `TcpListener` + `SshClient.OpenTcpConnectionAsync`（direct-tcpip，与库内部同构，无额外跳数） |
-| 动态 `-D` | 自建监听 + 自研 SOCKS5 服务端握手（`Socks5Negotiation`，RFC 1928，仅 CONNECT + 无认证） |
+| 动态 `-D` | 自建监听 + SOCKS5 服务端握手（`Socks5Negotiation`，RFC 1928，仅 CONNECT + 无认证） |
 | 远程 `-R` | 监听端只有库能开 → 转发到本机一个临时计量监听 → 宿主接力到真实目标（多一次环回拷贝换统计） |
 
 > ⚠️ 搬运保留**半关闭语义**（SSH 侧 `SshDataStream.WriteEof`，套接字侧 `Shutdown(Send)`）。
@@ -181,7 +181,7 @@ Tmds.Ssh 把搬运做在库内部、不暴露任何计数，`TunnelInfo.BytesTra
 
 ## 4. 终端内文件传输（ZMODEM / XMODEM / YMODEM）
 
-`rz`/`sz`、`rb`/`sb`、`rx`/`sx` 三套协议**全部自研**，跨三个工程分布，协议中立契约共享：
+`rz`/`sz`、`rb`/`sb`、`rx`/`sx` 三套协议**全部自己实现**，跨三个工程分布，协议中立契约共享：
 
 | 位置 | 内容 |
 | --- | --- |
@@ -205,7 +205,7 @@ Tmds.Ssh 把搬运做在库内部、不暴露任何计数，`TunnelInfo.BytesTra
 
 ## 5. 停靠与窗口壳
 
-### VelaDock（自研，零第三方依赖）
+### VelaDock（零第三方依赖）
 
 替换了 `Dock.Avalonia`，方案见 [dock-replacement-plan.md](dock-replacement-plan.md)。
 
@@ -321,7 +321,7 @@ flowchart TD
     Ctx --> Iso["<b>独立进程</b><br/>VelaShell.PluginHost"]
 
     InProc --> UI1["UI 直接并入停靠工作区"]
-    Iso --> RPC["自研命名管道 RPC<br/>心跳 · 自愈重启 · 空闲回收"]
+    Iso --> RPC["命名管道 RPC<br/>心跳 · 自愈重启 · 空闲回收"]
     RPC --> UI2["独立卡片窗口 / 嵌入宿主"]
 
     Ctx --> Caps["<b>能力面</b><br/>Sessions · Terminal · RemoteExec · RemoteFs<br/>RemoteTunnel · Protocols · Workspaces<br/>Storage · TimeSeries · Secrets<br/>Commands · Events · Ui · Clipboard · Log"]

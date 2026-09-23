@@ -9,7 +9,7 @@ English: [`../en/`](../en/)
 | [`sdk/`](sdk/) | 插件契约 SDK 参考与发版流程 |
 | [`cli/`](cli/) | `vela-plugin` 命令行手册与发版流程 |
 | [`templates/`](templates/) | 插件开发指南、打包与发布、模板包发版流程 |
-| [`ssh/`](ssh/) | 宿主自研 SSH 库 VelaShell.Ssh:架构与原理、行为规格 00–09、上手 |
+| [`ssh/`](ssh/) | 宿主的 SSH 库 VelaShell.Ssh:架构与原理、行为规格 00–09、上手 |
 
 ## 插件作者按这个顺序读
 
