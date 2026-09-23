@@ -2,7 +2,8 @@
 
 English: [`../../../en/xserver/design/architecture.md`](../../../en/xserver/design/architecture.md)
 
-> 状态:**M1(核心协议)与 M2(现代工具包)已完成**,2026-09-23 立项。宿主尚未接入 —— 目前宿主的「X Server」
+> 状态:**M1(核心协议)、M2(现代工具包)与「功能完备」一轮(XKB、XInput2 等十余个扩展、窗口管理器角色、全库性能复查)已完成**,
+> 2026-09-23 立项。宿主尚未接入 —— 目前宿主的「X Server」
 > 按钮拉起的是用户自己装的 VcXsrv(见 [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.2)。
 > M3 把本库接进宿主、替换那条路径之后,用户就不必再装任何东西。
 
@@ -23,7 +24,8 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 - 实现 X Window System Protocol 第 11 版的**核心协议**(全部 119 个核心请求),以及现代工具包
   实际依赖的扩展(见 §8 里程碑)。
 - **rootless 多窗口**:每个顶层 X 窗口对应一个宿主原生窗口;根窗口不画。窗口装饰、移动、缩放、
-  关闭由宿主(即扮演窗口管理器)负责。
+  关闭由宿主负责;窗口管理器在协议层该做的(EWMH / ICCCM 属性、解析客户端提示、接住客户端的 WM 请求)由服务端做,
+  再把请求转交宿主(§6)。
 - **可嵌入**:库不依赖任何 UI 框架、不依赖原生库。像素、窗口生命周期与输入经一个宿主接口(§6)交换。
 - **可测**:协议层全部走内存传输单测;另有 `[TestCategory("Interop")]` 用例让真实的 Xlib / XCB 客户端
   (Docker 里的 `xdpyinfo`、`xterm`、`xeyes`…)连进来。
@@ -32,7 +34,7 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 
 - 不做**真实显示设备**(DRM/KMS、帧缓冲设备)与硬件输入 —— 那是完整 X 服务端的事,我们只做嵌入式的那一半。
 - 不做 XDMCP、多屏幕(Screen > 1)、索引色 / 可写颜色表(只提供 24 位 TrueColor)。
-- M1–M2 不做 GLX / DRI3 / Present。
+- 不做 GLX / DRI3 / MIT-SHM。Present 只做软件拷贝(没有显存可翻页)。
 
 ## 3. 净室规程
 
@@ -41,7 +43,10 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 1. **实现依据只能是公开规范**:X.Org 发布的 *X Window System Protocol, X Version 11*(含附录 B 编码)、
    各扩展规范(*BIG-REQUESTS*、*XC-MISC*、*X Nonrectangular Window Shape Extension*、*X Fixes Extension*、
    *The X Resize and Rotate Extension*、*The X Rendering Extension*(及其引用的 PDF Reference 混合模式公式)、
-   *The X Keyboard Extension: Protocol Specification*、*MIT-SHM* 等)、ICCCM、EWMH 与 freedesktop.org 的 XSETTINGS 规范。
+   *The X Keyboard Extension: Protocol Specification*、*The X Input Extension*(1.5 与 2.2)、*XTEST Extension*、
+   *X Synchronization Extension*、*X Damage Extension*、*Composite Extension*、*Double Buffer Extension*、
+   *The Present Extension*、*MIT-SCREEN-SAVER*、*DPMS*、*X-Resource*、*Generic Event Extension*,以及 XINERAMA ——
+   它没有独立的规范文档,线格式依据 X.Org 发布的 panoramiXproto 协议定义)、ICCCM、EWMH 与 freedesktop.org 的 XSETTINGS 规范。
    **每个协议实现文件的头部写明它实现的是哪份规范的哪一节。**
 2. **写实现时不打开任何其它 X 服务端的源码**(X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv)。
 3. 规范里的常量(操作码、事件码、错误码、预定义原子、掩码位)按规范取值 —— 那是协议,不受版权保护,
@@ -53,34 +58,44 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 
 ```
 Protocol/     常量(操作码、事件码、错误码、掩码、预定义原子)、字节序感知的请求读取与回复 / 事件 / 错误写出
-Server/       X11Server:监听(TCP 6000+N)与 ServeAsync(任意双工流)、连接建立与授权(MIT-MAGIC-COOKIE-1 / 仅本机)、
-              单线程执行循环、客户端表与序号、GrabServer、BIG-REQUESTS 长度;请求处理按领域拆成 partial 文件
-              (Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input / Extensions,
-              以及各扩展:Shape / XFixes / RandR / Render,剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
+Server/       X11Server:监听(TCP 6000+N、Unix 套接字)与 ServeAsync(任意双工流)、连接建立与授权(MIT-MAGIC-COOKIE-1 / 仅本机)、
+              单线程执行循环、连接层背压、宿主回调的延后调用(DeferredHost)、客户端表与序号、GrabServer、BIG-REQUESTS 长度;
+              请求处理按领域拆成 partial 文件(Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input /
+              Extensions / Queries,以及各扩展:Shape / XFixes / RandR / Monitors / Render / Damage / CompositeDbe / Sync /
+              Present / Xkb / XInput / XTest / ScreenSaver,窗口管理器角色 Ewmh、剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
 Windowing/    窗口模型(树、几何、属性、事件选择、被动抓取、顶层缓冲、SHAPE 的三种形状)
 Resources/    GC、像素图、颜色表、光标、字体句柄、颜色名表、RENDER 的 picture 与字形集
 Drawing/      32 位软件帧缓冲、区域(Region)、光栅化:16 种光栅操作、平面掩码、填充样式、裁剪;
               点 / 线(细线 Bresenham + 宽线多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字;
               RENDER:像素格式、合成运算与混合模式、取样源(图像 / 纯色 / 渐变,repeat、变换、过滤)、梯形覆盖率
 Fonts/        BDF 解析、内置 misc-fixed 字体、XLFD 名称匹配、合成的 cursor 与 nil2 字体
-Input/        键码 ↔ 键值表(evdev 风格键码)、修饰键映射、抓取的数据结构
-Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOptions、XKeycodes
+Input/        键码 ↔ 键值表(evdev 风格键码)、XKB 的 evdev 键名、修饰键映射、抓取的数据结构(核心与 XI2)
+Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOptions、XMonitor、窗口管理器请求与枚举、XKeycodes
 ```
 
-Unix 套接字监听(`/tmp/.X11-unix/XN`)与宿主字体提供者接口都还没有 —— 前者在 Linux / macOS 接入时再加
-(`ServeAsync` 已经能接任何流),后者等 M3 需要更大字号时再加。
+Unix 套接字:Windows 以外默认监听 `/tmp/.X11-unix/X{N}`,Linux 另在抽象命名空间里监听同名套接字(Xlib / XCB 对 `:N` 先试它);
+`XServerOptions.UnixSocketPath` 可指定或关掉,`ListenTcp` 可关掉 TCP。宿主字体提供者接口还没有,等 M3 需要更大字号时再加。
 
 ## 5. 线程模型
 
 X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所有客户端的请求,一个请求的效果对之后的
 所有请求可见。所以:
 
-- **一个执行循环**(单线程,`Channel<工作项>`)执行全部请求、宿主输入与定时器。不加锁 ——
-  所有可变状态只在这个线程上被碰。
-- 每个连接一个**读取任务**:按长度字段切出完整请求,交给执行循环;一个**写出任务**:把执行循环
-  放进该连接输出队列的字节写到套接字。执行循环从不在套接字上阻塞,慢客户端拖不住别人。
+- **一个执行循环**(单线程,`Channel<工作项>`)执行全部请求、宿主输入与定时器。协议状态不加锁 ——
+  所有可变状态只在这个线程上被碰。唯一跨线程的是顶层像素,由 `PixelLock` 保护:执行循环每次持锁按 **4 毫秒**
+  的时间预算跑一批,然后放锁让宿主拷像素。
+- **宿主回调不在持锁时调**:执行循环里产生的通知(映射、几何、损伤、光标、WM 请求……)先攒进 `DeferredHost`,
+  放锁之后按原顺序调用 —— 宿主在回调里同步等 UI 线程、UI 线程又在 `CopyPixels` 里等锁,这种死锁因此不会出现;
+  宿主回调抛异常也不会拖垮执行循环。
+- 每个连接一个**读取任务**(64 KB 缓冲):按长度字段切出完整请求,交给执行循环;一个**写出任务**:把执行循环
+  放进该连接输出队列的消息拼进一块池化缓冲再写。执行循环从不在套接字上阻塞,慢客户端拖不住别人。
+- **背压**:每个客户端已读进来、未执行的请求最多 1024 条(读取任务在 `SemaphoreSlim` 上异步等);排队待写的字节超过
+  64 MB(客户端不读了)就断开它。断开是真断开 —— `XClient.Abort` 取消连接上挂着的读与写。
+- **需要等的都异步等**:XTEST 与 Present 的延迟、SYNC 的计时器用 `Task.Delay`,到点后 `Post` 回执行循环;
+  SYNC 的 Await 把该客户端后续请求暂存,条件成立时按原顺序放回。
 - **GrabServer** 期间,执行循环只执行持有者的请求,其余客户端的请求原样暂存,Ungrab 后按原顺序放回。
-- 损伤区域在一批工作项执行完后合并,一次性通知宿主(不是每个绘图请求一次)。
+- 损伤区域在一批工作项执行完后合并,一次性通知宿主(不是每个绘图请求一次);每个顶层一批最多累计 8 块矩形,
+  超出时合成外接矩形 —— 精确并集在一批几百条请求时退化成 O(n²)。
 
 ## 6. 宿主接口(rootless)
 
@@ -88,8 +103,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 | 方向 | 内容 |
 | --- | --- |
-| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);损伤矩形(随后宿主从该窗口的像素缓冲拷贝);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
-| 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5);按键(X 键码);焦点进出;系统剪贴板有了新文本(`SetClipboardText`) |
+| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);窗口管理器提示(`WindowType`、`States`、`Decorated` —— 自绘标题栏的窗口为 false、最小 / 最大尺寸与步长、图标、`Urgent`、`AcceptsFocus`、`Opacity`、`ClientFrameExtents`、进程号 / 机器名 / 角色、`HasAlpha`);客户端的窗口管理器请求(`WindowManagerRequest`:移动 / 缩放拖拽、改状态、激活、关闭、最小化 —— 接口的默认实现方法,老宿主不必改);损伤矩形(随后宿主从该窗口的像素缓冲拷贝);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
+| 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5,6 以上是水平滚轮与侧键);按键(X 键码);焦点进出;系统剪贴板有了新文本(`SetClipboardText`);窗口状态与外框尺寸(`SetTopLevelStates` / `SetFrameExtents`,写回 `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`);显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS 与 RESOURCE_MANAGER)、键盘布局(`SetKeyboardMapping`,发 MappingNotify 与 XKB 通知) |
 
 剪贴板互通由 `XServerOptions.SyncClipboard`(CLIPBOARD,默认开)与 `SyncPrimary`(PRIMARY,默认关)控制。
 
@@ -111,12 +126,26 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **字体**:核心字体来自内置 BDF(`fixed` / `6x13` / `9x15` / `10x20` 等及其 XLFD 名);以后宿主可以经字体提供者
   接口追加(比如把 Cascadia Mono 栅格化成位图字体)。`cursor` 字体是虚拟的:只有度量,光标形状按字形号
   交给宿主映射成系统光标。现代工具包不用核心字体(走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
-- **RENDER 按浮点逐像素合成**:预乘 alpha,每通道 0–1,加两条快路径(纯色 Src / 不透明 Over 整块填;Over / Add
-  下全透明的源像素跳过)。梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率。正确性优先,真成瓶颈再按格式特化。
+- **RENDER 通用路径按浮点逐像素合成,占绝大多数的两种情形走整数内核**:预乘 alpha,通用路径每通道 0–1;
+  纯色源 + 单字节遮罩 + Over(Xft 画字、cairo 的抗锯齿图形)与 8888 图像 Src / Over(贴图、窗口间拷贝)
+  写成 8 位整数运算。只有 alpha 的字形按每像素一字节存;一个 CompositeGlyphs 请求只算一次目标、只记一次损伤。
+  梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率,只算目标上可写的那一块。
   源 picture 的裁剪、alpha-map、poly-edge / poly-mode / dither 接受但不生效。
-- **RANDR 只读**:一台覆盖整个根窗口的虚拟显示器。rootless 模式下窗口摆在哪由宿主决定,客户端问显示器只为取尺寸与 DPI。
-- **服务端兼任 XSETTINGS 管理器**:占有 `_XSETTINGS_S0`、发布 `Xft/DPI` 等几项。真实桌面总有一个设置守护进程,
+- **RANDR 对客户端只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`XServerOptions.Monitors` 或运行中的
+  `SetScreenLayout`),布局变了按 SelectInput 发变更事件;XINERAMA 报同一份布局。客户端改配置的请求回 Failed 或 BadAccess ——
+  rootless 模式下窗口摆在哪、显示器怎么排由宿主决定。
+- **服务端兼任 XSETTINGS 管理器**:占有 `_XSETTINGS_S0`、发布 `Xft/DPI`、`Gdk/WindowScalingFactor` 等几项,
+  并在根窗口发布 RESOURCE_MANAGER(`Xft.dpi`,Xft 与 Qt 从这里读)。真实桌面总有一个设置守护进程,
   GTK / Qt 启动时会去找;真正的守护进程来抢这个选区时照常让出。
+- **服务端兼任窗口管理器的协议那一半**:维护 `_NET_SUPPORTED`、`_NET_SUPPORTING_WM_CHECK`、`_NET_CLIENT_LIST`、
+  `_NET_ACTIVE_WINDOW`、工作区与顶层的 `WM_STATE` / `_NET_FRAME_EXTENTS` 等;根窗口 ClientMessage 里的请求翻成
+  `XWindowManagerRequest` 交给宿主,由宿主决定照不照办、办完用 `SetTopLevelStates` 写回。
+  GTK3 的 HeaderBar、Qt 的无边框窗口都依赖这些属性存在。
+- **XKB 由核心键位表推出**:不单独维护一份 XKB 键位表,四个规范类型、修饰键动作、SymInterpret、指示灯、键名都从
+  核心表算出来;核心表一变(xmodmap、宿主 `SetKeyboardMapping`),XKB 跟着变并发 MapNotify。
+  XKB 自己的改表请求(SetMap / SetCompatMap 等)不支持。
+- **XInput2 的设备拓扑固定**:主指针 2 / 主键盘 3 各挂一个从设备(4、5)。XI2 事件与核心事件走同一条传播路径,
+  同一个窗口上选了核心的收核心、选了 XI2 的收 XI2;XIChangeHierarchy 回 BadImplementation。
 - **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD 并按 ICCCM 回应;X → 宿主时服务端以一个隐藏的 InputOnly 窗口为
   请求方取回(UTF8_STRING → STRING 退路,支持 INCR)。宿主把刚收到的文本写回来时不抢选区,避免与客户端来回争抢。
 
@@ -126,8 +155,9 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | --- | --- | --- |
 | **M1 核心协议** ✅ | 全部核心请求;BIG-REQUESTS、XC-MISC;窗口 / 事件 / 属性 / 选区;软件绘图;内置字体;键盘映射;无头测试宿主 | Docker 里 `xdpyinfo`、`xterm`、`xeyes`、`xclock`、`xlogo` 连上、画出内容、零协议错误(已达成,见 §10) |
 | **M2 现代工具包** ✅ | SHAPE、XFIXES、RANDR(只读)、RENDER;剪贴板与宿主互通;XSETTINGS 管理器 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、`qt5ct` 画出内容、零协议错误 —— 已达成,见 §10) |
-| **M3 接入宿主** | Avalonia 宿主(原生窗口、输入、HiDPI);替换 VcXsrv 路径;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序 |
-| M4 | XKB 与 XInput2(原计划在 M2,见 §10)、MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取 | 视需求 |
+| **功能完备** ✅ | XKEYBOARD、XInputExtension 2.2、XTEST、XINERAMA、SYNC、DAMAGE、Composite、DOUBLE-BUFFER、Present、MIT-SCREEN-SAVER、DPMS、X-Resource、Generic Event;窗口管理器角色;Unix 套接字;运行中换布局 / DPI / 键盘布局;全库性能复查 | xkbcomp、xinput、xdotool、xprintidle、xrestop 读写正确;gedit(GTK3)与 qt5ct(Qt5)走 XKB 与 XI2 零协议错误(已达成,见 §10) |
+| **M3 接入宿主** | Avalonia 宿主(原生窗口、输入、HiDPI、窗口管理器请求);替换 VcXsrv 路径;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序 |
+| M4 | MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
 
 ## 9. 测试策略
 
@@ -156,14 +186,34 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **扩展的编号**:主操作码按实现顺序从 128 起分配 —— BIG-REQUESTS 128、XC-MISC 129、SHAPE 130、XFIXES 131、RANDR 132、
   RENDER 133;事件码 SHAPE 64、XFIXES 65–66、RANDR 67–68;错误码 XFIXES 128、RANDR 129–132、RENDER 133–137。
   客户端一律经 `QueryExtension` 取号,这些值只是本实现的分配。服务端自己的资源(RANDR 的 CRTC / 输出 / 模式、RENDER 的格式、
-  选区用的隐藏窗口)取 `0x40`–`0x56`,落在任何客户端的 resource-base 之外。
+  选区用的隐藏窗口)取 `0x40` 起的一段,落在任何客户端的 resource-base 之外。
 - **XKB 与 XInput2 移出 M2**:实测 Qt5 没有 XKB 时退回核心协议的键位表(只打一行 `XKeyboard extension not present`),
   GTK3 没有 XInput2 时用核心指针事件,键盘与点击都正常。两者都**不能只做一半** —— 扩展一出现在 `QueryExtension` 里,
   客户端就改走它的代码路径;XKB 的 `GetMap` / `GetNames` / `GetCompatMap` 任何一个回复不对,xkbcommon-x11 建键位表失败,
   键盘反而更糟。要做就一次做到 `xkb_x11_keymap_new_from_device` 能成功。Qt6 按其源码同样保留了核心键位表的退路,但还没实测。
 - **XSETTINGS 由服务端提供**:GTK / Qt 启动时找 `_XSETTINGS_S0` 的属主,找不到会各踩一次 BadWindow / BadAtom。
-  服务端占有它、只发布字体渲染相关的几项;HiDPI 的 `Gdk/WindowScalingFactor` 等 M3 接入宿主时再加。
+  服务端占有它、只发布字体渲染相关的几项;HiDPI 的 `Gdk/WindowScalingFactor` 后来随「功能完备」一轮加上(见下)。
 - **诊断日志带请求轨迹**:`XServerOptions.Log` 打印协议错误时附上该客户端最近 8 条请求的操作码 —— 上面那两个错误就是这样定位的。
 - **M2 验收(2026-09-23)**:单元测试 73 条;interop 用例 8 条(新增 `xclock -render`、`xeyes -render`、Xft 字体的 `xterm`),
   全部零协议错误;手动验证 `zenity`(GTK3)、`gedit`(GTK3,键盘注入打字)、`qt5ct`(Qt5)零协议错误,
   `xclip` 双向互通(含 12 MB 文本),`xrandr` 读得到配置。
+- **功能完备一轮的扩展编号**(接着 M2):GE 134、XTEST 135、XINERAMA 136、MIT-SCREEN-SAVER 137(事件 69)、DPMS 138、
+  X-Resource 139、SYNC 140(事件 70–71,错误 138–140)、DAMAGE 141(事件 72,错误 141)、Composite 142、DOUBLE-BUFFER 143
+  (错误 142)、Present 144(事件走 GE)、XInputExtension 145(事件 74 起,错误 144–148)、XKEYBOARD 146(事件 73,错误 143)。
+  服务端自己的资源另加 SYNC 的 SERVERTIME / IDLETIME 计数器、Composite 的叠加窗口,选区窗口兼作 `_NET_SUPPORTING_WM_CHECK`。
+- **XKB 与 XInput2 最终一次做全**:按上面「不能只做一半」的判断,XKB 做到 xkbcommon-x11 建表成功(`xkbcomp` 导出 436 行自洽的键位表)
+  才打开;XI2 做到 GTK3 的 gedit 在 XI2 下打字、点开菜单。调试中真实客户端暴露的:GetGeometry(found = False)
+  多回了数据(xkbcomp 报 Extra reply data)、缺 SymInterpret(compatibility map not defined)、缺 `_XKB_RULES_NAMES`(setxkbmap)、
+  初始焦点应为 PointerRoot(xdotool 打不进字)。
+- **窗口管理器请求经接口的默认实现方法交给宿主**:`IXServerHost.WindowManagerRequest` 有空的默认实现,已有的宿主实现不必改;
+  `_NET_MOVERESIZE_WINDOW` 与 `_NET_REQUEST_FRAME_EXTENTS` 这种不需要宿主拿主意的由服务端直接办。
+- **宿主回调延后到放锁之后**:原来在持锁的执行循环里直接调宿主。宿主若在回调里同步等 UI 线程、而 UI 线程正在
+  `CopyPixels` 里等 `PixelLock`,两边互等。改为 `DeferredHost` 攒着、放锁后调。
+- **全库性能复查(2026-09-23)**:进程内吞吐基准 `scripts/xserver/bench/bench.cs`。主要改动 —— 损伤有界累计(原先的精确并集是
+  所有绘图的头号开销)、可见区域按代号缓存、RENDER 整数内核与字节字形、I/O 缓冲与池化、请求入队不分配闭包、多边形活动边表
+  (一个 65535 大小的弧原先能把执行线程占住几十秒)。本机前后:填充 2,748 → 205,000 次/秒,PutImage 671 → 7,800,
+  Xft 字形(每请求 10 个)865 → 45,000,ARGB 合成 591 → 26,000,指针移动 51 万 → 103 万,往返 3.4 万 → 8.7 万
+  (复查后的数字是预热过的稳态;同一份代码冷热相差约 1.4 倍)。
+- **功能完备验收(2026-09-23)**:单元测试 121 条;interop 8 条零协议错误;手动验证 `xdpyinfo -ext all`、xdotool 经 XTEST + XKB
+  往 xterm 打字、xprintidle、xrestop、xkbcomp、`xinput list / list-props / query-state / test-xi2`、gedit(GTK3,XI2 + EWMH;
+  双击 HeaderBar 发出最大化请求、照办后铺满)、qt5ct(Qt5,XI2)。
