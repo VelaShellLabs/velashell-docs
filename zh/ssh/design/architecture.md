@@ -81,7 +81,7 @@ Tmds.Ssh 是 **MIT**。MIT 允许 fork、修改、闭源、再分发、商业销
 | 1 | **规范优先，源码不作依据** | 实现依据只能是 RFC 4250–4254 / 4256 / 4419 / 5656 / 8308 / 8332 / 8709、OpenSSH 仓库的 `PROTOCOL*` 文件、draft-ietf-sshm-*。**每个协议实现文件头写明它实现的是哪份文档的哪一节**，做不到就说明当时抄的是别人的代码 |
 | 2 | **两阶段隔离** | 分析阶段产出的是**行为规格**（纯自然语言 + 报文时序表，零代码片段）；实现阶段只看规格与 RFC。用 AI 辅助时这一条尤其可操作：分析会话与实现会话**不共享上下文** |
 | 3 | **标识符体系整体另起** | 不复用它的类名 / 方法名 / 字段名 / 枚举成员名的**组合**。§6.1 给了对照表。注意是「组合」——`SshClient` 这种通名撞上无所谓，一整套撞就是证据 |
-| 4 | **架构真的不同，不是改名** | §4–§5 给的是**另一套内部模型**（Pipelines 替自建 Sequence、状态机替信号量握手、统一账本替三套 pending、IDuplexPipe 替双 buffer 读）。这一条是前几条的地基：**只要内部模型真的不同，相似度扫描自然就过** |
+| 4 | **架构真的不同，不是改名** | §4–§5 给的是**另一套内部模型**（Pipelines 替 Tmds 手写的 Sequence、状态机替信号量握手、统一账本替三套 pending、IDuplexPipe 替双 buffer 读）。这一条是前几条的地基：**只要内部模型真的不同，相似度扫描自然就过** |
 | 5 | **测试向量只取公开来源** | RFC 测试向量、NIST CAVP、OpenSSH regress 的用例**思路**。**不复制它的测试文件**，一个都不 |
 | 6 | **CI 相似度门禁** | 见 §2.4 |
 | 7 | **NOTICE 如实写** | 见 §2.5 |
@@ -291,7 +291,7 @@ ValueTask<Stream> DialAsync(SshDialTarget target, CancellationToken ct)
 
 ### 5.2 L2 帧层 —— 交给 `System.IO.Pipelines`
 
-**不同点：Tmds 自建了 `Sequence` + `Sequence.Segment` + `SequencePool`
+**不同点：Tmds 自己写了 `Sequence` + `Sequence.Segment` + `SequencePool`
 （250 + 100 + 60 行），本质上是重新实现了 Pipelines 的一半**，
 外加一个 `Packet` struct 用 `Move()` / `Clone()` 手工管理所有权。
 
@@ -427,7 +427,7 @@ Tmds 的 `DefaultWindowSize` 固定 2 MB，窗口在消费到一半时补满（�
 **不同点：Tmds 有三套各写一遍的 pending 机制** ——
 global request 用 `Queue<(TaskCompletionSource, bool)>`（FIFO，靠顺序对齐，没有 id）、
 channel request 用 success/failure 两个消息、
-SFTP 用 `ConcurrentDictionary<int, PendingOperation>` + 自建的 `IValueTaskSource` 池。
+SFTP 用 `ConcurrentDictionary<int, PendingOperation>` + 手写的 `IValueTaskSource` 池。
 三处的取消语义、超时语义、连接断开时的收尾各写各的。
 
 我们做一个：池化的 `IValueTaskSource<TResult>` + 一张 id 表 + 一条统一的

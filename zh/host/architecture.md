@@ -169,8 +169,8 @@ Tmds.Ssh 把搬运做在库内部、不暴露任何计数，`TunnelInfo.BytesTra
 
 | 方向 | 实现 |
 | --- | --- |
-| 本地 `-L` | 自建 `TcpListener` + `SshClient.OpenTcpConnectionAsync`（direct-tcpip，与库内部同构，无额外跳数） |
-| 动态 `-D` | 自建监听 + SOCKS5 服务端握手（`Socks5Negotiation`，RFC 1928，仅 CONNECT + 无认证） |
+| 本地 `-L` | 自己开 `TcpListener` + `SshClient.OpenTcpConnectionAsync`（direct-tcpip，与库内部同构，无额外跳数） |
+| 动态 `-D` | 自己监听 + SOCKS5 服务端握手（`Socks5Negotiation`，RFC 1928，仅 CONNECT + 无认证） |
 | 远程 `-R` | 监听端只有库能开 → 转发到本机一个临时计量监听 → 宿主接力到真实目标（多一次环回拷贝换统计） |
 
 > ⚠️ 搬运保留**半关闭语义**（SSH 侧 `SshDataStream.WriteEof`，套接字侧 `Shutdown(Send)`）。

@@ -270,7 +270,7 @@ come free from MSBuild's own incremental-clean machinery. One sweep is added on 
 directories with no `plugin.json` (equivalent to empty as far as the host is concerned) so that
 `ls plugins` never shows a plugin name that should have disappeared.
 
-Only this target's copies are registered: the self-built plugin (`velashell-ai`) is laid into the
+Only this target's copies are registered: this repository's plugin (`velashell-ai`) is laid into the
 same `plugins/` by its own project and is not on this ledger, so it can never be pruned by mistake —
 verified by test.
 
