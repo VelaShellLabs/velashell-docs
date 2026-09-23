@@ -11,6 +11,7 @@
 > **2026-09-23 update**: this library has been merged into the host repository (`src/VelaShell.Ssh`, tests in `tests/VelaShell.Ssh.Tests`,
 > engineering scripts in `scripts/ssh/`) and is no longer published as a separate NuGet package. The passages below about a standalone repository, a NuGet package and packaging smoke tests
 > are the decision record of the time and are kept as they were; the paths in the text have been changed to their new locations in the host repository.
+> The CI similarity gate formerly described in §2.4 was removed at the same time, and the related passages have been deleted.
 
 ---
 
@@ -75,17 +76,16 @@ Tmds.Ssh is **MIT**. MIT permits forking, modifying, closing the source, redistr
 So the goal is not "legal"; it is **provable independence**: anyone who runs a diff / similarity scan over the two codebases
 should conclude "these are two different implementations".
 
-### 2.2 Clean-room procedure (seven rules, executable and auditable)
+### 2.2 Clean-room procedure (six rules, executable and auditable)
 
 | # | Discipline | How |
 | :-: | --- | --- |
 | 1 | **Specifications first; source code is not a basis** | The only permitted bases for implementation are RFC 4250–4254 / 4256 / 4419 / 5656 / 8308 / 8332 / 8709, the `PROTOCOL*` files in the OpenSSH repository, and draft-ietf-sshm-*. **Every protocol implementation file states in its header which section of which document it implements**; if you cannot, it means you copied someone else's code |
 | 2 | **Two-phase isolation** | The analysis phase produces **behaviour specifications** (pure natural language + message sequence tables, zero code snippets); the implementation phase looks only at the specs and RFCs. With AI assistance this rule is especially practical: analysis sessions and implementation sessions **do not share context** |
 | 3 | **An entirely separate identifier scheme** | Do not reuse the **combination** of its class names / method names / field names / enum member names. §6.1 gives a mapping table. Note the word "combination" — colliding on a generic name like `SshClient` is fine; colliding on a whole set is evidence |
-| 4 | **A genuinely different architecture, not a rename** | §4–§5 give **a different internal model** (Pipelines instead of Tmds's own Sequence type, a state machine instead of semaphore handshakes, a unified ledger instead of three pending mechanisms, IDuplexPipe instead of dual-buffer reads). This rule is the foundation of the others: **as long as the internal model really is different, similarity scans pass naturally** |
+| 4 | **A genuinely different architecture, not a rename** | §4–§5 give **a different internal model** (Pipelines instead of Tmds's own Sequence type, a state machine instead of semaphore handshakes, a unified ledger instead of three pending mechanisms, IDuplexPipe instead of dual-buffer reads). This rule is the foundation of the others: **as long as the internal model really is different, the two codebases naturally won't look alike** |
 | 5 | **Test vectors only from public sources** | RFC test vectors, NIST CAVP, the **ideas** behind OpenSSH regress cases. **Do not copy its test files** — not a single one |
-| 6 | **CI similarity gate** | See §2.4 |
-| 7 | **An honest NOTICE** | See §2.5 |
+| 6 | **An honest NOTICE** | See §2.4 |
 
 ### 2.3 What does **not** count as plagiarism (don't overreact)
 
@@ -101,59 +101,7 @@ protected by merger doctrine / scènes à faire (expression is not copyrightable
 
 **Do not change these to "look different"** — changing them breaks protocol compatibility, and that would be the real disaster.
 
-### 2.4 CI similarity gate (the most convincing rule)
-
-Add a CI job: pull down the Tmds.Ssh source (only into a CI temp directory, **never into the repository**),
-and run **token-level n-gram fingerprinting** against our `src/` (a winnowing / MOSS-style algorithm,
-or simply `jscpd` / `simian` in token mode):
-
-```
-Threshold: longest common token sequence for any single file pair ≤ 40 tokens
-           repository-wide token-level similarity ≤ 1% (protocol constant tables and algorithm name lists allowlisted)
-Over threshold → build goes red and the matching fragments are printed
-```
-
-The value of this gate is not just catching mistakes: **it is evidence you can hand directly to the other party**.
-When someone raises doubts, the answer is not "we didn't copy" but "every commit is compared automatically; here is the threshold, here is the history".
-
-**Current measurement (2026-09-21, corpus = Tmds.Ssh 197 .cs + SSH.NET 330 .cs,
-502 files / 262,929 tokens in total)**:
-
-```
-Coverage          0.16%   (threshold 1.00%)
-Files over limit  0       (per-file longest common run threshold: 40 tokens)
-Self-check        99.81% coverage, 174 files over limit, exit code 1   ← corpus compared against itself
-Noise floor       2.41%                                                ← SSH.NET vs. Tmds.Ssh
-```
-
-**The "noise floor" row is the weightiest number in this whole section.** It answers a question that otherwise could only be argued verbally:
-*how similar would two genuinely unrelated SSH implementations be anyway?* SSH.NET and Tmds.Ssh share no lineage,
-yet merely "both translating the same set of RFCs literally" makes them overlap **2.41%**. We score **0.16%** against the same corpus —
-**an order of magnitude below the noise floor between two unrelated implementations.**
-
-After calibration the threshold was tightened from 3% to 1%. Not because "stricter is better": 3% sits just above the noise floor,
-and all it says is "we are no more similar than two strangers' implementations", which conveys almost nothing;
-1% sits **below** the noise floor and is an early-warning line that watches **ourselves** —
-we are at 0.16% now, more than 6× headroom; if it really climbs to 1%, something has changed.
-
-**The self-check row is the precondition for any of these numbers meaning anything.** A detector that always reports 0% is
-the same as no detector — I tripped over this myself: the local `.corpus/` was empty (it is not checked in),
-it produced a lovely `0.00%`, and that was merely the result of "comparing against 0 files".
-Now both CI and local runs do the self-check first: **compare the corpus, treated as "our code", against itself — this step must go red**;
-if it doesn't, the gate is already broken and the real comparison that follows isn't worth reading.
-
-All three kinds of false positives were solved by **improving the detector**, not by raising the threshold:
-
-| Hit | Why it isn't plagiarism | How it is handled |
-| --- | --- | --- |
-| The four SFTP code tables (110 tokens) | Names and values prescribed by `draft-ietf-secsh-filexfer-02` | Split out into `SftpProtocolCodes.cs` and put on the allowlist; **the remaining constants stay in their original file and remain monitored** |
-| Forwarding boilerplate in `Stream` subclasses (82 tokens) | Signatures are fixed by the base class; the method bodies can only be written one way | Goes into `boilerplate.cs.txt` — which removes **those specific k-grams**, not the whole file |
-| Algorithm name strings | Literals from RFC 4253 / OpenSSH PROTOCOL | Same as above |
-
-The distinction matters: **the allowlist exempts a whole file** (so it is only for pure code tables, split down to the minimum);
-**boilerplate removes only specific fragments** (a real problem elsewhere in the same file is still reported).
-
-### 2.5 How to write the NOTICE
+### 2.4 How to write the NOTICE
 
 Honesty is far safer than concealment. Put a `NOTICE.md` at the repository root:
 
@@ -815,8 +763,7 @@ and lets us use the .NET 11 BCL directly: `AesGcm`, `ChaCha20Poly1305`, ML-KEM, 
 | --- | --- |
 | Repository skeleton (MIT / NOTICE / net11.0 single target / LangVersion=preview / central package management) | ✅ |
 | **9 behavioral specs** (`spec/00`–`08`) | ✅ awaiting review |
-| CI (build & test · public-surface gate · similarity gate · packaging smoke test · interop) | ✅ written, not yet run on a real runner. interop was a placeholder at the time; it is now wired to real containers (§11.2.9) |
-| **Similarity gate** + self-check | ✅ self-check measured: against a copied control it reports 99.81% coverage, 175/197 files over the limit, exit code 1 |
+| CI (build & test · public-surface gate · packaging smoke test · interop) | ✅ written, not yet run on a real runner. interop was a placeholder at the time; it is now wired to real containers (§11.2.9) |
 | Public-surface gate + `scripts/ssh/Update-PublicApi.ps1` | ✅ |
 | Skeleton code: wire primitives, send gate, failure classification, dialing abstraction | ✅ **72 cases all green** |
 | **In-memory transport** (`InMemoryTransport` + `ISshTransportDialer`) | ✅ including half-close, backpressure, cancellation |
@@ -824,15 +771,10 @@ and lets us use the .NET 11 BCL directly: `AesGcm`, `ChaCha20Poly1305`, ML-KEM, 
 | Link characteristics simulation (one-way latency / bandwidth / packet loss) | ⏳ the adaptive window and SFTP pipeline depth can only really be tested with it |
 | Dependency footprint | ✅ **zero runtime dependencies** (`Microsoft.Extensions.Logging.Abstractions` ships with the framework on net11) |
 
-**Two deviations from the original plan, both recorded:**
+**One deviation from the original plan, recorded:**
 
 1. **Consolidated into two projects** (library + tests), layered internally by folders — the original plan was two packages, Core + main.
    Rationale in §4.
-2. **The similarity gate now has a measured baseline**: overlap with Tmds.Ssh is **0.00%**, and still 0.00% after tightening the threshold from 40 tokens to 20 tokens.
-   Along the way it caught one 38-token false positive (non-seekable `Stream` boilerplate), which led to adding a snippet-level boilerplate exemption mechanism.
-   ⏳ Still missing: **cross-library noise-floor calibration** (the basis for `--max-ratio 3%`) (the dev machine can't reach github.com,
-   so a second reference implementation couldn't be pulled). Until calibration is done, what actually does the work is `--max-run` (longest common run per file),
-   a metric insensitive to the noise floor. Details in `scripts/ssh/similarity-gate/README.md`.
 
 ### 11.2.2 M1 progress (2026-09-21)
 
@@ -1529,47 +1471,11 @@ The code itself was rewritten against our own interfaces (`ISshCompressor` +
 `IBufferWriter`/`ReadOnlySequence`) — the upstream version is wrapped around their
 `IPacketEncryptor`/`IPacketDecryptor`, a completely different structure.
 
-#### How the gate verifies this change
-
-There is a **trap that has to be called out** here: the regular gate's corpus is Tmds.Ssh's
-**main branch**, and #513 hasn't been merged yet — **its files aren't in the corpus at all**.
-That means "ran the gate, it passed" **proves nothing** about this change.
-A detector that can't see its target is the same as no detector (§2.4 already fell into this once).
-
-So a temporary corpus was built from the PR's own 25 `.cs` files, and compared directly:
-
-```
-                                  Coverage   Longest common run (formal threshold 40)
-First implementation               0.44%    101 tokens  ← over the limit, gate rejects
-After rewriting Stream adapters    0.27%     36 tokens  ← passes
-```
-
-The 101 tokens in the first version were the tail of the `Stream` adapter
-(that string of `NotSupportedException`s for `Read`/`Flush`/`Seek`/`SetLength`).
-The content really was entirely forced by the BCL's shape — the evidence is that
-`LinkCharacteristics.cs` (39 tokens) and `InMemoryTransport.cs` (31 tokens)
-hit as well, **and those two files were written before I opened that PR**.
-
-But 101 identical consecutive tokens is exactly what the gate is meant to catch, and I **really had
-just finished reading that file when I wrote it**, so I couldn't honestly claim the member order
-was unaffected. So the fix wasn't to add an allowlist (that would just hide the signal), but to
-**rewrite it in our own style**: put the members that actually do work first, and route every
-rejecting member through one explanatory `NotAStream(member)` factory —
-which also fits architecture principle 3 (failures carry data) better; a bare
-`NotSupportedException` was never as good as spelling out "why this shouldn't be called here".
-
-After the rewrite, the longest common run in `SshCompressor.cs` is 36 tokens,
-**shorter than `LinkCharacteristics.cs` (39), which was written before reading the PR**.
-Coverage on the main corpus went from 0.17% down to **0.16%**.
-
 > Worth writing down: **clean-room discipline guards against "copying someone else's structure",
 > not against "knowing facts".**
 > That `Z_SYNC_FLUSH` doesn't reset the dictionary is a fact from RFC 1951; it's the same no matter
 > where you learned it. The difference is whether, once you know it, you write it yourself or copy
 > someone else's file over.
->
-> But for that statement to hold, **the detector must actually be able to see the thing you
-> referenced** — otherwise "the gate passed" is just self-reassurance.
 
 ### 11.2.11 Rekeying (2026-09-21)
 
@@ -2050,15 +1956,8 @@ What was taken from it are **behavioral facts**: the fields and timing of `x11-r
 the two byte orders, how to use `xauth generate`, and whether a failure should throw or degrade.
 
 The code was rewritten in our own structure (`IIncomingChannelHandler` + the existing
-`DuplexRelay` / `ChannelRelayEndpoint` relay layer).
-Building a temporary corpus from that PR's 20 `.cs` files and comparing directly:
-
-```
-coverage   0.00%    longest common run  < 15 tokens (still 0 files over the limit at 15)
-```
-
-Much cleaner than §11.2.10 (101 tokens in the first version, 36 after the rewrite) —
-that time we wrote by following it first and then pulled it apart; this time the spec was written first (`spec/07` §7.5) and then implemented.
+`DuplexRelay` / `ChannelRelayEndpoint` relay layer),
+and the spec was written first (`spec/07` §7.5) and then implemented.
 
 ### 11.2.15 That intermittent hang: the channel was registered too late (2026-09-22)
 
@@ -2455,7 +2354,7 @@ the proxy command's stderr, `ssh_config` mapping (jump chains, cycle detection, 
 | **Cryptographic implementation errors** | Principle 6: only assemble, don't build primitives; the only self-written one, ChaCha20, is pinned with RFC vectors; external audit before 1.0 |
 | **Schedule overrun** | Milestones are cut by capability, and every M is a usable state; VelaShell keeps using Tmds until M6, so we can stop at any time |
 | **Staffing** — 24 weeks of work | Understand it clearly before starting. **The cost of giving up halfway is a half-built SSH stack**, which is far worse than today's 1,200 lines of patches |
-| "Still looks similar" | The similarity gate from §2.4 is on from the very first commit of M0 — not added at the end, by which point it's too late |
+| "Still looks similar" | The clean-room procedure from §2.2 is followed from the very first commit of M0 — not added at the end, by which point it's too late |
 
 ### Explicitly not doing
 
