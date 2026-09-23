@@ -562,7 +562,39 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
     - **ssh-agent forwarding (`-A`)**: lets you ssh onward from this server with the keys in your local agent, without
       copying private keys to it. The muted text states the cost: while the session is open, root on that server can
       use your agent to sign — only enable it for servers you trust. It is requested only for the interactive shell of
-      the final hop (jump hosts open tunnels, not shells).
+      the final hop (jump hosts open tunnels, not shells). When it is on, two tightening options appear, indented:
+      - **Only forward the selected keys** (`SshSessionOptions.AgentForwardKeys`, stored as OpenSSH public key lines;
+        `null` = the whole agent is visible): when checked, a candidate list appears, one row per key with name, type,
+        `SHA256:` fingerprint and source. Candidates are merged and de-duplicated by fingerprint from three places: keys
+        currently in the local agent, public keys under `~/.ssh`, and keys already saved in this connection — the last
+        are listed and kept checked even if they are no longer found elsewhere, so opening and re-saving never silently
+        drops one. An empty list (agent not running, no `.pub` under `~/.ssh`) gets a warning line saying how to fix it.
+        Keys that are not selected are simply invisible to `ssh-add -l` on the server.
+        - **Checked with nothing selected cannot be saved** (error in the footer): that would be a connection that
+          never forwards while the user believes it does.
+        - **At run time, if none of the saved keys can be parsed, nothing is forwarded** and a warning line is written at
+          the top of the terminal — it never falls back to "whole agent visible" (the SSH library treats an empty
+          `AllowedKeys` as unrestricted, which would turn the strictest setting into the widest).
+      - **Ask before every signature** (`AgentForwardConfirm`): every time the server uses the agent to sign, a modal
+        confirmation dialog appears (see below).
+      - The muted line written once the shell is open includes both, e.g. "ssh-agent forwarding on · only 1 key(s) ·
+        every signature needs your approval".
+      - For SFTP connections, and when forwarding itself is off, neither option is saved.
+    - **Agent signature dialog** (`AgentSignPromptView`, same shell as the host key dialog): the warning banner says "A
+      remote session wants to sign with a key in your local ssh-agent", and the advice names the legitimate cause (you
+      are running ssh / git on that server) and when to deny (you did nothing of the sort). The info block lists the
+      **session** (`user@host:port`), key type, fingerprint and the agent comment (usually the private key path); a
+      footer line reads "If you do not answer within 60 seconds, the request is denied."
+      - Three buttons: **Deny** (outline) / **Allow for this session** (outline; this key is not asked about again until
+        the session closes) / **Allow once** (accent pill).
+      - **Deny is both the default and the cancel button, and has focus when the dialog opens**: the dialog can pop up
+        while the user is typing in the terminal, so a stray Enter or Esc can only land on Deny; no "allow" button is
+        ever the default.
+      - **Fail-closed**: no answer within 60 seconds, the channel closing, no main window or a dialog error all deny,
+        and a dialog that is still open is closed on the spot; an implementation that returns "allow" after the deadline
+        is still denied. The remote ssh sees "agent refused to sign".
+      - When several sessions ask at once the dialogs **queue and appear one at a time** instead of stacking modals —
+        otherwise you could not tell which dialog belongs to which session. The deadline keeps running while queued.
     - **X11 forwarding**: shows remote GUI windows on the local X server. **The host does not bundle an X server** (see
       “Won't do” in `feature-plan.md`); users bring VcXsrv / Xming / X410. Turning it on reveals two more fields:
       - **Local X display**: empty = the `DISPLAY` environment variable, else `localhost:0.0` (almost nobody sets
