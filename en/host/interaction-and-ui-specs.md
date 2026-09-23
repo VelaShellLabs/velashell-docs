@@ -485,7 +485,7 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
 - **Tabs (`connTabs`)**: built-in `SSH` / `SFTP` / `FTP` plus plugin-contributed tabs (`S3`, `Telnet`, …)
   declared in each plugin's `contributes.protocols` (drawn without loading the plugin assembly);
   `Serial` remains a disabled placeholder until its own plugin lands.
-- **Form body (`connBody`)**: name, Host, Port, username, authentication method (password / key / jump host), group, color/icon marker, and so on.
+- **Form body (`connBody`)**: name, Host, Port, username, authentication method (password / private key / certificate / SSH Agent), group, color/icon marker, and so on.
   - The form area **scrolls** (the scrollbar stays visible instead of auto-hiding); header, tabs, and footer are fixed-height rows outside the scroll.
     The window height is clamped to `min(768 design cap, screen working area − 48)` (`ApplyScreenBounds`; 768 matches the 948×768 settings window).
     The field count is protocol-dependent (a plugin protocol such as S3 declares a dozen), so without the clamp the dialog grows past the screen and the footer buttons become unreachable.
@@ -516,7 +516,7 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
     Every item except anti-idle means “empty / `-1` = follow the global setting”.
     - **Anti-idle and keep-alive do not guard the same thing; they complement each other and cannot substitute for one
       another**: keep-alive is the SSH **protocol-level** heartbeat (`KeepAliveSeconds` →
-      `SshClientSettings.KeepAliveInterval`) and guards against NAT and firewalls quietly reclaiming an idle TCP
+      `SshConnectionOptions.KeepAlive`) and guards against NAT and firewalls quietly reclaiming an idle TCP
       connection; anti-idle guards against the **server** dropping you for being idle (bash's `TMOUT`, a bastion host's
       session timeout), and those all count “has anyone typed into the tty” — a protocol heartbeat is invisible to them.
       With two “seconds” fields side by side, the hint text has to nail that distinction, or users will simply assume
@@ -544,6 +544,54 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       reconnect path shows up as “it starts kicking me again after a dropped connection”, and nobody connects that to
       reconnecting. Changing the profile takes effect on the **next connection**, the same as the keep-alive field next
       to it; a local terminal has no session profile, so not a single byte is ever sent there.
+  - **“SSH options” inside “Advanced options”** (`SessionProfile.Ssh` → `SshSessionOptions`): compression, ssh-agent
+    forwarding and X11 forwarding, **all off by default** (same as OpenSSH). Each has one line of muted text saying
+    *when* to turn it on — getting compression wrong only costs CPU, getting a forwarding wrong lends part of this
+    machine to the remote side. With all three off the whole object is stored as `null`, so old profiles need no
+    migration.
+    - **Visibility**: compression shows for both SSH and SFTP (they ride the same SSH connection); the two forwardings
+      hang off the interactive shell, so they **show for SSH only** and are saved as false on SFTP profiles — the same
+      reasoning as “Post-authentication command”.
+    - **Compression (high-latency / low-bandwidth links)**: recommended when latency is high (cross-border or
+      intercontinental links, round trips above ~100 ms) or bandwidth is scarce — terminal output and text files
+      shrink a lot. Not recommended on a LAN or when mostly moving already-compressed data (images, archives): it only
+      costs CPU. Negotiates `zlib@openssh.com` (compression starts after authentication) and **never offers** legacy
+      `zlib` (compresses before authentication — the door for CRIME-style attacks); `none` always stays in the list
+      after it, so a server with `Compression no` simply falls back to no compression instead of failing. Each hop of
+      a jump chain negotiates with its own profile.
+    - **ssh-agent forwarding (`-A`)**: lets you ssh onward from this server with the keys in your local agent, without
+      copying private keys to it. The muted text states the cost: while the session is open, root on that server can
+      use your agent to sign — only enable it for servers you trust. It is requested only for the interactive shell of
+      the final hop (jump hosts open tunnels, not shells).
+    - **X11 forwarding**: shows remote GUI windows on the local X server. **The host does not bundle an X server** (see
+      “Won't do” in `feature-plan.md`); users bring VcXsrv / Xming / X410. Turning it on reveals two more fields:
+      - **Local X display**: empty = the `DISPLAY` environment variable, else `localhost:0.0` (almost nobody sets
+        `DISPLAY` on Windows, and those X servers listen on TCP 6000 by default). The placeholder shows the value that
+        will actually be used.
+      - **Trusted (`-Y`)**, **checked by default**: untrusted mode needs a local `xauth` and an X server with the
+        SECURITY extension, and Windows usually has neither. The cost (remote X clients get full access to the local
+        display) is in the tooltip.
+      - Forwarding **lasts for the whole session** with no expiry — “new windows stop opening after half an hour” only
+        makes people think forwarding is broken.
+    - **A refusal does not take the session down**: `X11Forwarding no`, a missing xauth and `AllowAgentForwarding no`
+      are all common, and failing the whole session over an add-on would be backwards. On refusal the shell is reopened
+      without that item (with both requested, retries pin down which one was refused; the extra round trips only happen
+      on the failure path), and a **yellow** line at the top of the terminal says why; on success a **grey** line
+      (“X11 forwarding on → local display localhost:0.0”) in the same style as the jump-chain line. Both the first
+      connection and in-place reconnects write it.
+  - **Authentication method “SSH Agent”** (`AuthMethod.Agent`, last item in the dropdown — the enum is persisted by
+    ordinal, so new values can only be appended): signs with the keys in the local ssh-agent and **stores no
+    credentials** in the profile; selecting it collapses the password and key fields, leaving one muted line saying
+    where the agent comes from. On Windows that is the named pipe of the “OpenSSH Authentication Agent” service;
+    `SSH_AUTH_SOCK` is honored only when it is itself a `\\.\pipe\…` path (1Password and KeePassXC set it that way) and
+    ignored when it points at a Git Bash / WSL Unix socket — that is a different agent and cannot be reached.
+    - Every key in the agent is tried in turn (probe first, then sign, so the agent's confirmation prompt is never
+      triggered for a key the server would not accept anyway).
+    - If the agent is not running, the error comes within **3 seconds** (“Cannot reach the local ssh-agent”, with a
+      `Start-Service ssh-agent` hint) — a named-pipe connect without a timeout keeps waiting for the pipe to appear, and
+      all the user would see is a spinner until the whole connection times out. An agent with no keys gets its own
+      message (“load one first with ssh-add”) instead of a generic “authentication methods exhausted”.
+    - **The agent is only touched when this method is explicitly chosen**; no other method falls back to it implicitly.
   - **FTP-only item inside “Advanced options”: “Default remote path”** (`FtpSettings.InitialRemotePath`, shown only
     on the `FTP` tab). After connecting, the remote pane opens that directory instead of the login working directory —
     the upload target is the same `/var/www/html` or `/pub/incoming` year after year, while the login directory an FTP
