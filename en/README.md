@@ -9,6 +9,7 @@
 | [`sdk/`](sdk/) | Plugin contract SDK reference |
 | [`cli/`](cli/) | `vela-plugin` command-line manual |
 | [`templates/`](templates/) | Plugin dev guide, packaging and publishing |
+| [`ssh/`](ssh/) | VelaShell.Ssh, the host's in-house SSH library: architecture and rationale, behavioural specs 00–09, getting started |
 
 ## Read in this order to write a plugin
 

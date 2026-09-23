@@ -18,6 +18,7 @@ VelaShell 生态的**全部文档**集中在一个仓库:
 | [`zh/sdk/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/sdk) | 插件契约 SDK 参考、SDK 仓库的发版流程 |
 | [`zh/cli/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/cli) | `vela-plugin` 命令行手册、CLI 仓库的发版流程 |
 | [`zh/templates/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/templates) | 插件开发指南、打包与发布、模板仓库的发版流程 |
+| [`zh/ssh/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/ssh) | 宿主自研 SSH 库 VelaShell.Ssh:架构与原理(含净室论证)、行为规格 00–09、上手 |
 
 英文镜像在 [`en/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/en),与 `zh/` 同构。
 [仓库首页](https://github.com/VelaShellLabs/velashell-docs)有按「我想做什么」组织的快速入口表。
@@ -51,6 +52,7 @@ zh/            en/
   sdk/           sdk/         插件契约 SDK 参考、发版流程
   cli/           cli/         vela-plugin 手册、发版流程
   templates/     templates/   插件开发指南、打包与发布、发版流程
+  ssh/           ssh/         宿主自研 SSH 库 VelaShell.Ssh 的架构、行为规格与上手
 ```
 
 `zh/` 与 `en/` **同构**,文件一一对应。`release-process.md` 目前只有中文版,
