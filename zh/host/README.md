@@ -8,7 +8,7 @@ VelaShell 主程序自身的架构、设计规格与调研记录。English: [`..
 | --- | --- |
 | [architecture.md](architecture.md) | 分层架构、依赖方向与 SonnetDB 持久化策略 |
 | [架构设计.md](架构设计.md) | 工程化重构蓝图 |
-| [dock-replacement-plan.md](dock-replacement-plan.md) | VelaDock 自研替换 Dock.Avalonia 的方案 |
+| [dock-replacement-plan.md](dock-replacement-plan.md) | VelaDock 替换 Dock.Avalonia 的方案 |
 | [design-specs.md](design-specs.md) | UI 视觉规格(Pencil 逐帧提取) |
 | [交互与界面规格.md](交互与界面规格.md) | 交互逻辑与设计 Token |
 | [快捷键参考.md](快捷键参考.md) | 全部键盘快捷键与鼠标手势(与 `ShortcutCatalog` 同源,非手抄) |

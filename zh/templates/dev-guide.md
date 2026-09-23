@@ -1016,7 +1016,7 @@ public async Task Refresh_ListsContainers()
 | 每插件独立进程 + IPC(02/04/05) | **已实现**(`hostMode: "isolated"`,见 §6):命名管道 + 轻量 RPC + 心跳 + 崩溃退避自动重启 |
 | 权限系统 + Broker(06) | 未做:v1 面向第一方/自装插件,信任即安装 |
 | UI 贡献点 / VelaUI(08) | 已有:命令面板命令 + 完整 Avalonia 面板(inProcess 可停靠标签页;隔离进程一律独立卡片窗口)+ 插件管理页。VelaUI 声明式树按用户决策**不做**;跨进程 dock 嵌入弃用(见 08 注记);侧栏/状态栏挂载点待后续 |
-| `.vpx` 打包 / 签名 / 商店(03/10) | **打包与签名已实现**(专属容器 + ECDSA 签名,见 §12);**商店已有客户端**:`vela-plugin install/search/update/list/uninstall` 走 [market.easilynet.top](http://market.easilynet.top) 或自建源(见 [CLI 手册](../cli/cli.md#2-从插件商店安装))。**宿主内置的商店界面仍未做** |
+| `.vpx` 打包 / 签名 / 商店(03/10) | **打包与签名已实现**(专属容器 + ECDSA 签名,见 §12);**商店已有客户端**:`vela-plugin install/search/update/list/uninstall` 走 [market.easilynet.top](http://market.easilynet.top) 或自行部署的源(见 [CLI 手册](../cli/cli.md#2-从插件商店安装))。**宿主内置的商店界面仍未做** |
 | 激活事件 / 惰性激活(03) | **已实现**:`onStartup` / `onCommand:<id>` + `contributes.commands` 占位;其余事件类型(onSessionConnect/onFileOpen 等)待后续 |
 | 空闲回收(04) | **已实现**(隔离模式 + `idlePolicy: "recyclable"`) |
 | secrets / clipboard 能力域(07) | **已实现**(§5.10/§5.11;无权限系统,信任即安装口径) |

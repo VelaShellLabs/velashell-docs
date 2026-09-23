@@ -109,7 +109,7 @@ vela-plugin install <包.vpx>          # 从本地文件
 | --- | --- |
 | `--version <v>` | 指定版本,等价于 `<id>@<版本>` |
 | `--pre` | 允许预发布版。**默认只装正式版** —— 发了个 preview 不该让所有人跟着升 |
-| `--source <url>` | 换一个商店(自建的)。等价环境变量 `VELA_PLUGIN_MARKET`,**参数优先** |
+| `--source <url>` | 换一个商店(自行部署的)。等价环境变量 `VELA_PLUGIN_MARKET`,**参数优先** |
 | `--prefix <目录>` | 换安装根,默认 `~/.velashell/plugins` |
 | `--trust <指纹>` | 要求签名者指纹必须等于此值(`SHA256:…`,大小写不敏感) |
 | `--allow-unsigned` | 允许装未签名的包 |
@@ -174,7 +174,7 @@ vela-plugin search [关键词] [--page N] [--size N] [--source <url>]
 
 不给关键词就列第一页。
 
-> **自建商店**:`--source` 或 `VELA_PLUGIN_MARKET` 指到你自己那份即可,它需要提供三个只读接口 ——
+> **自行部署的商店**:`--source` 或 `VELA_PLUGIN_MARKET` 指到你自己那份即可,它需要提供三个只读接口 ——
 > `GET /api/plugins?q=&page=&size=`、`GET /api/plugins/{id}`、
 > `GET /api/plugins/{id}/versions/{version}/download`(返回 `{url, fileSha256, payloadSha256, packageSize}`)。
 >

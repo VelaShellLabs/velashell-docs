@@ -1,10 +1,10 @@
-# Dock.Avalonia Self-Developed Replacement Plan (VelaDock)
+# Dock.Avalonia Replacement Plan (VelaDock)
 
 > ✅ **Completed and merged** (2026-07, PR #3 `replacedock`). VelaDock now carries all docking/splitting
 > functionality on the main branch. All `Dock.Avalonia` packages and license entries have been removed. The following is the original replacement plan, retained as an implementation record and design reference.
 > The resulting architecture is documented in `docs/architecture.md` "Docking (VelaDock)" and `plan.md` §5.
 
-> Branch: `replacedock`. Goal: replace `Dock.Avalonia` with a lightweight, fully self-developed Dock implementation
+> Branch: `replacedock`. Goal: replace `Dock.Avalonia` with a lightweight Dock implementation that has no third-party dependencies
 > (`Dock.Avalonia.Themes.Fluent` / `Dock.Model.ReactiveUI` 12.0.0.2),
 > **without changing any existing functionality or UI interaction logic**, while removing the third-party blocker to future Avalonia major-version upgrades.
 
@@ -27,7 +27,7 @@ After a repository-wide audit, Dock's integration surface is **highly concentrat
 | `src/VelaShell/App.axaml` | `DockFluentTheme`, Dock metric resources (`DockFontSizeNormal`, etc., 8 items), and mounting of the three theme files above |
 | `src/VelaShell/Program.cs` + `Logging/FilteringLogSink.cs` | Exist specifically to filter noise from Dock's `DockCapability` bindings |
 | `src/VelaShell/ViewModels/SettingsViewModel.cs` | About-page open-source license list contains a Dock.Avalonia entry |
-| `src/VelaShell/Controls/ReparentingHost.cs` | Resolves the double-parenting issue where the same terminal control is instantiated twice during Dock splitting/dragging (the self-developed implementation still reuses the approach) |
+| `src/VelaShell/Controls/ReparentingHost.cs` | Resolves the double-parenting issue where the same terminal control is instantiated twice during Dock splitting/dragging (the replacement still reuses the approach) |
 
 ### 1.2 Actual Runtime Behaviors (= Interaction Contracts That Must Be Reproduced)
 
@@ -54,9 +54,9 @@ After a repository-wide audit, Dock's integration surface is **highly concentrat
 
 - `Ctrl+Tab` / `Ctrl+W` go through `TabBarViewModel` (logical tab collection) and only change `ActiveTerminalTab`;
   **they do not synchronize back to Dock's visible document** — switching tabs with a shortcut does not switch the document area.
-  The self-developed implementation connects this in both directions with `TabBar.ActiveTab → Workspace.ActivateDocument`.
+  The replacement connects this in both directions with `TabBar.ActiveTab → Workspace.ActivateDocument`.
 
-## 2. Plan: Self-Developed VelaDock
+## 2. Plan: VelaDock
 
 ### 2.1 Design Principles
 
@@ -150,7 +150,7 @@ Docking/
   and `DockTabStripResources`; internalize metrics as constants/styles.
 - Delete files: `Themes/DockTabStrip.axaml(.cs)`, `Themes/DockContextMenu.axaml`,
   `Logging/FilteringLogSink.cs` (and the hook in `Program.cs`), `Docking/TerminalDockFactory.cs`.
-- `Themes/DockStyles.axaml`: change `dc|*` selectors to selectors for the self-developed controls; retain unrelated global styles unchanged.
+- `Themes/DockStyles.axaml`: change `dc|*` selectors to selectors for the VelaDock controls; retain unrelated global styles unchanged.
 - `SettingsViewModel`: remove the Dock.Avalonia license entry.
 - `docs/architecture-design.md` / `docs/architecture.md`: update the Dock description.
 

@@ -59,7 +59,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | --- | --- | --- | --- |
 | SDK 契约与清单 | 03/09 | `plugin-sdk/VelaShell.PluginSdk`(仅 BCL);manifest 全字段校验(20+ 坏例可读拒绝) | PluginManifestReaderTests、LazyActivationTests |
 | 进程内宿主 | 02 | 可收集 ALC、故障守卫、后台激活零启动开销 | PluginManagerTests(真实 ALC e2e) |
-| 隔离进程宿主 | 02/04/05 | PluginHost 进程 + 命名管道自研轻量 RPC(有意不用 StreamJsonRpc,见 05 注记);令牌握手、父进程守望、凭据不出主进程 | IsolatedPluginTests、RpcConnectionTests |
+| 隔离进程宿主 | 02/04/05 | PluginHost 进程 + 命名管道轻量 RPC(有意不用 StreamJsonRpc,见 05 注记);令牌握手、父进程守望、凭据不出主进程 | IsolatedPluginTests、RpcConnectionTests |
 | 可靠性 | 04 | 心跳(30s×2 失败强杀)、崩溃退避自动重启(1s/5s/30s,窗口超限 Faulted)、空闲回收(recyclable) | 杀进程自愈 e2e、回收再拉起 e2e |
 | 惰性激活 | 03 | `onStartup` / `onCommand:<id>` + `contributes.commands` 占位命令 | LazyActivationTests |
 | UI(完整 Avalonia) | 08(改道) | VelaUI 声明式树**按用户决策不做**;插件直接用完整 Avalonia(编译期 AXAML/自带样式/i18n/第三方包),约束仅 Avalonia 版本与宿主一致(ALC 强制共享) | PluginPanelUiTests |
@@ -101,7 +101,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 ## 三、刻意的架构决策(勿"纠正")
 
 1. **VelaUI-lite 声明式树已删除**——插件 UI = 完整 Avalonia(用户决策,历三轮收敛)。
-2. **RPC 自研轻量协议**而非 StreamJsonRpc+MessagePack(零依赖纪律,05 注记)。
+2. **RPC 用轻量协议**而非 StreamJsonRpc+MessagePack(零依赖纪律,05 注记)。
 3. **双宿主模式共存**,manifest `hostMode` 选择;插件源码两模式零改动。
 4. **插件永不直连 SonnetDB**:能力实例按插件 id 命名空间化;隔离进程一切数据走 RPC。
 5. **PluginHost 默认软件渲染**(每进程省下 GPU 驱动映射的大头内存),`VELA_PLUGIN_GPU=1` 放开。
@@ -232,7 +232,7 @@ MSBuild 自己的增量清理机制免费提供。另加一道扫尾:`Incrementa
 目录会原地留下来 —— 判据用"没有 `plugin.json`"(对宿主而言与空目录等价)把它们一并清掉,
 免得 `ls plugins` 看到一个早该消失的插件名。
 
-只登记本目标复制的文件:自建插件(`velashell-ai`)由插件工程自己铺进同一个 `plugins/`,
+只登记本目标复制的文件:本仓库的插件(`velashell-ai`)由插件工程自己铺进同一个 `plugins/`,
 不在这份台账里,因此绝不会被误剪 —— 这一条已实测。
 
 验收(四个场景实测):暂存目录 → 输出的镜像;从暂存目录删掉插件后重建即从输出剪掉;

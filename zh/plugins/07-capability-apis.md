@@ -198,7 +198,7 @@ public interface IAudio
 
 权限:`network` + manifest 声明域名列表。v1 无物理拦截(见 06 前提),
 SDK 提供 `ctx.Http`(基于 HttpClient 的便捷封装,自动带插件 UA);
-使用 SDK 封装的请求会经宿主审计通道记录目标域名。直接自建 HttpClient
+使用 SDK 封装的请求会经宿主审计通道记录目标域名。直接自己创建 HttpClient
 在 v1 无法禁止——合规性靠审核与签名,文档如实告知。
 
 ## 11. vela.clipboard / 通知 / i18n

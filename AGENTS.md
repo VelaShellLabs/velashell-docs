@@ -18,6 +18,7 @@ VelaShell 生态的**全部文档**集中在一个仓库:
 | [`zh/sdk/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/sdk) | 插件契约 SDK 参考、SDK 仓库的发版流程 |
 | [`zh/cli/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/cli) | `vela-plugin` 命令行手册、CLI 仓库的发版流程 |
 | [`zh/templates/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/templates) | 插件开发指南、打包与发布、模板仓库的发版流程 |
+| [`zh/ssh/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/zh/ssh) | 宿主的 SSH 库 VelaShell.Ssh:架构与原理(含净室论证)、行为规格 00–09、上手 |
 
 英文镜像在 [`en/`](https://github.com/VelaShellLabs/velashell-docs/tree/main/en),与 `zh/` 同构。
 [仓库首页](https://github.com/VelaShellLabs/velashell-docs)有按「我想做什么」组织的快速入口表。
@@ -51,6 +52,7 @@ zh/            en/
   sdk/           sdk/         插件契约 SDK 参考、发版流程
   cli/           cli/         vela-plugin 手册、发版流程
   templates/     templates/   插件开发指南、打包与发布、发版流程
+  ssh/           ssh/         宿主的 SSH 库 VelaShell.Ssh 的架构、行为规格与上手
 ```
 
 `zh/` 与 `en/` **同构**,文件一一对应。`release-process.md` 目前只有中文版,
@@ -65,6 +67,12 @@ zh/            en/
 - **新增文件要挂进索引**:所在分区的 `README.md`,必要时还有 `zh/README.md` / `en/README.md`
   与仓库首页的快速入口表。只丢一个孤儿文件进去,没人会找到它。
 - 提交前跑一遍相对链接可达性检查,别留死链。
+- **不许用「自研」「自建」(英文不许用 in-house)给东西贴标签**,换成同义的招牌词(自主研发 / 自有 / 自家 /
+  原创 / home-grown / our own)也不行 —— 这两个词现在都不是褒义词,满篇「自研」「自建」只会显得在自夸。
+  直接写名字和事实:「VT 终端引擎」而不是「自研 VT 终端引擎」,「宿主的 SSH 库 VelaShell.Ssh」
+  而不是「自研 SSH 库」。确实需要强调「没用第三方库」时写**具体事实**:「零第三方停靠依赖」
+  「不依赖 Dock.Avalonia」。「自建」表示自行部署时写「自行部署的商店」,表示自己创建时写
+  「插件自己创建的控件」;唯一保留的是企业微信后台的官方菜单名「自建应用」。中英两侧同一条规矩。
 
 ### 版本横幅由别的仓库的脚本来改
 

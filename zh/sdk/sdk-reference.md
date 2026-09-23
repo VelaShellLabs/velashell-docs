@@ -95,7 +95,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | 能力                                | 关键方法                                      | 说明                                                                                                                |
 | ----------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `Commands` (`ICommandsApi`)         | `Register` / `TryExecute`                     | 命令 id 必须以插件 id 为前缀;清单里声明的占位命令在激活时被真实处理器替换                                           |
-| `Ui` (`IUiApi`)                     | `ShowPanelAsync(options, contentFactory)`     | 呈现插件自建的 Avalonia 控件:`inProcess` 可停靠成主窗口标签页,`isolated` 为独立卡片窗口                             |
+| `Ui` (`IUiApi`)                     | `ShowPanelAsync(options, contentFactory)`     | 呈现插件自己创建的 Avalonia 控件:`inProcess` 可停靠成主窗口标签页,`isolated` 为独立卡片窗口                         |
 | `TerminalView` (`ITerminalViewApi`) | `Create(...)`                                 | **出借宿主的终端仿真器**(VT 解析、屏幕缓冲、选区、IME、键盘编码),插件拿到一个可嵌进自己界面的真终端。仅 `inProcess` |
 | `Protocols` (`IProtocolsApi`)       | 注册协议实现                                  | 插件自带的远程**文件**协议,与 SSH/SFTP/FTP 同为连接配置页的一等公民。仅 `inProcess`                                 |
 | `Workspaces` (`IWorkspacesApi`)     | 注册工作区提供者                              | **非文件型**连接类型(Redis、MySQL…),由插件全权渲染会话文档。仅 `inProcess`                                          |

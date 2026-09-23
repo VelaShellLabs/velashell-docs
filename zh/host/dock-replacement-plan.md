@@ -1,10 +1,10 @@
-# Dock.Avalonia 自研替换方案(VelaDock)
+# Dock.Avalonia 替换方案(VelaDock)
 
 > ✅ **已完成并合并**(2026-07,PR #3 `replacedock`)。VelaDock 现已在主线承载全部停靠/分屏,
 > `Dock.Avalonia` 相关包与许可条目均已移除。以下为原始替换方案,保留作实现记录与设计参考。
 > 落地后的架构见 `docs/architecture.md`「Docking (VelaDock)」与 `plan.md` §5。
 
-> 分支:`replacedock`。目标:用完全自研的轻量 Dock 实现替换 `Dock.Avalonia`
+> 分支:`replacedock`。目标:用不依赖任何第三方库的轻量 Dock 实现替换 `Dock.Avalonia`
 > (`Dock.Avalonia.Themes.Fluent` / `Dock.Model.ReactiveUI` 12.0.0.2),
 > **不改变任何既有功能与 UI 交互逻辑**,并为后续 Avalonia 大版本升级消除第三方阻塞。
 
@@ -27,7 +27,7 @@
 | `src/VelaShell/App.axaml` | `DockFluentTheme`、Dock 度量资源(`DockFontSizeNormal` 等 8 项)、上述三个主题文件的挂载 |
 | `src/VelaShell/Program.cs` + `Logging/FilteringLogSink.cs` | 专为过滤 Dock 的 `DockCapability` 绑定噪音而存在 |
 | `src/VelaShell/ViewModels/SettingsViewModel.cs` | 关于页开源许可列表含 Dock.Avalonia 条目 |
-| `src/VelaShell/Controls/ReparentingHost.cs` | 解决 Dock 分屏/拖拽时同一终端控件被二次实例化的双父级问题(自研后仍复用其思路) |
+| `src/VelaShell/Controls/ReparentingHost.cs` | 解决 Dock 分屏/拖拽时同一终端控件被二次实例化的双父级问题(替换后仍复用其思路) |
 
 ### 1.2 实际用到的运行时行为(= 必须复刻的交互契约)
 
@@ -53,9 +53,9 @@
 
 - `Ctrl+Tab` / `Ctrl+W` 走 `TabBarViewModel`(逻辑标签集合),只改 `ActiveTerminalTab`,
   **没有反向同步到 Dock 的可见文档** —— 快捷键切标签时文档区不切换。
-  自研后 `TabBar.ActiveTab → Workspace.ActivateDocument` 双向打通。
+  替换后 `TabBar.ActiveTab → Workspace.ActivateDocument` 双向打通。
 
-## 2. 方案:自研 VelaDock
+## 2. 方案:VelaDock
 
 ### 2.1 设计原则
 
@@ -147,7 +147,7 @@ Docking/
   与 `DockTabStripResources` 挂载;度量以常量/样式内化。
 - 删除文件:`Themes/DockTabStrip.axaml(.cs)`、`Themes/DockContextMenu.axaml`、
   `Logging/FilteringLogSink.cs`(及 `Program.cs` 挂钩)、`Docking/TerminalDockFactory.cs`。
-- `Themes/DockStyles.axaml`:`dc|*` 选择器改为自研控件选择器;无关全局样式原样保留。
+- `Themes/DockStyles.axaml`:`dc|*` 选择器改为 VelaDock 控件选择器;无关全局样式原样保留。
 - `SettingsViewModel`:删 Dock.Avalonia 许可条目。
 - `docs/架构设计.md` / `docs/architecture.md`:更新 Dock 描述。
 

@@ -191,7 +191,7 @@ The built-in editor (`RemoteFileEditorView`) originally had **no syntax highligh
 
 - **Automatic file-type detection** (`Services/Syntax/FileTypeDetector.cs`): extension → special filename (`Dockerfile`/`sshd_config`/`fstab`/`.bashrc`…) → **shebang**.
   The third level is especially important for remote editing: many executable scripts on servers have no extension, and only `#!/bin/bash` identifies what they are.
-- **Added missing AvaloniaEdit syntax definitions** (`Syntax/*.xshd`): among the 20 built-in definitions, **Shell, YAML, INI/conf, Dockerfile, and Log were conspicuously absent**. These are precisely the five types most often edited in daily operations, so definitions were written in-house.
+- **Added missing AvaloniaEdit syntax definitions** (`Syntax/*.xshd`): among the 20 built-in definitions, **Shell, YAML, INI/conf, Dockerfile, and Log were conspicuously absent**. These are precisely the five types most often edited in daily operations, so we wrote the definitions ourselves.
 - **Theme following** (`SyntaxHighlightingService`): AvaloniaEdit's built-in definitions are tuned for light backgrounds, with keywords in `Blue` and punctuation in `Black`. On this application's Dracula surface, `#282A36`, punctuation becomes invisible. Named colors are now recolored globally for Dracula (dark) / Alucard (light), with contrast fallbacks for roles not covered by the theme.
 
 ~~**Known limitation**: changing the theme after opening the editor does not update its colors in real time. Reopen the editor to apply the new colors.~~ Resolved on 2026-09-12; see below.

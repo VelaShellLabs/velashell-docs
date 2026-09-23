@@ -193,14 +193,14 @@ public FtpSettings? Ftp { get; set; }
 | `GetWorkingDirectoryAsync` | `GetWorkingDirectory` |
 | 校验（可选增强） | 内建 MD5 / CRC32 / SHA-1/256/512 |
 
-另外它自带 30+ 种服务器类型的 LIST 方言解析、自动能力探测、限速与断线重连——**这些正是自研最耗时且最容易出错的部分**。
+另外它自带 30+ 种服务器类型的 LIST 方言解析、自动能力探测、限速与断线重连——**这些正是自己实现时最耗时且最容易出错的部分**。
 
 ### 4.2 不推荐的选项
 
 | 方案 | 结论 |
 |---|---|
 | `FtpWebRequest`（BCL 内建） | **已废弃**（SYSLIB0014，自 .NET 6 起标注 obsolete），无 MLSD、FTPS 控制粒度不足。不可用 |
-| 自研 FTP 客户端 | 协议面比 Telnet 大一个数量级：控制/数据双连接、PASV/EPSV/PORT/EPRT、RFC 4217 FTPS 的 AUTH/PBSZ/PROT、RFC 3659 的 MLSD/REST/SIZE/MDTM，再加各家 LIST 方言。Telnet 那次"自研更划算"的判断**不适用于此** |
+| 自己实现 FTP 客户端 | 协议面比 Telnet 大一个数量级：控制/数据双连接、PASV/EPSV/PORT/EPRT、RFC 4217 FTPS 的 AUTH/PBSZ/PROT、RFC 3659 的 MLSD/REST/SIZE/MDTM，再加各家 LIST 方言。Telnet 那次"自己实现更划算"的判断**不适用于此** |
 | 其他 .NET FTP 库 | *未核实*——未逐个查证维护状态与许可证。FluentFTP 在活跃度、许可、下载量上已明显占优 |
 
 ### 4.3 ⚠️ `FluentFTP.GnuTLS` 是 LGPL，不要随手引入

@@ -6,7 +6,7 @@
 >   `VelaShell.PluginSdk.Build`(**插件工程只需引这一个**:MSBuild props/targets、依赖锁、
 >   随包分发的打包器)、`VelaShell.Plugin.Cli`(dotnet tool `vela-plugin`)、
 >   `VelaShell.Plugin.Templates`(`dotnet new`)。没有 `VelaShell.PluginProtocol` 这个包 ——
->   RPC 线协议就在契约程序集里(自研轻量协议,不用 StreamJsonRpc,见 05 注记)。
+>   RPC 线协议就在契约程序集里(轻量协议,不用 StreamJsonRpc,见 05 注记)。
 > - 模板是 **`velaplugin` / `velaplugin-ui`** 两个;`velaplugin-automation` 待自动化能力域动工再说。
 > - 测试替身叫 **`TestPluginContext`** 而不是 `FakePluginContext`;VelaUI 声明式树按用户决策不做,
 >   因此没有 `VelaUiAssert`。
