@@ -281,6 +281,57 @@ Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者�
 〔决策〕**我们只做转发，不做 agent 服务端。**
 本机 agent 由操作系统提供（OpenSSH agent / Pageant / 1Password 等）。
 
+### 7.3 往本机 agent 加钥（`ssh-add`）
+
+> 依据：draft-miller-ssh-agent 的「添加密钥」「私钥格式」「密钥约束」三节；OpenSSH `PROTOCOL.agent`。
+
+这是 agent **客户端**的一条请求（`ssh-add` 做的事），不是 agent 服务端 —— 与 7.2 的决策不冲突。
+用途：把一把加密私钥解开一次、交给 agent 保管，之后的认证与转发都经 agent 签名，不必再输口令。
+
+**请求报文**：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| 消息号 | byte | `17` `SSH_AGENTC_ADD_IDENTITY`；带约束时 `25` `SSH_AGENTC_ADD_ID_CONSTRAINED` |
+| 密钥类型 | string | `ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp256` / `-nistp384` / `-nistp521` |
+| 私钥内容 | 按类型，见下表 | |
+| 注释 | string | UTF-8；`ssh-add -l` 显示的那一列，通常写私钥文件路径 |
+| 约束 | byte + 参数，可重复 | **只在 `25` 里出现**，见下表 |
+
+**私钥内容**（紧跟在密钥类型之后）：
+
+| 密钥类型 | 字段（按顺序） |
+| --- | --- |
+| `ssh-ed25519` | string 公钥（32 字节）；string 种子 ‖ 公钥（64 字节，种子在前） |
+| `ssh-rsa` | mpint n；mpint e；mpint d；mpint iqmp（q⁻¹ mod p）；mpint p；mpint q |
+| `ecdsa-sha2-*` | string 曲线名（`nistp256` / `nistp384` / `nistp521`）；string 公钥点（未压缩，`0x04 ‖ X ‖ Y`）；mpint 私钥标量 d |
+
+⚠️ RSA 这里是 **n 在前、e 在后**，与公钥 blob（e 在前）相反。写反了 agent 照样回 SUCCESS，
+直到第一次签名才露馅。
+
+**约束**：
+
+| 编号 | 名称 | 参数 | 含义 |
+| :-: | --- | --- | --- |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥 |
+| `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | 无 | 每次签名都由 agent 向使用者确认（`ssh-add -c`） |
+
+**应答**：`6` `SSH_AGENT_SUCCESS` 为成功；`5` `SSH_AGENT_FAILURE` 抛 `SshAgentException`。
+agent 不说拒绝原因，异常消息要点出常见的三种：agent 不支持约束（部分 agent 对 `25` 一律拒绝）、
+agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
+
+〔决策〕
+
+1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里；
+   证书签名器（`*-cert-v01@openssh.com`）要「证书 + 私钥」的组合格式，暂不做。其余一律 `ArgumentException`。
+2. **没有约束就发 `17`**，不发约束为空的 `25` —— 有的 agent 认 `17` 却不认 `25`。
+3. **请求缓冲用完即清零**。缓冲按上限一次性预留，不让扩容在堆上留下未清零的旧副本。
+4. **不查重**。同一把钥加两次时怎么处理是 agent 的事（OpenSSH 会更新注释与约束）；
+   要不要先 `REQUEST_IDENTITIES` 看一眼由调用方决定。
+5. **库从不自动加钥**。什么时候往使用者的 agent 里放东西是使用者的决定 ——
+   与 04 §2.2「不自动连 agent」是同一条原则。加进去的钥活多久由 agent 决定
+   （Windows 的 OpenSSH agent 会把它存进注册表，重启后仍在）。
+
 ---
 
 ## 七点五 X11 转发

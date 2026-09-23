@@ -283,6 +283,57 @@ Handled by `IIncomingChannelHandler` (architecture §8, item 8).
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
 
+### 7.3 Adding keys to the local agent (`ssh-add`)
+
+> Basis: the "adding keys", "private key formats" and "key constraints" sections of draft-miller-ssh-agent; OpenSSH `PROTOCOL.agent`.
+
+This is a request made by an agent **client** (what `ssh-add` does), not an agent server — it does not conflict with the decision in 7.2.
+Purpose: decrypt an encrypted private key once and hand it to the agent; later authentication and forwarding are signed through the agent, with no passphrase prompt.
+
+**Request message**:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| Message number | byte | `17` `SSH_AGENTC_ADD_IDENTITY`; `25` `SSH_AGENTC_ADD_ID_CONSTRAINED` when constraints are present |
+| Key type | string | `ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp256` / `-nistp384` / `-nistp521` |
+| Private key contents | per type, see below | |
+| Comment | string | UTF-8; the column `ssh-add -l` shows, usually the private key file path |
+| Constraints | byte + arguments, repeatable | **only in `25`**, see below |
+
+**Private key contents** (immediately after the key type):
+
+| Key type | Fields (in order) |
+| --- | --- |
+| `ssh-ed25519` | string public key (32 bytes); string seed ‖ public key (64 bytes, seed first) |
+| `ssh-rsa` | mpint n; mpint e; mpint d; mpint iqmp (q⁻¹ mod p); mpint p; mpint q |
+| `ecdsa-sha2-*` | string curve name (`nistp256` / `nistp384` / `nistp521`); string public point (uncompressed, `0x04 ‖ X ‖ Y`); mpint private scalar d |
+
+⚠️ For RSA it is **n first, then e** — the reverse of the public key blob (e first). Get it backwards and the agent still answers SUCCESS;
+it only shows up on the first signature.
+
+**Constraints**:
+
+| Number | Name | Argument | Meaning |
+| :-: | --- | --- | --- |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires |
+| `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | none | The agent asks the user to confirm every signature (`ssh-add -c`) |
+
+**Response**: `6` `SSH_AGENT_SUCCESS` means success; `5` `SSH_AGENT_FAILURE` throws `SshAgentException`.
+The agent gives no reason, so the exception message names the three common ones: the agent does not support constraints (some agents reject `25` outright),
+the agent is locked (`ssh-add -x`), or the agent does not support this key type.
+
+〔Decision〕
+
+1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all;
+   certificate signers (`*-cert-v01@openssh.com`) need the combined "certificate + private key" format and are not done yet. Everything else is an `ArgumentException`.
+2. **No constraints means `17`**; never send a `25` with an empty constraint list — some agents accept `17` but not `25`.
+3. **The request buffer is zeroed right after use.** The buffer is reserved at its upper bound up front, so growth never leaves unzeroed copies on the heap.
+4. **No duplicate check.** What happens when the same key is added twice is the agent's business (OpenSSH updates the comment and constraints);
+   whether to look first with `REQUEST_IDENTITIES` is up to the caller.
+5. **The library never adds keys on its own.** When to put something into the user's agent is the user's decision —
+   the same principle as "never connect to the agent implicitly" in 04 §2.2. How long an added key lives is up to the agent
+   (the Windows OpenSSH agent stores it in the registry, so it survives a reboot).
+
 ---
 
 ## 7.5 X11 forwarding

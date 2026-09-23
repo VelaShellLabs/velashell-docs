@@ -210,6 +210,26 @@ ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "passp
 > so it could always be read; nobody provides OpenSSH's `bcrypt_pbkdf`, so we wrote that one ourselves
 > — the only instance in the whole library, see the note above.
 
+### Adding a private key to the agent (`ssh-add`)
+
+Decrypt an encrypted private key once and hand it to the agent; authentication and forwarding are then signed through the agent:
+
+```csharp
+var key = (InMemorySshSigner)await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: "passphrase", ct);
+
+await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
+
+// ssh-add -t 3600 -c: deleted automatically after an hour, every signature must be confirmed
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+```
+
+- Only in-process private keys (`InMemorySshSigner`) are accepted; adding certificates is not supported yet.
+- **The library never adds keys on its own**; when to put something into the user's agent is the caller's decision.
+- Some agents do not support constraints and reject the whole request (`SshAgentException`). How long an added key lives is up to the agent —
+  the Windows OpenSSH agent stores it in the registry, so it survives a reboot. Specification: [spec/07 §7.3](spec/07-forwarding.md).
+
 ---
 
 ## 4. Running commands
