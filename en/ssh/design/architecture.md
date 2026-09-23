@@ -714,7 +714,7 @@ so they can gate every commit — instead of the current approach of excluding `
 | AWS Transfer / Azure SFTP / other managed SFTP | Huge variance in supported SFTP extensions |
 | GitHub / GitLab (exec only) | The most common public endpoints |
 
-**Landed and verified** (see §11.2.9, §11.2.13): CI's `interop` job runs two OpenSSH versions,
+**Landed and verified** (see §11.2.9, §11.2.13): the interop matrix runs two OpenSSH versions,
 `latest` and `9.3`, with 13 `[TestCategory("Interop")]` cases.
 **Local run on 2026-09-21: 13/13 passing on both OpenSSH 10.3 and 9.3** —
 and the very first run was **0/13**, which caught a real key-derivation bug (§11.2.13).
@@ -1194,7 +1194,7 @@ pipeline depth, `.ppk`, performance benchmarks, and an interop matrix against re
 | Adaptive SFTP pipeline depth | ✅ Scales on "did we ever wait on the semaphore", no RTT guessing |
 | PuTTY `.ppk` v2 / v3 | ✅ Including encrypted private keys (v2 via SHA-1 KDF, v3 via Argon2id) |
 | Performance benchmarks (BenchmarkDotNet) | ✅ File-based app, `scripts/ssh/benchmarks/benchmarks.cs` |
-| Interop matrix (real sshd container) | ✅ 13 cases × 2 OpenSSH versions, CI `interop` job |
+| Interop matrix (real sshd container) | ✅ 13 cases × 2 OpenSSH versions, run locally on demand (`scripts/ssh/interop/`) |
 
 #### Compression: the hard part isn't zlib, it's flush semantics
 
@@ -1369,10 +1369,12 @@ dotnet test tests/VelaShell.Ssh.Tests/VelaShell.Ssh.Tests.csproj --filter "TestC
 pwsh scripts/ssh/interop/Stop-TestServer.ps1
 ```
 
-The CI `interop` job runs **two** OpenSSH versions: `latest` (the only place post-quantum KEX is
+The interop matrix runs **two** OpenSSH versions: `latest` (the only place post-quantum KEX is
 available) and `9.3` (to verify we don't silently depend on new algorithms — the real world has
-plenty of devices stuck several years back). It is **not part of the PR gate**: it needs a
-container, is slow and depends on the network, so it only runs on main and on manual trigger.
+plenty of devices stuck several years back). It is **not in CI**: it needs a container, is slow and
+depends on the network. The former CI `interop` job only ran on main and on manual trigger, and showed
+up as a permanently Skipped check on every PR; it was removed on 2026-09-23 and the matrix is now run
+locally on demand with the commands above.
 
 **At this point, the only remaining to-dos listed across §11.2 are these** (all left on purpose,
 not forgotten):
@@ -1666,7 +1668,7 @@ doesn't lose data".
 
 - Behavioral differences on the peer side when the client initiates (for example, some
   implementations may refuse or delay their response) —
-  not verified in real interop; the `interop` job has no case that crosses 1 GiB yet
+  not verified in real interop; the interop cases have none that crosses 1 GiB yet
   (one run would move 1 GiB, which doesn't belong in regular CI).
 
 ### 11.2.12 Closing the "deliberately left gaps" (2026-09-21)

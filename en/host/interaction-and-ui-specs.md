@@ -574,9 +574,11 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       - Forwarding **lasts for the whole session** with no expiry — “new windows stop opening after half an hour” only
         makes people think forwarding is broken.
     - **A refusal does not take the session down**: `X11Forwarding no`, a missing xauth and `AllowAgentForwarding no`
-      are all common, and failing the whole session over an add-on would be backwards. On refusal the shell is reopened
-      without that item (with both requested, retries pin down which one was refused; the extra round trips only happen
-      on the failure path), and a **yellow** line at the top of the terminal says why; on success a **grey** line
+      are all common, and failing the whole session over an add-on would be backwards. X11 is requested **best-effort**
+      (the SSH library's `X11ForwardOptions.BestEffort`): when setup fails the library does not throw, the shell opens
+      in one go, and the reason comes back on `SshShell.X11SetupFailure`; when agent forwarding is refused the shell is
+      reopened once without it (keeping X11). Either way a **yellow** line at the top of the terminal says why; on
+      success a **grey** line
       (“X11 forwarding on → local display localhost:0.0”) in the same style as the jump-chain line. Both the first
       connection and in-place reconnects write it.
   - **Authentication method “SSH Agent”** (`AuthMethod.Agent`, last item in the dropdown — the enum is persisted by

@@ -714,7 +714,7 @@ Tmds 的测试基本都要起 Docker 里的 sshd。我们让 `ISshTransportDiale
 | AWS Transfer / Azure SFTP / 各家托管 SFTP | SFTP 扩展支持面差异极大 |
 | GitHub / GitLab（仅 exec） | 最常见的公开端点 |
 
-**已落地并实测通过**（见 §11.2.9、§11.2.13）：CI 的 `interop` job 跑 OpenSSH
+**已落地并实测通过**（见 §11.2.9、§11.2.13）：互操作矩阵跑 OpenSSH
 `latest` 与 `9.3` 两个版本，13 条 `[TestCategory("Interop")]` 用例。
 **2026-09-21 本机实测：OpenSSH 10.3 与 9.3 各 13/13 通过** ——
 而第一次跑的时候是 **0/13**，逮到了一个密钥派生的真 bug（§11.2.13）。
@@ -1195,7 +1195,7 @@ _ = ObserveFlushAsync(flush);                      // 老代码：丢后台，�
 | SFTP 管线深度自适应 | ✅ 按「有没有等过信号量」伸缩，不猜 RTT |
 | PuTTY `.ppk` v2 / v3 | ✅ 含加密私钥（v2 走 SHA-1 KDF，v3 走 Argon2id） |
 | 性能基准（BenchmarkDotNet） | ✅ 单文件应用，`scripts/ssh/benchmarks/benchmarks.cs` |
-| 互操作矩阵（真 sshd 容器） | ✅ 13 条用例 × 2 个 OpenSSH 版本，CI `interop` job |
+| 互操作矩阵（真 sshd 容器） | ✅ 13 条用例 × 2 个 OpenSSH 版本，本地按需跑（`scripts/ssh/interop/`） |
 
 #### 压缩：难点不在 zlib，在 flush 语义
 
@@ -1353,9 +1353,10 @@ dotnet test tests/VelaShell.Ssh.Tests/VelaShell.Ssh.Tests.csproj --filter "TestC
 pwsh scripts/ssh/interop/Stop-TestServer.ps1
 ```
 
-CI 的 `interop` job 跑**两个** OpenSSH 版本：`latest`（后量子 KEX 在这里才有）
+互操作矩阵跑**两个** OpenSSH 版本：`latest`（后量子 KEX 在这里才有）
 与 `9.3`（验证我们没有默默依赖新算法 —— 真实世界里有大量停在几年前的设备）。
-它**不进 PR 门禁**：要起容器，慢且依赖网络，只在 main 与手动触发时跑。
+它**不在 CI 里**：要起容器，慢且依赖网络。原先的 CI `interop` job 只在推 main 与手动触发时跑，
+在 PR 的检查列表里永远显示为一项 Skipped，2026-09-23 移除，改为按上面的命令在本地按需跑。
 
 **到这里，§11.2 各节列出的待办只剩下这些**（都是有意留的，不是忘了）：
 
@@ -1617,7 +1618,7 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
 #### 还没做
 
 - 客户端发起时对端的行为差异（比如某些实现会拒绝或延迟应答）——
-  真实互操作上没验过，`interop` job 里还没有一条跨 1 GiB 的用例
+  真实互操作上没验过，互操作用例里还没有一条跨 1 GiB 的用例
   （跑一次要搬 1 GiB，不适合放进常规 CI）。
 
 ### 11.2.12 收掉「有意留的缺口」（2026-09-21）
