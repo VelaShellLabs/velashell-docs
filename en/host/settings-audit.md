@@ -378,3 +378,33 @@ The default of `Security.BlockOnFingerprintChange` **flipped from on to off** (h
   **including** the HostAuthentication callback, so the timer keeps running while the dialog is open.
   Think for fifteen seconds and the connection is already timed out by the time you click. The decision
   has taken effect by then, so the wrapper **reconnects once** on this particular failure (once only).
+
+### 2026-09-23 Sixth batch (new “X Server” page)
+
+A new top-level section **X Server** (after “Proxy”) configures the local X server — on Windows, the VcXsrv the user
+installed (host side: `plan.md` §98). All new settings live in `AppSettings.XServer` (`XServerOptions`); configs saved
+before this section existed get the defaults from `Normalize`.
+
+| Setting | Default | VcXsrv argument | Notes |
+| --- | --- | --- | --- |
+| VcXsrv executable | empty = auto-detect | — | Tries Program Files, Scoop, then PATH; **a filled-in path is the only one used** — if it is missing that is reported as such, never silently swapped for another install |
+| Display number | Auto | `:N` | Auto = the first display nobody listens on, starting at :0; a fixed number that is taken fails before launching. Range :0–:15, clamped the same way by `Normalize` |
+| Window mode | Multiple windows | `-multiwindow` / (none) / `-nodecoration` / `-fullscreen` / `-rootless` | Unrecognized values fall back to multiple windows |
+| Enable clipboard | on | `-clipboard` / `-noclipboard` | |
+| Copy on selection | on | `-primary` / `-noprimary` | Only meaningful with the clipboard on; disabled and omitted from the command line otherwise |
+| Keyboard layout | Auto | `-xkblayout` | Auto = not passed; VcXsrv follows the Windows layout |
+| Keyboard model | pc105 | `-xkbmodel` | |
+| Capture special Windows keys | off | `-keyhook` / `-nokeyhook` | |
+| Native OpenGL (WGL) | on | `-wgl` / `-nowgl` | |
+| Disable access control | off | `-ac` | The description states the risk; connections arriving through SSH X11 forwarding come from 127.0.0.1 and do not need it |
+| Additional VcXsrv arguments | empty | appended verbatim, last | For the same switch the later one wins; the “Help” button next to it documents every VcXsrv argument in five languages |
+| Start when VelaShell starts | off | — | |
+| Start automatically for X11 forwarding | on | — | Stays out of the way silently when another X server already listens on :0 or VcXsrv is not installed |
+| Show tray icon | off | `-trayicon` / `-notrayicon` | VcXsrv's own tray icon |
+
+- **Every switch is written out in both states** rather than relying on VcXsrv's defaults (which have changed between
+  versions); the page previews the exact command line for the next start.
+- Changes **apply the next time the X server starts** (the subtitle says so); a running X server that is showing windows
+  is never restarted behind the user's back.
+- On non-Windows platforms the page is a single note: Linux uses the desktop's own X / XWayland, macOS uses XQuartz,
+  both through `DISPLAY`.

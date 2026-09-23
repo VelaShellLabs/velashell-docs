@@ -363,3 +363,30 @@
 - **弹窗期间的连接超时**:Tmds.Ssh 0.24 的 `ConnectTimeout` 覆盖整个握手,**包括** HostAuthentication
   回调,弹窗摆着的时间照样在计时。用户多想十几秒,裁决刚点完连接已经被判超时。裁决此时已经生效,
   因此包装器在这一种失败上**原地补连一次**(只补一次)。
+
+### 2026-09-23 第六批(新增「X Server」页)
+
+新增一级分区 **X Server**(排在「网络代理」之后),配置本机 X 服务端 —— Windows 上是用户自己装的 VcXsrv
+(宿主侧见 `plan.md` §98)。新增的设置全部落在 `AppSettings.XServer`(`XServerOptions`),老配置里没有这一节时
+由 `Normalize` 补上默认值。
+
+| 设置 | 默认 | 对应 VcXsrv 参数 | 备注 |
+| --- | --- | --- | --- |
+| VcXsrv 程序位置 | 空 = 自动查找 | — | 依次查 Program Files、Scoop、PATH;**填了就只认填的**,找不到时如实报「填的路径不存在」,不悄悄换一个 |
+| 显示编号 | 自动 | `:N` | 自动 = 从 :0 起挑第一个没人监听的;固定号被占用时启动前就报错。范围 :0–:15,`Normalize` 同口径钳制 |
+| 窗口模式 | 多窗口 | `-multiwindow` / (无) / `-nodecoration` / `-fullscreen` / `-rootless` | 认不出来的值回落到多窗口 |
+| 启用剪贴板 | 开 | `-clipboard` / `-noclipboard` | |
+| 选中即复制 | 开 | `-primary` / `-noprimary` | 只在开了剪贴板时生效,关着时置灰、命令行里也不写 |
+| 键盘布局 | 自动 | `-xkblayout` | 自动 = 不传,VcXsrv 跟随 Windows 布局 |
+| 键盘型号 | pc105 | `-xkbmodel` | |
+| 捕获 Windows 特殊按键 | 关 | `-keyhook` / `-nokeyhook` | |
+| 原生 OpenGL(WGL) | 开 | `-wgl` / `-nowgl` | |
+| 关闭访问控制 | 关 | `-ac` | 说明文字写明风险;SSH X11 转发过来的连接在本机看来是 127.0.0.1,不需要它 |
+| VcXsrv 附加参数 | 空 | 原样追加在最后 | 同一开关后写的覆盖先写的;旁边「帮助」对话框是 VcXsrv 全部参数的五语说明 |
+| 在启动时自动打开 | 关 | — | |
+| X11 转发时自动启动 | 开 | — | 本机 :0 已有别的 X 服务端、或没装 VcXsrv 时静默不插手 |
+| 显示托盘图标 | 关 | `-trayicon` / `-notrayicon` | VcXsrv 自己的托盘图标 |
+
+- **每个开关都显式写出两态**,不依赖 VcXsrv 的默认值(那些默认值随版本变过);页面下方实时预览下次启动用的命令行。
+- 改动**在下次启动 X Server 时生效**(副标题里写明),不会去重启一个正在显示窗口的 X 服务端。
+- 非 Windows 平台整页只剩一段说明:Linux 用桌面自带的 X / XWayland,macOS 用 XQuartz,都经 `DISPLAY`。
