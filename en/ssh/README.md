@@ -23,7 +23,7 @@ own (it used to be `VelaShellLabs/velashell-ssh`). Paths such as `src/…`, `tes
 | [`src/VelaShell.Ssh/`](https://github.com/joesdu/VelaShell/tree/main/src/VelaShell.Ssh) | The library; this directory is licensed under **MIT** (`LICENSE` / `NOTICE.md`), unlike the rest of the host |
 | [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) | Working rules, **including the clean-room discipline** — required reading before touching the library |
 | [`tests/VelaShell.Ssh.Tests/`](https://github.com/joesdu/VelaShell/tree/main/tests/VelaShell.Ssh.Tests) | Unit tests (in-memory transport) and the `[TestCategory("Interop")]` interop cases |
-| [`scripts/ssh/`](https://github.com/joesdu/VelaShell/tree/main/scripts/ssh) | Similarity gate, interop test-server scripts, compression strict-validation check, benchmarks |
+| [`scripts/ssh/`](https://github.com/joesdu/VelaShell/tree/main/scripts/ssh) | Interop test-server scripts, compression strict-validation check, benchmarks |
 
 **A behaviour change in the library must update the specs here too**, in two PRs that reference each
 other and merge together (section 2 of the host's AGENTS.md).

@@ -21,7 +21,7 @@ SFTP、端口转发与隧道,全异步、低分配、AOT 友好。它是**独立
 | [`src/VelaShell.Ssh/`](https://github.com/joesdu/VelaShell/tree/main/src/VelaShell.Ssh) | 库本体;该目录按 **MIT** 授权(`LICENSE` / `NOTICE.md`),与宿主其余部分不同 |
 | [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) | 开发约定,**含净室规程** —— 改这个库之前必读 |
 | [`tests/VelaShell.Ssh.Tests/`](https://github.com/joesdu/VelaShell/tree/main/tests/VelaShell.Ssh.Tests) | 单元测试(内存传输)与 `[TestCategory("Interop")]` 互操作用例 |
-| [`scripts/ssh/`](https://github.com/joesdu/VelaShell/tree/main/scripts/ssh) | 相似度门禁、互操作靶机脚本、压缩严格校验检查、性能基准 |
+| [`scripts/ssh/`](https://github.com/joesdu/VelaShell/tree/main/scripts/ssh) | 互操作靶机脚本、压缩严格校验检查、性能基准 |
 
 **改了库的行为就要同步改这里的规格**,两个 PR 互相引用、一起合(宿主 AGENTS.md 第二节)。
 
