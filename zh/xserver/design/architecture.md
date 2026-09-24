@@ -2,10 +2,10 @@
 
 English: [`../../../en/xserver/design/architecture.md`](../../../en/xserver/design/architecture.md)
 
-> 状态:**M1(核心协议)、M2(现代工具包)与「功能完备」一轮(XKB、XInput2 等十余个扩展、窗口管理器角色、全库性能复查)已完成**,
-> 2026-09-23 立项。宿主尚未接入 —— 目前宿主的「X Server」
-> 按钮拉起的是用户自己装的 VcXsrv(见 [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.2)。
-> M3 把本库接进宿主、替换那条路径之后,用户就不必再装任何东西。
+> 状态:**M1(核心协议)、M2(现代工具包)、「功能完备」一轮(XKB、XInput2 等十余个扩展、窗口管理器角色、全库性能复查)
+> 与 M3(接入宿主)已完成**,2026-09-23 立项。宿主的「X Server」按钮默认启动的就是本库(每个 X 窗口一个 Avalonia 原生窗口),
+> SSH 的 X11 转发直接接进它;用户自己装的 VcXsrv 退成 Windows 上的可选引擎(见
+> [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.2 与 §14)。
 
 ## 1. 为什么要做
 
@@ -74,7 +74,7 @@ Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOpti
 ```
 
 Unix 套接字:Windows 以外默认监听 `/tmp/.X11-unix/X{N}`,Linux 另在抽象命名空间里监听同名套接字(Xlib / XCB 对 `:N` 先试它);
-`XServerOptions.UnixSocketPath` 可指定或关掉,`ListenTcp` 可关掉 TCP。宿主字体提供者接口还没有,等 M3 需要更大字号时再加。
+`XServerOptions.UnixSocketPath` 可指定或关掉,`ListenTcp` 可关掉 TCP。宿主字体提供者接口还没有:核心字体只服务老程序,现代工具包都走 RENDER + 客户端栅格化,接入宿主之后也没有遇到非它不可的程序。
 
 ## 5. 线程模型
 
@@ -156,8 +156,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | **M1 核心协议** ✅ | 全部核心请求;BIG-REQUESTS、XC-MISC;窗口 / 事件 / 属性 / 选区;软件绘图;内置字体;键盘映射;无头测试宿主 | Docker 里 `xdpyinfo`、`xterm`、`xeyes`、`xclock`、`xlogo` 连上、画出内容、零协议错误(已达成,见 §10) |
 | **M2 现代工具包** ✅ | SHAPE、XFIXES、RANDR(只读)、RENDER;剪贴板与宿主互通;XSETTINGS 管理器 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、`qt5ct` 画出内容、零协议错误 —— 已达成,见 §10) |
 | **功能完备** ✅ | XKEYBOARD、XInputExtension 2.2、XTEST、XINERAMA、SYNC、DAMAGE、Composite、DOUBLE-BUFFER、Present、MIT-SCREEN-SAVER、DPMS、X-Resource、Generic Event;窗口管理器角色;Unix 套接字;运行中换布局 / DPI / 键盘布局;全库性能复查 | xkbcomp、xinput、xdotool、xprintidle、xrestop 读写正确;gedit(GTK3)与 qt5ct(Qt5)走 XKB 与 XI2 零协议错误(已达成,见 §10) |
-| **M3 接入宿主** | Avalonia 宿主(原生窗口、输入、HiDPI、窗口管理器请求);替换 VcXsrv 路径;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序 |
-| M4 | MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
+| **M3 接入宿主** ✅ | Avalonia 宿主(原生窗口、输入、HiDPI、窗口管理器请求、剪贴板、Windows 键盘布局);引擎选择(内置默认,VcXsrv 可选);SSH 的 x11 通道经连接器直接接进服务端;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序;真实的 xterm / xeyes / gedit / qt5ct 画成原生窗口,移动、缩放、关闭、键盘走得通(已达成,见 §10) |
+| M4 | XKB 的四层键类型(AltGr 层,宿主跟随德语、法语等布局时要用)、MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
 
 ## 9. 测试策略
 
@@ -217,3 +217,25 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **功能完备验收(2026-09-23)**:单元测试 121 条;interop 8 条零协议错误;手动验证 `xdpyinfo -ext all`、xdotool 经 XTEST + XKB
   往 xterm 打字、xprintidle、xrestop、xkbcomp、`xinput list / list-props / query-state / test-xi2`、gedit(GTK3,XI2 + EWMH;
   双击 HeaderBar 发出最大化请求、照办后铺满)、qt5ct(Qt5,XI2)。
+- **M3:宿主是一个 `IXServerHost` 实现,不另起进程**:宿主侧(`src/VelaShell/Services/XServer/AvaloniaXServerHost.cs`)每个 X 顶层窗口
+  开一个 Avalonia 原生窗口,位图与 X 像素一一对应、按 DPI 缩放不插值;回调全部 Post 到 UI 线程。根窗口 = 所有显示器的外接矩形,
+  每台显示器一个 RANDR 输出,显示器增减时重算;DPI 取主显示器的缩放(整数倍时 GTK 的窗口缩放跟着设)。
+  X 坐标是**内容区**的位置,系统标题栏与边框在外,尺寸经 `_NET_FRAME_EXTENTS` 告诉客户端。
+  没给位置(映射在 0,0)的普通窗口像窗口管理器那样摆:对话框压在父窗口正中,其余在主显示器工作区正中。
+- **M3:引擎可选,默认内置**:`ILocalXServer` 由一个选择器实现,按设置在内置与 VcXsrv 之间转发,正在运行的那个优先
+  (改了设置不会去停一个正在显示窗口的 X 服务端)。VcXsrv 只在 Windows 上;其它平台只有内置。
+- **M3:SSH 的 x11 通道经连接器直接接进服务端**:SSH 库的 `X11ForwardOptions.LocalConnector`
+  (`velashell-docs/zh/ssh/spec/07` §7.5.9)每条通道拿一对内存双工流,一端交给 `X11Server.ServeAsync`。假 cookie 的核对照旧,
+  服务端按本机连接放行。只在受信模式下用;非受信模式要 `xauth` 连显示,仍走 TCP。服务端照样监听环回 TCP 与 Unix 套接字,
+  本机别的 X 程序可以用 `DISPLAY=localhost:N` 连进来。
+- **M3:键盘布局跟随 Windows**:宿主按物理键(扫描码)注入 X 键码;Windows 上用系统的 `ToUnicodeEx` 按当前布局算出主键区
+  无修饰与 Shift 两层的键值,换进服务端的键位表(布局切换后下次激活 X 窗口时重算)。AltGr 层暂不生成 —— 服务端的 XKB 描述目前只推两层;
+  其它平台按 US。
+- **M3 真实窗口验证中修掉的**:① 释放像素图时一并销毁建在它上面的 Damage 对象是错的 —— `FreePixmap` 只删 ID,xeyes 用 Present 换帧时
+  随后的 `DamageDestroy` 因此回 BadDamage、客户端退出;改为 Damage 随 `DamageDestroy` 或客户端断开释放。② Unix 套接字监听
+  在套接字文件已存在时会先删掉它 —— 桌面自己的 Xorg 通常不开 TCP,TCP 那一侧的占用检查看不出它,于是会删掉桌面的套接字;
+  改为先试着连一下,有人应答就不碰。③ 宿主侧:显示之后改原生窗口尺寸要设 `Width` / `Height`(设 `ClientSize` 只改属性值);
+  我们自己改尺寸引起的 `Resized` 可能晚一拍才到,只把用户拖动与窗口状态变化回报给服务端,否则会拿旧尺寸把客户端刚设的新尺寸改回去。
+- **M3 验收(2026-09-24)**:无头 UI 用例(映射 → 原生窗口尺寸、标题、像素;点关闭 → 客户端断开 → 窗口收掉);
+  `scripts/xserver/host-demo/demo.cs` 起真的原生窗口,容器里的 xterm、xeyes、gedit(GTK3,自绘标题栏、菜单弹层)、qt5ct(Qt5)
+  画对且几何一致;X 端移动 / 缩放、原生窗口的关闭(WM_DELETE_WINDOW)、原生窗口上的按键到达 xterm 都已实测。

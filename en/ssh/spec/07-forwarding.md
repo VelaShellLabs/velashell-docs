@@ -494,6 +494,29 @@ a remote display as `host:N`, and a macOS launchd one as the full socket path �
 | The caller **explicitly** requested it on this execution | **Throw** — they explicitly want X11; silently degrading would be lying to them |
 | Only a connection-level switch (e.g. `ForwardX11 yes` in `ssh_config`) | **Log and start normally** — otherwise an existing configuration would make every command fail to run |
 
+### 7.5.9 Reaching the local display through a connector
+
+The local X server may live inside the caller's own process (for example an X server embedded in the host application).
+Connecting to a local port is then only a detour, and it keeps a port open just for this. The forwarding options can carry a
+**connector**: it is called once per incoming `x11` channel and returns a duplex stream that goes straight into the X server.
+
+〔Decision〕The fake-cookie check stays **as is** (§7.5.2) — that layer guards against the remote side and has nothing to do with
+how the local end is reached. Once the check passes, the cookie in the setup message is replaced with the caller-supplied
+"local cookie" (empty if none was given) and the message is written into the stream.
+Access control is the connector side's responsibility: the stream it hands out counts as an already-trusted local connection.
+
+〔Decision〕**Trusted mode only.** Untrusted mode needs `xauth` to connect to the local display with full authorization and sign a
+restricted cookie (§7.5.7), and there may be no display behind the connector for `xauth` to reach. When both are set, the X11
+forwarding request fails (handled per the two cases of §7.5.8) instead of silently falling back to trusted mode — that would
+quietly loosen the isolation the caller asked for.
+
+〔Decision〕The screen number and diagnostics still come from the display address (`DISPLAY` or the one the caller gave), so a
+display address is still required in connector mode.
+
+〔Decision〕When the connector side is unavailable (the X server has stopped or been disposed), that `x11` channel is treated as
+"local display unreachable": it is not counted as accepted, the channel is closed afterwards, and other channels on the same
+forwarding are unaffected.
+
 ## 8. Edge cases and errors at a glance
 
 | Situation | Handling |

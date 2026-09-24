@@ -1901,6 +1901,14 @@ OpenSSH 的 `ForwardX11Timeout` 只管非受信模式。**我们两种模式都�
 `DuplexRelay` / `ChannelRelayEndpoint` 搬运层），
 而且是先写规格（`spec/07` §7.5）再实现。
 
+#### 补记（2026-09-24）：本机连接器
+
+宿主内置了 X server（`VelaShell.XServer`，与本库同仓、互不引用）。本机显示就在同一个进程里时，再去连一个本机端口只是绕路。
+`X11ForwardOptions.LocalConnector` 让调用方给一个连接器：每条 `x11` 通道调它一次拿一条双工流，建立报文里的 cookie 换成
+`LocalCookie`（没给就是空的）后写进去（`spec/07` §7.5.9）。**假 cookie 的核对不变** —— 那一层防的是远端。
+只支持受信模式：非受信模式要 `xauth` 连本机显示签受限 cookie，与连接器同时设时请求直接失败，不静默退回受信。
+连接器那一端不可用时按「本机显示连不上」处理。用例 3 条（对搬与 cookie 替换、连接器不可用、与非受信同设）。
+
 ### 11.2.15 那个偶发挂死：通道登记得太晚（2026-09-22）
 
 满跑二十轮红三轮，每次红的都不是同一条用例 ——
@@ -2304,7 +2312,7 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 - **SSH1**。已死，且不安全。
 - **自己实现 AES / SHA / RSA / ECDH**。BCL 有，且有硬件加速。
 - **同步 API**。原则 1。
-- **X11 转发的另一端**（X server）。转发通道本身**已经做了**（§11.2.14），X server 不做 —— 与 VelaShell 现有决策一致。
+- **X11 转发的另一端**（X server）不在本库。转发通道本身**已经做了**（§11.2.14）；X server 是宿主仓库里另一个库 `VelaShell.XServer`，两者经 `X11ForwardOptions.LocalConnector` 对接（§11.2.14 补记）。
 - **Mosh**。另一套协议栈，与 VelaShell 现有决策一致。
 
 ---
