@@ -310,6 +310,13 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   hands one end to `X11Server.ServeAsync`. The fake-cookie check is unchanged; the server admits the stream as a local connection.
   Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP. The server keeps listening
   on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N`.
+  **Two corrections on 2026-09-24**: ① the connector picks the server that is running **at the moment** each channel arrives,
+  instead of remembering the one that was running when the display was resolved — an SSH session outlives the server, and after
+  the user stopped and restarted the X Server from the title bar, every channel of an existing session used to go into a disposed
+  server: the remote side only saw `Failed to open display`, and nothing was logged locally. If no server is running at that
+  moment, the channel is refused and a log line is written. ② When the remote side sends `CHANNEL_EOF`, the connector's end must
+  read EOF too (a new decision in spec 07 §7.5.9): previously, after the remote program exited, its connection and window stayed
+  up until the whole SSH session ended.
 - **M3: the keyboard layout follows Windows**: the host injects X keycodes by physical key (scan code); on Windows the system's
   `ToUnicodeEx` computes the unshifted and Shift levels of the main key block for the current layout, which replace the
   server's keymap (recomputed the next time an X window is activated after a layout switch). The AltGr level is not generated

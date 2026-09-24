@@ -10,6 +10,7 @@ of any existing X server.
 | Document | Content |
 | --- | --- |
 | [design/architecture.md](design/architecture.md) | **Architecture and rationale**: why we build it, goals and non-goals, clean-room rules, layering, threading model, host interface, key trade-offs, milestones, test strategy, decision log. Read this first |
+| [troubleshooting.md](troubleshooting.md) | **Troubleshooting**: remote GUI programs over SSH forwarding — the DRI3 warning, GTK4 taking 25 seconds to start (desktop portal), sluggish interaction (GL pushing whole-window pixels), and two fixed host defects |
 
 ## Where the code lives
 

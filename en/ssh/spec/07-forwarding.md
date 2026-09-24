@@ -517,6 +517,13 @@ display address is still required in connector mode.
 "local display unreachable": it is not counted as accepted, the channel is closed afterwards, and other channels on the same
 forwarding are unaffected.
 
+〔Decision〕**When the remote side sends `CHANNEL_EOF`, the connector's stream must also learn that the peer is done sending.**
+With a local socket this is `shutdown(SEND)` (§2.2); a connector only hands over a stream, so another way is needed: if the
+stream itself can close its write side alone (the in-process duplex stream), use that; otherwise **close the whole stream** —
+in the X protocol a client that has finished sending has ended the connection; there is no "done sending, still waiting for a
+reply" pattern, so falling back to a full close loses nothing. Skip this step and the X server never reads EOF: the remote
+program exited long ago, yet its window stays up until the whole SSH session ends.
+
 ## 8. Edge cases and errors at a glance
 
 | Situation | Handling |

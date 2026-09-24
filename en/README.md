@@ -10,7 +10,7 @@
 | [`cli/`](cli/) | `vela-plugin` command-line manual |
 | [`templates/`](templates/) | Plugin dev guide, packaging and publishing |
 | [`ssh/`](ssh/) | VelaShell.Ssh, the host's SSH library: architecture and rationale, behavioural specs 00–09, getting started |
-| [`xserver/`](xserver/) | VelaShell.XServer, an embeddable X11 server library: architecture, clean-room rules, milestones and decision log |
+| [`xserver/`](xserver/) | VelaShell.XServer, an embeddable X11 server library: architecture, clean-room rules, milestones, decision log, troubleshooting over SSH forwarding |
 
 ## Read in this order to write a plugin
 
