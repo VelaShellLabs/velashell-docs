@@ -9,6 +9,7 @@ VcXsrv / XQuartz。它是**独立实现**,不是任何现有 X 服务端的 fork
 | 文档 | 内容 |
 | --- | --- |
 | [design/architecture.md](design/architecture.md) | **架构与原理**:为什么自己写、目标与非目标、净室规程、分层、线程模型、宿主接口、关键取舍、里程碑、测试策略、决策记录。先读这个 |
+| [troubleshooting.md](troubleshooting.md) | **排障**:远端图形程序经 SSH 转发时的 DRI3 警告、GTK4 启动慢 25 秒(桌面门户)、操作卡(GL 整窗推像素),以及已修的两处宿主缺陷 |
 
 ## 代码在哪
 

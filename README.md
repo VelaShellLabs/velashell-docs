@@ -45,6 +45,7 @@ zh/                    en/                    内容
 | 理解宿主的分层与依赖方向 | [架构](zh/host/architecture.md) · [Architecture](en/host/architecture.md) |
 | 改宿主的 SSH 库(协议、SFTP、转发) | [SSH 库](zh/ssh/) · [SSH library](en/ssh/) |
 | 改 X11 服务端库(本机显示远端图形程序) | [X 服务端库](zh/xserver/) · [X server library](en/xserver/) |
+| 远端图形程序经 SSH 转发启动慢、卡、打不开 | [X Server 排障](zh/xserver/troubleshooting.md) · [X Server troubleshooting](en/xserver/troubleshooting.md) |
 | 把 Xshell / WinSCP / `~/.ssh/config` 的会话搬过来 | [会话导入](zh/host/会话导入.md) · [Session import](en/host/session-import.md) |
 | 看整个生态怎么拼起来 | 下面这张图 |
 
