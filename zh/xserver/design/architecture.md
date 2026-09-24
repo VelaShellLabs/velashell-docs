@@ -141,7 +141,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   `_NET_ACTIVE_WINDOW`、工作区与顶层的 `WM_STATE` / `_NET_FRAME_EXTENTS` 等;根窗口 ClientMessage 里的请求翻成
   `XWindowManagerRequest` 交给宿主,由宿主决定照不照办、办完用 `SetTopLevelStates` 写回。
   GTK3 的 HeaderBar、Qt 的无边框窗口都依赖这些属性存在。
-- **XKB 由核心键位表推出**:不单独维护一份 XKB 键位表,四个规范类型、修饰键动作、SymInterpret、指示灯、键名都从
+- **XKB 由核心键位表推出**:不单独维护一份 XKB 键位表,四个规范类型(外加 AltGr 层用的两个四级类型)、修饰键动作、SymInterpret、指示灯、键名都从
   核心表算出来;核心表一变(xmodmap、宿主 `SetKeyboardMapping`),XKB 跟着变并发 MapNotify。
   XKB 自己的改表请求(SetMap / SetCompatMap 等)不支持。
 - **XInput2 的设备拓扑固定**:主指针 2 / 主键盘 3 各挂一个从设备(4、5)。XI2 事件与核心事件走同一条传播路径,
@@ -157,7 +157,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | **M2 现代工具包** ✅ | SHAPE、XFIXES、RANDR(只读)、RENDER;剪贴板与宿主互通;XSETTINGS 管理器 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、`qt5ct` 画出内容、零协议错误 —— 已达成,见 §10) |
 | **功能完备** ✅ | XKEYBOARD、XInputExtension 2.2、XTEST、XINERAMA、SYNC、DAMAGE、Composite、DOUBLE-BUFFER、Present、MIT-SCREEN-SAVER、DPMS、X-Resource、Generic Event;窗口管理器角色;Unix 套接字;运行中换布局 / DPI / 键盘布局;全库性能复查 | xkbcomp、xinput、xdotool、xprintidle、xrestop 读写正确;gedit(GTK3)与 qt5ct(Qt5)走 XKB 与 XI2 零协议错误(已达成,见 §10) |
 | **M3 接入宿主** ✅ | Avalonia 宿主(原生窗口、输入、HiDPI、窗口管理器请求、剪贴板、Windows 键盘布局);引擎选择(内置默认,VcXsrv 可选);SSH 的 x11 通道经连接器直接接进服务端;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序;真实的 xterm / xeyes / gedit / qt5ct 画成原生窗口,移动、缩放、关闭、键盘走得通(已达成,见 §10) |
-| M4 | XKB 的四层键类型(AltGr 层,宿主跟随德语、法语等布局时要用)、MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
+| M4 | MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
 
 ## 9. 测试策略
 
@@ -239,3 +239,9 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **M3 验收(2026-09-24)**:无头 UI 用例(映射 → 原生窗口尺寸、标题、像素;点关闭 → 客户端断开 → 窗口收掉);
   `scripts/xserver/host-demo/demo.cs` 起真的原生窗口,容器里的 xterm、xeyes、gedit(GTK3,自绘标题栏、菜单弹层)、qt5ct(Qt5)
   画对且几何一致;X 端移动 / 缩放、原生窗口的关闭(WM_DELETE_WINDOW)、原生窗口上的按键到达 xterm 都已实测。
+- **AltGr 层(2026-09-24)**:XKB 加 FOUR_LEVEL、FOUR_LEVEL_ALPHABETIC 两个类型(类型表 6 个)。核心键位表第 5、6 列有键值的键推成四级 ——
+  列序按 XKB 规范 §17 的核心兼容约定:组 1 第 1、2 级,组 2 第 1、2 级,组 1 第 3、4 级;第三、四级由 Mod5 选。宿主 API 加
+  `SetModifierMapping`。Windows 宿主用 `ToUnicodeEx` 按 Ctrl+Alt 取 AltGr 层,布局有 AltGr 字符时出 6 列、右 Alt 设成
+  `ISO_Level3_Shift` 进 Mod5;系统为 AltGr 补的假左 Ctrl 不转发(否则 X 程序看到 Ctrl+AltGr)。顺带修掉:更窄的
+  ChangeKeyboardMapping(`xmodmap -e "keycode 108 = …"` 每键码只发 1 列)会把整张键位表收成 1 列;现在列数只放宽不收窄。
+  验证:`xmodmap` 设好之后 `xkbcomp` 导出四级键、其余键仍两级,xterm 里 AltGr+q 打出 `@`。

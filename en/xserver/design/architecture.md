@@ -170,7 +170,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   requests in root-window ClientMessages become `XWindowManagerRequest`s for the host, which decides whether to honour
   them and writes the result back with `SetTopLevelStates`. GTK3's HeaderBar and Qt's frameless windows depend on these
   properties being present.
-- **XKB is derived from the core keymap**: there is no separately maintained XKB keymap — the four canonical types,
+- **XKB is derived from the core keymap**: there is no separately maintained XKB keymap — the four canonical types (plus two four-level types for the AltGr level),
   modifier actions, SymInterprets, indicators and key names are all computed from the core table; when the core table
   changes (xmodmap, the host's `SetKeyboardMapping`), XKB follows and sends MapNotify. XKB's own mapping-change requests
   (SetMap / SetCompatMap, …) are not supported.
@@ -189,7 +189,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
 | **M2 modern toolkits** ✅ | SHAPE, XFIXES, RANDR (read-only), RENDER; clipboard exchange with the host; XSETTINGS manager | Simple GTK3 / Qt5 programs work (`zenity`, `gedit`, `qt5ct` draw with zero protocol errors — achieved, see §10) |
 | **Feature-complete** ✅ | XKEYBOARD, XInputExtension 2.2, XTEST, XINERAMA, SYNC, DAMAGE, Composite, DOUBLE-BUFFER, Present, MIT-SCREEN-SAVER, DPMS, X-Resource, Generic Event; the window-manager role; Unix sockets; runtime layout / DPI / keyboard-layout changes; library-wide performance review | xkbcomp, xinput, xdotool, xprintidle, xrestop read and write correctly; gedit (GTK3) and qt5ct (Qt5) run on XKB and XI2 with zero protocol errors (achieved, see §10) |
 | **M3 host integration** ✅ | Avalonia host (native windows, input, HiDPI, window-manager requests, clipboard, Windows keyboard layout); engine choice (built-in by default, VcXsrv optional); SSH x11 channels go straight into the server through a connector; trim the settings page | The host's "X Server" button no longer depends on an external program; real xterm / xeyes / gedit / qt5ct become native windows, and moving, resizing, closing and typing work (achieved, see §10) |
-| M4 | XKB four-level key types (the AltGr level, needed when the host follows layouts such as German or French), MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs, XIChangeHierarchy, XKB mapping-change requests | As needed |
+| M4 | MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs, XIChangeHierarchy, XKB mapping-change requests | As needed |
 
 ## 9. Test strategy
 
@@ -300,3 +300,11 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   disconnected → window gone); `scripts/xserver/host-demo/demo.cs` opens real native windows, and xterm, xeyes, gedit (GTK3,
   self-drawn title bar, menu popups) and qt5ct (Qt5) from a container render correctly with matching geometry; X-side
   move / resize, closing a native window (WM_DELETE_WINDOW) and keys on a native window reaching xterm were all verified.
+- **The AltGr level (2026-09-24)**: XKB gains two types, FOUR_LEVEL and FOUR_LEVEL_ALPHABETIC (six types in the table). Keys with
+  keysyms in core columns 5 and 6 become four-level — the column order follows the core-compatibility convention of XKB §17:
+  group 1 levels 1–2, group 2 levels 1–2, group 1 levels 3–4; Mod5 selects levels 3 and 4. The host API gains
+  `SetModifierMapping`. The Windows host reads the AltGr level with `ToUnicodeEx` under Ctrl+Alt, emits six columns when the
+  layout has AltGr characters, and makes the right Alt `ISO_Level3_Shift` in Mod5; the fake left Ctrl that Windows adds for
+  AltGr is not forwarded (otherwise X programs would see Ctrl+AltGr). Fixed along the way: a narrower ChangeKeyboardMapping
+  (`xmodmap -e "keycode 108 = …"` sends one column per keycode) shrank the whole keymap to one column; the width now only grows.
+  Verified: after `xmodmap`, `xkbcomp` dumps the four-level key while other keys keep two levels, and AltGr+q in xterm types `@`.
