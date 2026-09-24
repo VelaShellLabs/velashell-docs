@@ -362,3 +362,12 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   `setxkbmap -print -layout de | xkbcomp - $DISPLAY` swaps y / z and brings in the AltGr level; in a Linux container `xdpyinfo`
   lists MIT-SHM and `x11perf -shmput10` runs; `glxgears` draws identical gears on both paths (lighting, flat shading, depth), and
   `glxheads` renders correctly through indirect rendering.
+- **Keyboard layout: "auto" follows the system on all three platforms, and a layout can be chosen (2026-09-24)**: the host reads
+  the current layout per platform — Windows `ToUnicodeEx`; macOS `TISCopyCurrentKeyboardLayoutInputSource` + `UCKeyTranslate` (the
+  Option level maps to AltGr, the right Option becomes ISO_Level3_Shift and the left Option stays Alt; TIS may only be called on the
+  main thread); Linux reads the keymap of the desktop's `$DISPLAY` (XWayland on Wayland) through libxkbcommon-x11 and keeps levels 3–4
+  only when the desktop's right Alt is a Level3 key (xkeyboard-config keymaps always contain a virtual `<LVL3>` key, so scanning the
+  whole table would mark US as having AltGr too). The "Keyboard layout" setting is now shared by both engines; with a chosen layout the
+  built-in engine uses keymap tables shipped with the app (generated from xkeyboard-config through libxkbcommon by
+  `scripts/xserver/keymaps/generate.cs`, 27 layouts). All three sources go through one outlet (four levels in the §17 core column
+  order) into the server's core keymap, from which XKB is derived as usual; the server library itself is unchanged.

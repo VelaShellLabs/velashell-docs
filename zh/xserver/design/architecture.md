@@ -280,3 +280,9 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   真实客户端用例 +3(`glxinfo` 两条路径、`glxgears` 直接 / 间接)。手动:`xinput` 增删主设备、挂接 / 浮动从设备;
   `setxkbmap -print -layout de | xkbcomp - $DISPLAY` 之后 y / z 互换、AltGr 层就位;Linux 容器里 `xdpyinfo` 列出 MIT-SHM、
   `x11perf -shmput10` 跑通;`glxgears` 两条路径画出的齿轮一致(光照、平直着色、深度),`glxheads` 间接渲染正常。
+- **键盘布局:「自动」三个平台都跟随系统,也可以手选(2026-09-24)**:宿主侧按平台取当前布局 —— Windows `ToUnicodeEx`;macOS
+  `TISCopyCurrentKeyboardLayoutInputSource` + `UCKeyTranslate`(Option 层对应 AltGr,右 Option 成为 ISO_Level3_Shift,左 Option 仍是 Alt;
+  TIS 只能在主线程上调);Linux 经 libxkbcommon-x11 读桌面 `$DISPLAY`(Wayland 上是 XWayland)的键位表,只有桌面的右 Alt 是 Level3 键时
+  才保留第三、四层(xkeyboard-config 的表里总有一个虚拟 `<LVL3>` 键,扫全表会把美式也判成有 AltGr)。设置里的「键盘布局」改为两种引擎共用,
+  手选时内置引擎用随程序带的键位表(`scripts/xserver/keymaps/generate.cs` 经 libxkbcommon 从 xkeyboard-config 生成,27 个布局)。
+  三条来源经同一个出口(四层按 §17 的核心列序)换进服务端的核心键位表,XKB 照常推出;服务端库本身不变。
