@@ -277,14 +277,14 @@ Send:    message → compress → payload → pad → encrypt/MAC
 Receive: decrypt/verify → strip padding → payload → decompress → message
 ```
 
-- `zlib` (RFC 4253 §6.2): takes effect **immediately from the first `SSH_MSG_NEWKEYS`** —— authentication packets are in the compressed stream too.
-  It is installed on the spot at NEWKEYS by the first key exchange, and **MUST NOT** wait until after authentication.
-  〔History〕An early implementation installed both kinds only after authentication: when plain `zlib` was negotiated, the server compressed from NEWKEYS onward
-  while we sent the authentication request in plaintext, and the two ends desynchronized on the very first authentication packet.
-- `zlib@openssh.com`: compression starts only **after authentication succeeds**.
+- `zlib@openssh.com`: compression starts only **after authentication succeeds**. This is the only compression algorithm implemented.
   This avoids exposing compression state to arbitrary connecting parties during the unauthenticated phase.
   〔Note〕The switch point is **the next packet after** `SSH_MSG_USERAUTH_SUCCESS` is received/sent.
-- **After every key re-exchange, the compression context MUST be reset** (for both `zlib` and `zlib@openssh.com`).
+  **No** compressor is installed at the NEWKEYS of the first key exchange.
+- `zlib` (RFC 4253 §6.2): **not implemented** (rationale in 00 §6.5). It compresses from the first NEWKEYS;
+  if it were negotiated but treated as no compression, the two ends would desynchronize on the first authentication packet, surfacing only as an unexplained decompression error.
+  So if the negotiated compression algorithm is anything other than `none` / `zlib@openssh.com`, negotiation fails on the spot with a key-exchange error.
+- **After every key re-exchange, the compression context MUST be reset**.
   The symptom of not resetting it is that the peer fails to decompress after rekeying —— by which time it is no longer recognizable as a compression problem.
 
 The compressed `payload` length is still subject to the limit of §1.1;
