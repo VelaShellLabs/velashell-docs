@@ -3,7 +3,8 @@
 中文:[`../../../zh/xserver/design/architecture.md`](../../../zh/xserver/design/architecture.md)
 
 > Status: **M1 (core protocol), M2 (modern toolkits), the "feature-complete" round (a dozen more extensions including XKB and
-> XInput2, the window-manager role, a library-wide performance review) and M3 (host integration) complete**; project started
+> XInput2, the window-manager role, a library-wide performance review), M3 (host integration) and M4 (synchronous grabs, device
+> topology, XKB mapping changes, MIT-SHM, GLX) complete**; project started
 > 2026-09-23. The host's "X Server" button starts this library by default (one Avalonia native window per X window) and SSH X11
 > forwarding connects straight into it; the VcXsrv the user installed becomes an optional engine on Windows (see
 > [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2 and §14).
@@ -39,7 +40,10 @@ top-level windows as native windows through Avalonia (rootless), giving one code
 - No **real display hardware** (DRM/KMS, framebuffer devices) or hardware input — that belongs to a full X server;
   we only build the embeddable half.
 - No XDMCP, no multiple screens (Screen > 1), no indexed colour / writable colormaps (24-bit TrueColor only).
-- No GLX / DRI3 / MIT-SHM. Present does software copies only (there is no video memory to flip).
+- No DRI2 / DRI3 (there is no GPU to hand to clients). GLX only registers direct rendering (the client renders in software
+  itself and sends pixels with PutImage) and offers software indirect rendering of a fixed-function GL subset; MIT-SHM exists
+  only on Linux and only for local clients connected over a Unix socket. Present does software copies only (there is no video
+  memory to flip).
 
 ## 3. Clean-room rules
 
@@ -51,10 +55,14 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
    *The X Rendering Extension* (and the PDF Reference blend-mode formulas it cites), *The X Keyboard Extension:
    Protocol Specification*, *The X Input Extension* (1.5 and 2.2), *XTEST Extension*, *X Synchronization Extension*,
    *X Damage Extension*, *Composite Extension*, *Double Buffer Extension*, *The Present Extension*, *MIT-SCREEN-SAVER*,
-   *DPMS*, *X-Resource*, *Generic Event Extension*, and XINERAMA — which has no standalone specification document, so
-   its wire format follows the protocol definitions X.Org publishes in panoramiXproto), ICCCM, EWMH and freedesktop.org's
-   XSETTINGS specification. **Every protocol file's header names the specification and section it implements.**
-2. **No other X server's source is opened while implementing** (X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv).
+   *DPMS*, *X-Resource*, *Generic Event Extension*, *The MIT Shared Memory Extension* 1.1, and XINERAMA — which has no
+   standalone specification document, so its wire format follows the protocol definitions X.Org publishes in panoramiXproto),
+   ICCCM, EWMH and freedesktop.org's XSETTINGS specification; GLX follows Khronos' *OpenGL Graphics with the X Window System*
+   1.4, the *GLX Extensions for OpenGL Protocol Specification* 1.3 (the encoding) and *The OpenGL Graphics System* 1.5 (GL
+   semantics for indirect rendering), with opcodes and enum values taken from the Khronos registry's `gl.xml` / `glx.xml`.
+   **Every protocol file's header names the specification and section it implements.**
+2. **No other X server's source is opened while implementing** (X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv),
+   and no OpenGL / GLX implementation's source either (Mesa and the like).
 3. Constants from the specifications (opcodes, event codes, error codes, predefined atoms, mask bits) take their
    specified values — they are protocol facts, not copyrightable, and must not be changed to "look different".
 4. **Data is not code**: the built-in bitmap fonts are BDF files from X.Org's `font-misc-misc` (copyright notice:
@@ -70,14 +78,17 @@ Server/       X11Server: listening (TCP 6000+N, Unix sockets) and ServeAsync (an
               deferred host callbacks (DeferredHost), client table and sequence numbers, GrabServer, BIG-REQUESTS lengths;
               request handlers split into partial files by area (Windows / Exposure / Events / Properties / Graphics /
               Text / Colors / Input / Extensions / Queries, plus one per extension: Shape / XFixes / RandR / Monitors /
-              Render / Damage / CompositeDbe / Sync / Present / Xkb / XInput / XTest / ScreenSaver, the window-manager
-              role in Ewmh, clipboard exchange in Clipboard, the XSETTINGS manager in XSettings)
+              Render / Damage / CompositeDbe / Sync / Present / Xkb / XkbSetMap / XInput / XiHierarchy / SyncGrabs /
+              XTest / ScreenSaver / Shm / Glx, the window-manager role in Ewmh, clipboard exchange in Clipboard, the
+              XSETTINGS manager in XSettings)
 Windowing/    Window model (tree, geometry, attributes, event selections, passive grabs, top-level buffer, the three SHAPE shapes)
 Resources/    GCs, pixmaps, colormaps, cursors, font handles, colour-name table, RENDER pictures and glyph sets
 Drawing/      32-bit software framebuffer, regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
               points / lines (thin Bresenham + wide-line polygons) / rectangles / scan-line polygon fill / arcs /
               image blocks / text; RENDER: pixel formats, compositing operators and blend modes, sources (image / solid /
               gradients with repeat, transform, filter), trapezoid coverage
+Gl/           Software GL for GLX indirect rendering: render-command decoding, display lists, matrix stacks, lighting,
+              clipping, triangle / line / point rasterization, textures, per-fragment operations, queries
 Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching, synthesized cursor and nil2 fonts
 Input/        Keycode ↔ keysym table (evdev-style keycodes), XKB evdev key names, modifier mapping, grab data structures (core and XI2)
 Host/         Host-facing API: IXServerHost, XTopLevelWindow, XServerOptions, XMonitor, window-manager requests and enums, XKeycodes
@@ -172,11 +183,26 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   properties being present.
 - **XKB is derived from the core keymap**: there is no separately maintained XKB keymap — the four canonical types (plus two four-level types for the AltGr level),
   modifier actions, SymInterprets, indicators and key names are all computed from the core table; when the core table
-  changes (xmodmap, the host's `SetKeyboardMapping`), XKB follows and sends MapNotify. XKB's own mapping-change requests
-  (SetMap / SetCompatMap, …) are not supported.
-- **XInput2's device topology is fixed**: master pointer 2 / master keyboard 3, each with one slave (4, 5). XI2 events
-  travel the same propagation path as core events — on a given window, a core selection receives core events and an
-  XI2 selection receives XI2 events; XIChangeHierarchy returns BadImplementation.
+  changes (xmodmap, the host's `SetKeyboardMapping`), XKB follows and sends MapNotify. XKB's SetMap writes the uploaded
+  keysyms (in the §17 column order) and modifier map back into the core table, which is then derived as usual; SetCompatMap,
+  SetNames and the other mapping-change requests are not supported.
+- **XInput2's device topology can change, but this is not full multi-pointer X**: it starts with master pointer 2 / master
+  keyboard 3, each with one slave (4, 5); XIChangeHierarchy adds and removes master devices and attaches slaves to other
+  masters or floats them (a floating slave reports only slave XI2 events and generates no core events). Pointer position,
+  focus and grabs remain single — the host has one set of physical input, so full MPX would buy nothing. XI2 events travel
+  the same propagation path as core events — on a given window, a core selection receives core events and an XI2 selection
+  receives XI2 events.
+- **MIT-SHM is for the local machine only**: it is registered only on Linux and is visible only to clients connected over a
+  Unix socket — a shmid from a remote client forwarded over SSH means nothing on this machine. Segment size and owner come
+  from `/proc/sysvipc/shm` and the peer uid from SO_PEERCRED; a peer that is neither owner nor creator, on a segment not
+  opened to others, gets BadAccess (otherwise a local client could read and write someone else's shared memory through the
+  server). Shared pixmaps and 1.2's fd passing are not implemented.
+- **Two GLX paths**: without DRI3 / DRI2, Mesa defaults to drisw — the client renders with llvmpipe (GL 4.5) and sends
+  pixels with PutImage, so the server only has to register configs, contexts and drawables; programs forwarded over SSH
+  work the same way. With `LIBGL_ALWAYS_INDIRECT` forced, the software GL in `Gl/` executes a subset of the fixed-function
+  pipeline and honestly reports version 1.1 (3D textures are not implemented); evaluators, the accumulation buffer,
+  selection / feedback, mipmap LOD and stippling are not implemented. A GLX surface is at most 4096 × 4096 pixels, and one
+  request may expand at most 4 million display-list commands (lists calling each other expand exponentially).
 - **Clipboard**: host → X, the server itself owns CLIPBOARD and answers per ICCCM; X → host, the server fetches the text
   with a hidden InputOnly window as requestor (UTF8_STRING with STRING fallback, INCR supported). When the host writes
   back the text it just received, the server does not take the selection, so the two sides never fight over it.
@@ -189,7 +215,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
 | **M2 modern toolkits** ✅ | SHAPE, XFIXES, RANDR (read-only), RENDER; clipboard exchange with the host; XSETTINGS manager | Simple GTK3 / Qt5 programs work (`zenity`, `gedit`, `qt5ct` draw with zero protocol errors — achieved, see §10) |
 | **Feature-complete** ✅ | XKEYBOARD, XInputExtension 2.2, XTEST, XINERAMA, SYNC, DAMAGE, Composite, DOUBLE-BUFFER, Present, MIT-SCREEN-SAVER, DPMS, X-Resource, Generic Event; the window-manager role; Unix sockets; runtime layout / DPI / keyboard-layout changes; library-wide performance review | xkbcomp, xinput, xdotool, xprintidle, xrestop read and write correctly; gedit (GTK3) and qt5ct (Qt5) run on XKB and XI2 with zero protocol errors (achieved, see §10) |
 | **M3 host integration** ✅ | Avalonia host (native windows, input, HiDPI, window-manager requests, clipboard, Windows keyboard layout); engine choice (built-in by default, VcXsrv optional); SSH x11 channels go straight into the server through a connector; trim the settings page | The host's "X Server" button no longer depends on an external program; real xterm / xeyes / gedit / qt5ct become native windows, and moving, resizing, closing and typing work (achieved, see §10) |
-| M4 | MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs, XIChangeHierarchy, XKB mapping-change requests | As needed |
+| **M4** ✅ | Synchronous grabs (freezing, and release / single-step / replay through AllowEvents / XIAllowEvents); XIChangeHierarchy; XKB SetMap; MIT-SHM 1.1 (Linux, local clients); GLX 1.4 (registration of direct rendering + software indirect rendering) | `xinput create-master / reattach / float / remove-master`, `setxkbmap … \| xkbcomp - $DISPLAY`, `x11perf -shmput10`, `glxinfo` / `glxgears` on both the direct and the indirect path with zero protocol errors (achieved, see §10) |
 
 ## 9. Test strategy
 
@@ -308,3 +334,31 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   AltGr is not forwarded (otherwise X programs would see Ctrl+AltGr). Fixed along the way: a narrower ChangeKeyboardMapping
   (`xmodmap -e "keycode 108 = …"` sends one column per keycode) shrank the whole keymap to one column; the width now only grows.
   Verified: after `xmodmap`, `xkbcomp` dumps the four-level key while other keys keep two levels, and AltGr+q in xterm types `@`.
+- **M4 extension numbers** (continuing): MIT-SHM 147 (event 91 Completion, error 149 BadShmSeg), GLX 148 (event 92
+  PbufferClobber, errors 150–162). GLX FBConfigs start at `0x101`, four of them: one single- and one double-buffered per
+  TrueColor visual, colour 8/8/8 (plus 8 bits of alpha on the ARGB visual), depth 24, stencil 8, no accumulation buffer and
+  no multisampling; GLX 1.2 visual configs have one entry per visual, using its double-buffered config.
+- **Synchronous grabs replace "asynchronous only" (2026-09-24)**: M1 treated Sync modes as asynchronous; M4 implements real
+  freezing — one freezer and one input queue per device, with host-injected and XTEST input queued while frozen; AllowEvents 0–7
+  and XIAllowEvents release, single-step (SyncPointer / SyncKeyboard / SyncBoth) and replay (a replay skips passive grabs on
+  the grab window and its ancestors); when the grab ends (including client disconnect) the device thaws and its queue goes
+  back to the execution loop.
+- **XIChangeHierarchy's RemoveMaster**: in AttachToMaster mode a return device of 0 means the virtual core pointer / keyboard —
+  `xinput remove-master` sends exactly that by default, and treating it as an invalid device returned BadMatch.
+- **XKB SetMap keeps no separate XKB table**: types, actions, behaviours, explicit components and the virtual modifier map are
+  read per the specification and not stored; keysyms become core columns and are written back, and XKB is then derived from
+  the core table as usual — consistent with the "XKB is derived from the core keymap" principle, which is why
+  `xkbcomp keymap $DISPLAY` takes effect.
+- **Extensions can be visible per client**: an entry in the extension registry carries an optional visibility predicate that
+  QueryExtension, ListExtensions and dispatch all honour. MIT-SHM uses it to appear only to clients connected over a Unix socket.
+- **GetImage on the root window**: in rootless mode the root window has no buffer, and GetImage used to return BadMatch
+  (`xwd -root` failed); it now composes the mapped top-levels in stacking order, with black elsewhere.
+- **GLX strings include the trailing NUL**: in QueryServerString and GetString replies the STRING8 length counts the trailing
+  NUL — client libraries use that memory as a C string.
+- **M4 acceptance (2026-09-24)**: XServer unit tests +17 (synchronous grabs, device topology, SetMap, MIT-SHM (run on Linux only),
+  root-window GetImage, seven GLX tests — clear and triangle, depth and display lists, a texture uploaded through RenderLarge,
+  GL queries and ReadPixels, the display-list execution budget, …), real-client tests +3 (`glxinfo` on both paths, `glxgears`
+  direct / indirect). By hand: `xinput` adding and removing master devices, attaching / floating slaves;
+  `setxkbmap -print -layout de | xkbcomp - $DISPLAY` swaps y / z and brings in the AltGr level; in a Linux container `xdpyinfo`
+  lists MIT-SHM and `x11perf -shmput10` runs; `glxgears` draws identical gears on both paths (lighting, flat shading, depth), and
+  `glxheads` renders correctly through indirect rendering.

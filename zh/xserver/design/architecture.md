@@ -3,7 +3,7 @@
 English: [`../../../en/xserver/design/architecture.md`](../../../en/xserver/design/architecture.md)
 
 > 状态:**M1(核心协议)、M2(现代工具包)、「功能完备」一轮(XKB、XInput2 等十余个扩展、窗口管理器角色、全库性能复查)
-> 与 M3(接入宿主)已完成**,2026-09-23 立项。宿主的「X Server」按钮默认启动的就是本库(每个 X 窗口一个 Avalonia 原生窗口),
+> M3(接入宿主)与 M4(同步抓取、设备拓扑、XKB 改表、MIT-SHM、GLX)已完成**,2026-09-23 立项。宿主的「X Server」按钮默认启动的就是本库(每个 X 窗口一个 Avalonia 原生窗口),
 > SSH 的 X11 转发直接接进它;用户自己装的 VcXsrv 退成 Windows 上的可选引擎(见
 > [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.2 与 §14)。
 
@@ -34,7 +34,8 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 
 - 不做**真实显示设备**(DRM/KMS、帧缓冲设备)与硬件输入 —— 那是完整 X 服务端的事,我们只做嵌入式的那一半。
 - 不做 XDMCP、多屏幕(Screen > 1)、索引色 / 可写颜色表(只提供 24 位 TrueColor)。
-- 不做 GLX / DRI3 / MIT-SHM。Present 只做软件拷贝(没有显存可翻页)。
+- 不做 DRI2 / DRI3(没有 GPU 可交给客户端)。GLX 只登记直接渲染(客户端自己软件渲染、再经 PutImage 送像素)并提供
+  固定功能 GL 子集的软件间接渲染;MIT-SHM 只在 Linux 上、只给经 Unix 套接字连进来的本机客户端。Present 只做软件拷贝(没有显存可翻页)。
 
 ## 3. 净室规程
 
@@ -45,10 +46,14 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
    *The X Resize and Rotate Extension*、*The X Rendering Extension*(及其引用的 PDF Reference 混合模式公式)、
    *The X Keyboard Extension: Protocol Specification*、*The X Input Extension*(1.5 与 2.2)、*XTEST Extension*、
    *X Synchronization Extension*、*X Damage Extension*、*Composite Extension*、*Double Buffer Extension*、
-   *The Present Extension*、*MIT-SCREEN-SAVER*、*DPMS*、*X-Resource*、*Generic Event Extension*,以及 XINERAMA ——
-   它没有独立的规范文档,线格式依据 X.Org 发布的 panoramiXproto 协议定义)、ICCCM、EWMH 与 freedesktop.org 的 XSETTINGS 规范。
+   *The Present Extension*、*MIT-SCREEN-SAVER*、*DPMS*、*X-Resource*、*Generic Event Extension*、*The MIT Shared Memory Extension* 1.1,
+   以及 XINERAMA —— 它没有独立的规范文档,线格式依据 X.Org 发布的 panoramiXproto 协议定义)、ICCCM、EWMH、freedesktop.org 的
+   XSETTINGS 规范;GLX 部分依据 Khronos 发布的 *OpenGL Graphics with the X Window System* 1.4、*GLX Extensions for OpenGL
+   Protocol Specification* 1.3(编码)与 *The OpenGL Graphics System* 1.5(间接渲染的 GL 语义),操作码与枚举值取自 Khronos
+   注册表的 `gl.xml` / `glx.xml`。
    **每个协议实现文件的头部写明它实现的是哪份规范的哪一节。**
-2. **写实现时不打开任何其它 X 服务端的源码**(X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv)。
+2. **写实现时不打开任何其它 X 服务端的源码**(X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv),也不打开任何
+   OpenGL / GLX 实现(Mesa 等)的源码。
 3. 规范里的常量(操作码、事件码、错误码、预定义原子、掩码位)按规范取值 —— 那是协议,不受版权保护,
    也不许为了「看起来不一样」去改。
 4. **数据不等于代码**:内置位图字体取自 X.Org `font-misc-misc` 的 BDF(版权声明原文为
@@ -62,12 +67,14 @@ Server/       X11Server:监听(TCP 6000+N、Unix 套接字)与 ServeAsync(任意
               单线程执行循环、连接层背压、宿主回调的延后调用(DeferredHost)、客户端表与序号、GrabServer、BIG-REQUESTS 长度;
               请求处理按领域拆成 partial 文件(Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input /
               Extensions / Queries,以及各扩展:Shape / XFixes / RandR / Monitors / Render / Damage / CompositeDbe / Sync /
-              Present / Xkb / XInput / XTest / ScreenSaver,窗口管理器角色 Ewmh、剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
+              Present / Xkb / XkbSetMap / XInput / XiHierarchy / SyncGrabs / XTest / ScreenSaver / Shm / Glx,
+              窗口管理器角色 Ewmh、剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
 Windowing/    窗口模型(树、几何、属性、事件选择、被动抓取、顶层缓冲、SHAPE 的三种形状)
 Resources/    GC、像素图、颜色表、光标、字体句柄、颜色名表、RENDER 的 picture 与字形集
 Drawing/      32 位软件帧缓冲、区域(Region)、光栅化:16 种光栅操作、平面掩码、填充样式、裁剪;
               点 / 线(细线 Bresenham + 宽线多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字;
               RENDER:像素格式、合成运算与混合模式、取样源(图像 / 纯色 / 渐变,repeat、变换、过滤)、梯形覆盖率
+Gl/           GLX 间接渲染的软件 GL:渲染命令解码、显示列表、矩阵栈、光照、裁剪、三角形 / 线 / 点光栅化、纹理、逐片元操作、查询
 Fonts/        BDF 解析、内置 misc-fixed 字体、XLFD 名称匹配、合成的 cursor 与 nil2 字体
 Input/        键码 ↔ 键值表(evdev 风格键码)、XKB 的 evdev 键名、修饰键映射、抓取的数据结构(核心与 XI2)
 Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOptions、XMonitor、窗口管理器请求与枚举、XKeycodes
@@ -143,9 +150,18 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   GTK3 的 HeaderBar、Qt 的无边框窗口都依赖这些属性存在。
 - **XKB 由核心键位表推出**:不单独维护一份 XKB 键位表,四个规范类型(外加 AltGr 层用的两个四级类型)、修饰键动作、SymInterpret、指示灯、键名都从
   核心表算出来;核心表一变(xmodmap、宿主 `SetKeyboardMapping`),XKB 跟着变并发 MapNotify。
-  XKB 自己的改表请求(SetMap / SetCompatMap 等)不支持。
-- **XInput2 的设备拓扑固定**:主指针 2 / 主键盘 3 各挂一个从设备(4、5)。XI2 事件与核心事件走同一条传播路径,
-  同一个窗口上选了核心的收核心、选了 XI2 的收 XI2;XIChangeHierarchy 回 BadImplementation。
+  XKB 的 SetMap 把上传的键值(按 §17 的列序)与修饰键映射写回核心表,再照常推出;SetCompatMap、SetNames 等其余改表请求不支持。
+- **XInput2 的设备拓扑可改,但不是完整的多指针**:初始是主指针 2 / 主键盘 3 各挂一个从设备(4、5);XIChangeHierarchy
+  可以增删主设备、把从设备挂到别的主设备或让它浮动(浮动时只报从设备的 XI2 事件、不产生核心事件)。
+  指针位置、焦点与抓取仍是一份 —— 宿主只有一套物理输入,完整的 MPX 没有用处。XI2 事件与核心事件走同一条传播路径,
+  同一个窗口上选了核心的收核心、选了 XI2 的收 XI2。
+- **MIT-SHM 只给本机**:只在 Linux 上注册,并且只对经 Unix 套接字连进来的客户端可见 —— 远端经 SSH 来的客户端给的
+  shmid 在这台机器上毫无意义。段的大小与属主取自 `/proc/sysvipc/shm`,对端 uid 经 SO_PEERCRED 取得,不是属主 / 创建者
+  且权限没对其他人开放就 BadAccess(否则本机客户端可以借服务端之手读写别人的共享内存)。共享像素图与 1.2 的 fd 传递不做。
+- **GLX 两条路**:Mesa 在没有 DRI3 / DRI2 时默认走 drisw —— 客户端用 llvmpipe 渲染(GL 4.5)、经 PutImage 送像素,
+  服务端只要把配置、上下文、可绘对象登记好;远端经 SSH 转发来的程序同样可用。强制 `LIBGL_ALWAYS_INDIRECT` 时由 `Gl/` 的
+  软件 GL 执行固定功能管线的一个子集,版本如实报 1.1(3D 纹理没做);求值器、累积缓冲、选择 / 反馈、mipmap LOD、点画不实现。
+  一个 GLX 表面最多 4096 × 4096 像素,一个请求里显示列表展开执行的命令数上限 400 万(列表互相调用会指数级展开)。
 - **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD 并按 ICCCM 回应;X → 宿主时服务端以一个隐藏的 InputOnly 窗口为
   请求方取回(UTF8_STRING → STRING 退路,支持 INCR)。宿主把刚收到的文本写回来时不抢选区,避免与客户端来回争抢。
 
@@ -157,7 +173,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | **M2 现代工具包** ✅ | SHAPE、XFIXES、RANDR(只读)、RENDER;剪贴板与宿主互通;XSETTINGS 管理器 | GTK3 / Qt5 的简单程序可用(`zenity`、`gedit`、`qt5ct` 画出内容、零协议错误 —— 已达成,见 §10) |
 | **功能完备** ✅ | XKEYBOARD、XInputExtension 2.2、XTEST、XINERAMA、SYNC、DAMAGE、Composite、DOUBLE-BUFFER、Present、MIT-SCREEN-SAVER、DPMS、X-Resource、Generic Event;窗口管理器角色;Unix 套接字;运行中换布局 / DPI / 键盘布局;全库性能复查 | xkbcomp、xinput、xdotool、xprintidle、xrestop 读写正确;gedit(GTK3)与 qt5ct(Qt5)走 XKB 与 XI2 零协议错误(已达成,见 §10) |
 | **M3 接入宿主** ✅ | Avalonia 宿主(原生窗口、输入、HiDPI、窗口管理器请求、剪贴板、Windows 键盘布局);引擎选择(内置默认,VcXsrv 可选);SSH 的 x11 通道经连接器直接接进服务端;设置页收敛 | 宿主「X Server」按钮不再依赖外部程序;真实的 xterm / xeyes / gedit / qt5ct 画成原生窗口,移动、缩放、关闭、键盘走得通(已达成,见 §10) |
-| M4 | MIT-SHM(同机才有意义,低优先)、GLX(间接渲染)、同步抓取、XIChangeHierarchy、XKB 改表请求 | 视需求 |
+| **M4** ✅ | 同步抓取(冻结与 AllowEvents / XIAllowEvents 的放行、单步、重放);XIChangeHierarchy;XKB SetMap;MIT-SHM 1.1(Linux、本机);GLX 1.4(直接渲染的登记 + 软件间接渲染) | `xinput create-master / reattach / float / remove-master`、`setxkbmap … \| xkbcomp - $DISPLAY`、`x11perf -shmput10`、`glxinfo` / `glxgears` 直接与间接两条路径零协议错误(已达成,见 §10) |
 
 ## 9. 测试策略
 
@@ -245,3 +261,22 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   `ISO_Level3_Shift` 进 Mod5;系统为 AltGr 补的假左 Ctrl 不转发(否则 X 程序看到 Ctrl+AltGr)。顺带修掉:更窄的
   ChangeKeyboardMapping(`xmodmap -e "keycode 108 = …"` 每键码只发 1 列)会把整张键位表收成 1 列;现在列数只放宽不收窄。
   验证:`xmodmap` 设好之后 `xkbcomp` 导出四级键、其余键仍两级,xterm 里 AltGr+q 打出 `@`。
+- **M4 的扩展编号**(接着前面):MIT-SHM 147(事件 91 Completion,错误 149 BadShmSeg)、GLX 148(事件 92 PbufferClobber,
+  错误 150–162)。GLX 的 FBConfig 取 `0x101` 起,四个:两个 TrueColor 视觉各一单一双缓冲,颜色 8/8/8(ARGB 视觉再加 8 位 alpha)、
+  深度 24、模板 8,没有累积缓冲与多重采样;GLX 1.2 的视觉配置每个视觉一条,取它的双缓冲配置。
+- **同步抓取取代「只做异步」(2026-09-24)**:M1 时把 Sync 模式按异步处理;M4 做成真正的冻结 —— 每设备一个冻结者与一条输入队列,
+  宿主注入与 XTEST 的输入冻结时排队;AllowEvents 0–7 与 XIAllowEvents 放行、单步(SyncPointer / SyncKeyboard / SyncBoth)、
+  重放(重放时跳过抓取窗口及其上级的被动抓取);抓取结束(含客户端断开)时解冻并把队列放回执行循环。
+- **XIChangeHierarchy 的 RemoveMaster**:AttachToMaster 模式下返回设备给 0 表示挂回虚拟核心指针 / 键盘 ——
+  `xinput remove-master` 默认就这么发,按非法设备处理会回 BadMatch。
+- **XKB SetMap 不另存 XKB 表**:类型、动作、行为、显式成分、虚拟修饰映射按规范读完、不另存,键值换成核心列写回,
+  之后照常由核心表推出 —— 与「XKB 由核心表推出」的总原则一致,`xkbcomp keymap $DISPLAY` 因此生效。
+- **扩展可以按客户端决定可见性**:注册表里的扩展带一个可选的可见性判断,QueryExtension、ListExtensions 与分派都按它来。
+  MIT-SHM 用它只给经 Unix 套接字连进来的客户端。
+- **根窗口 GetImage**:rootless 下根窗口没有缓冲,原先 GetImage 回 BadMatch(`xwd -root` 失败);现在按堆叠次序把映射着的顶层拼起来,其余为黑。
+- **GLX 的串带结尾的 NUL**:QueryServerString 与 GetString 回复里的 STRING8 长度把结尾的 NUL 算在内 —— 客户端库按 C 串用这块内存。
+- **M4 验收(2026-09-24)**:XServer 单元测试 +17(同步抓取、设备拓扑、SetMap、MIT-SHM(只在 Linux 上跑)、根窗口 GetImage、
+  GLX 7 条 —— 清除与三角形、深度与显示列表、经 RenderLarge 上传的纹理、GL 查询与 ReadPixels、显示列表执行预算等),
+  真实客户端用例 +3(`glxinfo` 两条路径、`glxgears` 直接 / 间接)。手动:`xinput` 增删主设备、挂接 / 浮动从设备;
+  `setxkbmap -print -layout de | xkbcomp - $DISPLAY` 之后 y / z 互换、AltGr 层就位;Linux 容器里 `xdpyinfo` 列出 MIT-SHM、
+  `x11perf -shmput10` 跑通;`glxgears` 两条路径画出的齿轮一致(光照、平直着色、深度),`glxheads` 间接渲染正常。
