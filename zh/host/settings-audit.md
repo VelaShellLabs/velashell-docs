@@ -377,7 +377,7 @@
 | 窗口模式 | 多窗口 | `-multiwindow` / (无) / `-nodecoration` / `-fullscreen` / `-rootless` | 认不出来的值回落到多窗口 |
 | 启用剪贴板 | 开 | `-clipboard` / `-noclipboard` | |
 | 选中即复制 | 开 | `-primary` / `-noprimary` | 只在开了剪贴板时生效,关着时置灰、命令行里也不写 |
-| 键盘布局 | 自动 | `-xkblayout` | 自动 = 不传,VcXsrv 跟随 Windows 布局 |
+| 键盘布局 | 自动 | `-xkblayout` | 两种引擎共用。自动 = VcXsrv 不传(跟随 Windows 布局)、内置引擎跟随系统当前的布局;手选时 VcXsrv 传 `-xkblayout`,内置引擎用随程序带的键位表 |
 | 键盘型号 | pc105 | `-xkbmodel` | |
 | 捕获 Windows 特殊按键 | 关 | `-keyhook` / `-nokeyhook` | |
 | 原生 OpenGL(WGL) | 开 | `-wgl` / `-nowgl` | |
@@ -400,10 +400,10 @@ VcXsrv 退成 Windows 上的可选项。新设置落在 `AppSettings.XServer.Eng
 | --- | --- | --- | --- |
 | 引擎 | 内置 | `builtin` / `vcxsrv` | 只在 Windows 上显示这一项;其它平台只有内置,配置里写着 `vcxsrv`(比如从 Windows 同步过来的)也按内置处理 |
 
-- **两个引擎共用**:显示编号、启用剪贴板、选中即复制、在启动时自动打开、X11 转发时自动启动。剪贴板两项在内置引擎上
+- **两个引擎共用**:显示编号、启用剪贴板、选中即复制、键盘布局、在启动时自动打开、X11 转发时自动启动。剪贴板两项在内置引擎上
   映射到服务端的 CLIPBOARD / PRIMARY 同步。
-- **只对 VcXsrv 起作用**、选了 VcXsrv 才出现:程序位置、窗口模式、键盘布局 / 型号、捕获特殊按键、原生 OpenGL、关闭访问控制、
-  附加参数与命令行预览、托盘图标。内置引擎在 Windows 上跟随系统键盘布局,无需配置。
+- **只对 VcXsrv 起作用**、选了 VcXsrv 才出现:程序位置、窗口模式、键盘型号、捕获特殊按键、原生 OpenGL、关闭访问控制、
+  附加参数与命令行预览、托盘图标。
 - 「X11 转发时自动启动」的「不插手」条件改为:本机已经有别的 X 服务端在用 —— Windows 上是 `localhost:0` 有人在听,
   其它平台是设了 `DISPLAY`;选了 VcXsrv 而没装时同样静默。
 - 原先「非 Windows 平台整页只剩一段说明」取消:内置引擎各平台都能用,整页在各平台都显示(引擎一节除外)。

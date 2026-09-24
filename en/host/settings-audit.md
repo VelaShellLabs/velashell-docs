@@ -392,7 +392,7 @@ before this section existed get the defaults from `Normalize`.
 | Window mode | Multiple windows | `-multiwindow` / (none) / `-nodecoration` / `-fullscreen` / `-rootless` | Unrecognized values fall back to multiple windows |
 | Enable clipboard | on | `-clipboard` / `-noclipboard` | |
 | Copy on selection | on | `-primary` / `-noprimary` | Only meaningful with the clipboard on; disabled and omitted from the command line otherwise |
-| Keyboard layout | Auto | `-xkblayout` | Auto = not passed; VcXsrv follows the Windows layout |
+| Keyboard layout | Auto | `-xkblayout` | Shared by both engines. Auto = not passed to VcXsrv (it follows the Windows layout), and the built-in engine follows the system's current layout; a chosen layout is passed to VcXsrv as `-xkblayout` and the built-in engine uses the keymap tables shipped with the app |
 | Keyboard model | pc105 | `-xkbmodel` | |
 | Capture special Windows keys | off | `-keyhook` / `-nokeyhook` | |
 | Native OpenGL (WGL) | on | `-wgl` / `-nowgl` | |
@@ -419,9 +419,9 @@ lives in `AppSettings.XServer.Engine`; unrecognized values fall back to built-in
 | --- | --- | --- | --- |
 | Engine | Built-in | `builtin` / `vcxsrv` | Only shown on Windows; other platforms only have the built-in one, and a `vcxsrv` value (e.g. synced from Windows) is treated as built-in |
 
-- **Shared by both engines**: display number, enable clipboard, copy on selection, start with VelaShell, start automatically
+- **Shared by both engines**: display number, enable clipboard, copy on selection, keyboard layout, start with VelaShell, start automatically
   for X11 forwarding. On the built-in engine the two clipboard switches map to the server's CLIPBOARD / PRIMARY sync.
-- **VcXsrv-only**, shown only when VcXsrv is selected: program location, window mode, keyboard layout / model, capture special
+- **VcXsrv-only**, shown only when VcXsrv is selected: program location, window mode, keyboard model, capture special
   keys, native OpenGL, disable access control, additional arguments and the command-line preview, tray icon. On Windows the
   built-in engine follows the system keyboard layout and needs no configuration.
 - The “stay out of it” condition of “Start automatically for X11 forwarding” becomes: another X server is already in use —
