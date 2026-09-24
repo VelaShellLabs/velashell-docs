@@ -2,10 +2,11 @@
 
 中文:[`../../../zh/xserver/design/architecture.md`](../../../zh/xserver/design/architecture.md)
 
-> Status: **M1 (core protocol), M2 (modern toolkits) and the "feature-complete" round (a dozen more extensions including
-> XKB and XInput2, the window-manager role, a library-wide performance review) complete**; project started 2026-09-23. Not yet wired into the
-> host — today the host's "X Server" button launches the VcXsrv the user installed (see [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2).
-> Once M3 wires this library into the host and replaces that path, users no longer need to install anything.
+> Status: **M1 (core protocol), M2 (modern toolkits), the "feature-complete" round (a dozen more extensions including XKB and
+> XInput2, the window-manager role, a library-wide performance review) and M3 (host integration) complete**; project started
+> 2026-09-23. The host's "X Server" button starts this library by default (one Avalonia native window per X window) and SSH X11
+> forwarding connects straight into it; the VcXsrv the user installed becomes an optional engine on Windows (see
+> [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2 and §14).
 
 ## 1. Why build it
 
@@ -84,7 +85,7 @@ Host/         Host-facing API: IXServerHost, XTopLevelWindow, XServerOptions, XM
 
 Unix sockets: outside Windows the server listens on `/tmp/.X11-unix/X{N}` by default, and on Linux also on the same
 name in the abstract namespace (Xlib / XCB try that first for `:N`); `XServerOptions.UnixSocketPath` sets or disables it
-and `ListenTcp` can turn TCP off. A host font-provider interface does not exist yet; it comes when M3 needs larger sizes.
+and `ListenTcp` can turn TCP off. A host font-provider interface does not exist yet: core fonts only serve older programs, modern toolkits use RENDER with client-side rasterization, and no program has needed it since the host integration.
 
 ## 5. Threading model
 
@@ -187,8 +188,8 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
 | **M1 core protocol** ✅ | All core requests; BIG-REQUESTS, XC-MISC; windows / events / properties / selections; software drawing; built-in fonts; keyboard mapping; headless test host | `xdpyinfo`, `xterm`, `xeyes`, `xclock`, `xlogo` in Docker connect, draw, and cause zero protocol errors (achieved, see §10) |
 | **M2 modern toolkits** ✅ | SHAPE, XFIXES, RANDR (read-only), RENDER; clipboard exchange with the host; XSETTINGS manager | Simple GTK3 / Qt5 programs work (`zenity`, `gedit`, `qt5ct` draw with zero protocol errors — achieved, see §10) |
 | **Feature-complete** ✅ | XKEYBOARD, XInputExtension 2.2, XTEST, XINERAMA, SYNC, DAMAGE, Composite, DOUBLE-BUFFER, Present, MIT-SCREEN-SAVER, DPMS, X-Resource, Generic Event; the window-manager role; Unix sockets; runtime layout / DPI / keyboard-layout changes; library-wide performance review | xkbcomp, xinput, xdotool, xprintidle, xrestop read and write correctly; gedit (GTK3) and qt5ct (Qt5) run on XKB and XI2 with zero protocol errors (achieved, see §10) |
-| **M3 host integration** | Avalonia host (native windows, input, HiDPI, window-manager requests); replace the VcXsrv path; trim the settings page | The host's "X Server" button no longer depends on an external program |
-| M4 | MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs, XIChangeHierarchy, XKB mapping-change requests | As needed |
+| **M3 host integration** ✅ | Avalonia host (native windows, input, HiDPI, window-manager requests, clipboard, Windows keyboard layout); engine choice (built-in by default, VcXsrv optional); SSH x11 channels go straight into the server through a connector; trim the settings page | The host's "X Server" button no longer depends on an external program; real xterm / xeyes / gedit / qt5ct become native windows, and moving, resizing, closing and typing work (achieved, see §10) |
+| M4 | XKB four-level key types (the AltGr level, needed when the host follows layouts such as German or French), MIT-SHM (only meaningful on the same machine, low priority), GLX (indirect rendering), synchronous grabs, XIChangeHierarchy, XKB mapping-change requests | As needed |
 
 ## 9. Test strategy
 
@@ -267,3 +268,35 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   hand: `xdpyinfo -ext all`, xdotool typing into xterm through XTEST + XKB, xprintidle, xrestop, xkbcomp,
   `xinput list / list-props / query-state / test-xi2`, gedit (GTK3, XI2 + EWMH; double-clicking the HeaderBar sends a
   maximize request that, once honoured, fills the screen) and qt5ct (Qt5, XI2).
+- **M3: the host is an `IXServerHost` implementation, no extra process**: the host side
+  (`src/VelaShell/Services/XServer/AvaloniaXServerHost.cs`) opens one Avalonia native window per X top-level; the bitmap maps
+  one-to-one to X pixels and is scaled by DPI without interpolation; every callback is posted to the UI thread. The root window
+  is the bounding box of all monitors, one RANDR output per monitor, recomputed when monitors come and go; the DPI follows the
+  primary monitor's scaling (at integer scaling GTK's window scale is set too). X coordinates are the position of the
+  **content area**; the system title bar and borders lie outside it and their size reaches clients through
+  `_NET_FRAME_EXTENTS`. Ordinary windows mapped without a position (at 0,0) are placed the way a window manager would: dialogs
+  centered over their parent, everything else centered in the primary monitor's work area.
+- **M3: the engine is selectable, built-in by default**: `ILocalXServer` is implemented by a selector that forwards to the
+  built-in engine or VcXsrv per the settings, the running one taking precedence (changing the setting never stops an X server
+  that is showing windows). VcXsrv exists only on Windows; other platforms only have the built-in engine.
+- **M3: SSH x11 channels go straight into the server through a connector**: the SSH library's
+  `X11ForwardOptions.LocalConnector` (`velashell-docs/en/ssh/spec/07` §7.5.9) gets an in-memory duplex stream pair per channel and
+  hands one end to `X11Server.ServeAsync`. The fake-cookie check is unchanged; the server admits the stream as a local connection.
+  Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP. The server keeps listening
+  on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N`.
+- **M3: the keyboard layout follows Windows**: the host injects X keycodes by physical key (scan code); on Windows the system's
+  `ToUnicodeEx` computes the unshifted and Shift levels of the main key block for the current layout, which replace the
+  server's keymap (recomputed the next time an X window is activated after a layout switch). The AltGr level is not generated
+  yet — the server's XKB description only derives two levels; other platforms use US.
+- **Fixed while verifying M3 on real windows**: ① destroying the Damage objects on a pixmap when the pixmap was freed was wrong —
+  `FreePixmap` only drops the ID, and xeyes' Present-based frame swap follows it with `DamageDestroy`, which then got BadDamage
+  and the client exited; Damage objects are now released by `DamageDestroy` or client disconnect. ② The Unix-socket listener
+  deleted an existing socket file before binding — the desktop's own Xorg usually has TCP off, so the TCP-side check cannot see
+  it, and the desktop's socket got deleted; it now tries to connect first and leaves the file alone if anyone answers.
+  ③ Host side: resizing a shown native window takes `Width` / `Height` (setting `ClientSize` only changes the property value);
+  the `Resized` caused by our own resize may arrive a beat later, so only user drags and window-state changes are reported to
+  the server — otherwise the old size would overwrite the one the client just set.
+- **M3 acceptance (2026-09-24)**: headless UI tests (map → native window size, title, pixels; close button → client
+  disconnected → window gone); `scripts/xserver/host-demo/demo.cs` opens real native windows, and xterm, xeyes, gedit (GTK3,
+  self-drawn title bar, menu popups) and qt5ct (Qt5) from a container render correctly with matching geometry; X-side
+  move / resize, closing a native window (WM_DELETE_WINDOW) and keys on a native window reaching xterm were all verified.

@@ -408,3 +408,23 @@ before this section existed get the defaults from `Normalize`.
   is never restarted behind the user's back.
 - On non-Windows platforms the page is a single note: Linux uses the desktop's own X / XWayland, macOS uses XQuartz,
   both through `DISPLAY`.
+
+### 2026-09-24 Seventh batch (X Server page: built-in engine)
+
+The “X Server” page gains an **Engine** section at the top. The default is now the host's built-in X server
+(`VelaShell.XServer`, ships with the app; host side in `plan.md` §105); VcXsrv becomes an option on Windows. The new setting
+lives in `AppSettings.XServer.Engine`; unrecognized values fall back to built-in in `Normalize`.
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Engine | Built-in | `builtin` / `vcxsrv` | Only shown on Windows; other platforms only have the built-in one, and a `vcxsrv` value (e.g. synced from Windows) is treated as built-in |
+
+- **Shared by both engines**: display number, enable clipboard, copy on selection, start with VelaShell, start automatically
+  for X11 forwarding. On the built-in engine the two clipboard switches map to the server's CLIPBOARD / PRIMARY sync.
+- **VcXsrv-only**, shown only when VcXsrv is selected: program location, window mode, keyboard layout / model, capture special
+  keys, native OpenGL, disable access control, additional arguments and the command-line preview, tray icon. On Windows the
+  built-in engine follows the system keyboard layout and needs no configuration.
+- The “stay out of it” condition of “Start automatically for X11 forwarding” becomes: another X server is already in use —
+  on Windows something listens on `localhost:0`, elsewhere `DISPLAY` is set; a selected-but-missing VcXsrv is silent too.
+- The former “on non-Windows platforms the page is a single note” is gone: the built-in engine works everywhere, so the page is
+  shown on every platform (except the Engine section).

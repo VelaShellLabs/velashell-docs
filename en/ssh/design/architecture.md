@@ -1961,6 +1961,17 @@ The code was rewritten in our own structure (`IIncomingChannelHandler` + the exi
 `DuplexRelay` / `ChannelRelayEndpoint` relay layer),
 and the spec was written first (`spec/07` §7.5) and then implemented.
 
+#### Addendum (2026-09-24): local connector
+
+The host now has a built-in X server (`VelaShell.XServer`, in the same repository, neither library referencing the other). When
+the local display lives in the same process, connecting to a local port is only a detour. `X11ForwardOptions.LocalConnector`
+lets the caller supply a connector: it is called once per `x11` channel for a duplex stream, and the setup message is written
+into it with the cookie replaced by `LocalCookie` (empty if none was given) (`spec/07` §7.5.9). **The fake-cookie check is
+unchanged** — that layer guards against the remote side. Trusted mode only: untrusted mode needs `xauth` to reach the local
+display and sign a restricted cookie, so setting both makes the request fail instead of silently falling back to trusted.
+An unavailable connector side is treated as "local display unreachable". Three tests (relaying with cookie replacement,
+unavailable connector, combined with untrusted mode).
+
 ### 11.2.15 That intermittent hang: the channel was registered too late (2026-09-22)
 
 Twenty full runs, three red, and a different case red each time —
@@ -2364,7 +2375,7 @@ the proxy command's stderr, `ssh_config` mapping (jump chains, cycle detection, 
 - **SSH1**. Dead, and insecure.
 - **Implementing AES / SHA / RSA / ECDH ourselves**. The BCL has them, with hardware acceleration.
 - **A synchronous API**. Principle 1.
-- **The other end of X11 forwarding** (the X server). The forwarding channel itself **is already done** (§11.2.14); the X server is not — consistent with VelaShell's existing decision.
+- **The other end of X11 forwarding** (the X server) is not part of this library. The forwarding channel itself **is already done** (§11.2.14); the X server is a separate library in the host repository, `VelaShell.XServer`, and the two meet through `X11ForwardOptions.LocalConnector` (§11.2.14 addendum).
 - **Mosh**. A different protocol stack, consistent with VelaShell's existing decision.
 
 ---

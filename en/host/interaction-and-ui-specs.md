@@ -169,7 +169,7 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 | `search` | Terminal Search | Search the current terminal buffer (open the search bar, see §5.3) |
 | `copy` | Copy | Copy the current selection (disabled when there is no selection) |
 | `columns-2` | Split Pane | Split the current session horizontally/vertically (VelaDock split) |
-| `app-window` | **X Server** | Start / stop the local X server (on Windows it launches the VcXsrv the user installed, see the “X Server” page in §14). The icon turns accent-colored while running and the tooltip shows the display (e.g. `localhost:0.0`); the button is disabled while starting so a double click cannot launch two. **Shown on Windows only.** Failures such as VcXsrv not being found raise an error toast with a “Settings” button that lands on the X Server page. Same command in the palette: `tools.xserver` |
+| `app-window` | **X Server** | Start / stop the local X server: by default the **built-in X server** (ships with the app, works on every platform, one native window per X window); on Windows the 
 | `route` | **Tunnel** | Open the tunnel management panel in §10 (★user specified) |
 | `zap` | **Quick Commands** | Open the command palette (§8), or the quick command menu |
 
@@ -596,17 +596,19 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
         is still denied. The remote ssh sees "agent refused to sign".
       - When several sessions ask at once the dialogs **queue and appear one at a time** instead of stacking modals —
         otherwise you could not tell which dialog belongs to which session. The deadline keeps running while queued.
-    - **X11 forwarding**: shows remote GUI windows on the local X server. **The host does not bundle an X server** (see
-      “Won't do” in `feature-plan.md`), but on Windows it can **launch the VcXsrv the user installed** (the X Server
-      title-bar button and the “X Server” page in §14); Xming / X410 users keep bringing their own. Turning it on
-      reveals two more fields:
+    - **X11 forwarding**: shows remote GUI windows on the local X server. The host **has a built-in X server** (the
+      X Server title-bar button and the “X Server” page in §14) that works out of the box on every platform; on Windows
+      it can use the VcXsrv the user installed instead, and Xming / X410 users keep bringing their own (no third-party
+      X server binaries are bundled; see “Won't do” in `feature-plan.md`). Turning it on reveals two more fields:
       - **Local X display**: when empty, tried in order: ① the local X server managed by VelaShell (its display if it
         is running; if not, and “Start automatically for X11 forwarding” is on, it is started first — unless another X
-        server already listens on `localhost:0` or VcXsrv is not installed, in which case it stays out of the way
-        silently) ② the `DISPLAY` environment variable ③ `localhost:0.0` (almost nobody sets `DISPLAY` on Windows, and
-        those X servers listen on TCP 6000 by default). The placeholder shows the last two. A failed auto-start only
-        writes a yellow line and never blocks the shell. **A filled-in value is used as is**; the local X server stays
-        out of it.
+        server is already in use (on Windows something listens on `localhost:0`; elsewhere `DISPLAY` is set) or VcXsrv
+        is selected but not installed, in which case it stays out of the way silently) ② the `DISPLAY` environment
+        variable ③ `localhost:0.0` (almost nobody sets `DISPLAY` on Windows, and those X servers listen on TCP 6000 by
+        default). The placeholder shows the last two. A failed auto-start only writes a yellow line and never blocks the
+        shell. **A filled-in value is used as is**; the local X server stays out of it. When the display comes from the
+        built-in X server and the mode is trusted, x11 channels **go straight into the in-process server** without a
+        local port.
       - **Trusted (`-Y`)**, **checked by default**: untrusted mode needs a local `xauth` and an X server with the
         SECURITY extension, and Windows usually has neither. The cost (remote X clients get full access to the local
         display) is in the tooltip.
@@ -674,7 +676,7 @@ The left side contains navigation sections and the right side shows the correspo
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |
 | Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook) |
 | Proxy | — (new) | One proxy shared by every outbound connection: none / follow system (default) / HTTP / SOCKS5, plus “resolve DNS through the proxy” |
-| X Server | — (new, 2026-09-23) | The local X server (VcXsrv on Windows; **not bundled**, the user installs it). Grouped after WindTerm: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found) / **Display** (display number: auto or :0–:15; window mode: multiple windows / one large window / no title bar / fullscreen / rootless) / **Clipboard** (enable, copy on selection) / **Keyboard** (XKB layout and model, capture special Windows keys) / **Extensions** (native OpenGL, disable access control) / **Advanced** (additional arguments + a “Help” dialog documenting every VcXsrv command-line argument in five languages, filterable; the command line for the next start is previewed live below) / **Startup** (start with VelaShell, start automatically for X11 forwarding, show tray icon). Changes apply the next time the X server starts. On non-Windows platforms the page is a single explanatory note |
+| X Server | — (new, 2026-09-23) | The local X server. The first section is the **Engine**: built-in (default, ships with the app, every platform) or VcXsrv (installed by the user on Windows; **not bundled**); the section only appears on Windows, other platforms only have the built-in one. With built-in selected a note below explains that each X window is a native window and SSH X11 forwarding connects straight into the built-in server without a local port. Shared by both: **Display** (display number: auto or :0–:15) / **Clipboard** (enable, copy on selection) / **Startup** (start with VelaShell, start automatically for X11 forwarding). VcXsrv-only, shown only when VcXsrv is selected: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found), window mode (multiple windows / one large window / no title bar / fullscreen / rootless), **Keyboard** (XKB layout and model, capture special Windows keys), **Extensions** (native OpenGL, disable access control), **Advanced** (additional arguments + a 
 | Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, and changing group assignment |
 | Cloud Sync | — (new) | GitHub Gist multi-device sync: token/Gist binding, end-to-end encryption passphrase, sync scope, version history, and restore (see plan.md §13.C) |
 | About | `Nwoks` | Version/runtime environment/dependencies/contributors (clickable GitHub avatars)/dual licensing and authenticity statement; Check for Updates is an honest placeholder |
