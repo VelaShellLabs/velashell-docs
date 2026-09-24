@@ -171,7 +171,13 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | --- | :-: |
 | `none` | ✅ |
 | `zlib@openssh.com` (compression starts only after authentication) | Optional, off by default |
-| `zlib` (RFC 4253, compression starts during the handshake) | Optional, off by default |
+| `zlib` (RFC 4253, compression starts during the handshake) | ❌ Not implemented |
+
+〔Decision〕**Only `zlib@openssh.com` is implemented; plain `zlib` is not.** Plain `zlib` compresses from the first NEWKEYS,
+so authentication packets (passwords, public-key signatures) are in the compressed stream too —— ciphertext length leaks the
+compressibility of the plaintext, and an unauthenticated party can mount a CRIME-style compression side channel.
+OpenSSH servers have long compressed only after authentication, so leaving out plain `zlib` does not hurt real-world interop.
+Even if a caller adds `zlib` to the list by hand, negotiating it fails on the spot rather than being silently treated as no compression (see 01 §6).
 
 〔Decision〕**Compression is off by default**, consistent with OpenSSH.
 Rationale: on modern links compression is usually not worth it (trading CPU for bandwidth), and the combination of compression + encryption carries
