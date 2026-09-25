@@ -2500,6 +2500,28 @@ The two new interop tests cover what previously could only be checked against th
 keeps working across a rekey that lands **in the middle** of a large output — the to-do left by §11.2.20, and the real acceptance test for the cipher object reuse above;
 and a real `ssh-keygen`-signed host certificate validated against a `known_hosts` `@cert-authority` line.
 
+### 11.2.23 Hardening X11 forwarding: a clean-room comparison (2026-09-25)
+
+Background: the X11 forwarding that the host's author contributed to Tmds.Ssh was changed by that project's maintainer and then merged.
+We wanted to know whether those changes held lessons for this library without breaking rules 1 and 2 of §2 (specs first, two-phase isolation). The procedure:
+
+1. A separate analysis session **with no context from this library** read the other project's changes and returned only a natural-language description of behavior —
+   zero code, zero identifiers from the other project, only protocol-level names (SSH message names, RFC sections, X11 protocol terms);
+2. On this side we used only that description, checked it against RFC 4254 §6.3, the X11 core protocol, the X.Org SECURITY extension specification and `xauth(1)`,
+   changed `spec/07` and `spec/09` first, and then implemented from the spec. The other project's source never entered the implementation session.
+
+Most of the behavior was already here, or handled more conservatively: several forwardings per connection each with its own fake cookie; in best-effort mode only X11's own failures are swallowed while a broken connection is still thrown;
+strict mode reports the specific reason; `localhost:N` is handed to `xauth` unchanged as a TCP display (rewriting it to `unix:N` fails on displays that only exist over TCP). Four changes were made:
+
+| Problem | Decision |
+| --- | --- |
+| Each of the two authorization fields in the setup message was allowed 64 KiB: a peer sending only a header that claims a long field kept us waiting, before any cookie check, until the 30-second limit | Each is at most 256 bytes, decided as soon as the 12-byte header is in (`spec/07` §7.5.5) |
+| The `timeout` given to `xauth` equalled our validity period: the two sides keep separate clocks, so at the boundary a channel we had just accepted could be refused by the X server; with a validity period of 0 the X server was still given 20 minutes | Validity period plus 60 seconds; 0 when the validity period is 0 — in the SECURITY extension 0 means never expire (`spec/07` §7.5.7) |
+| Failing to create the temporary directory for `xauth` threw a raw `IOException`: a best-effort session failed to start at all | Reported as `SshForwardException`, i.e. "X11 could not be set up"; a broken connection and cancellation are still thrown (`spec/07` §7.5.8) |
+| `ForwardX11Timeout` in `ssh_config` was not recognised | Parsed in the ssh_config time format (`1h30m`, a bare number is seconds); `0` means valid for the whole connection; an invalid value falls back to the default (`spec/09` §7) |
+
+Intentional difference kept: the validity period also applies to trusted mode (OpenSSH's `ForwardX11Timeout` only governs untrusted mode) — trusted mode is by far the more dangerous one, and it makes no sense for it alone to have no time limit.
+
 ### 11.3 Switch-over strategy with VelaShell
 
 1. VelaShell's `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`

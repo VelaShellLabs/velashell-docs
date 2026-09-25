@@ -325,6 +325,7 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `ProxyJump` | Comma-separated jump chain; each jump host is **resolved against the same configuration** (with its own `User`, `Port`, `IdentityFile`); `none` means not used. Which of the caller's credentials a jump host gets: see below |
 | `ProxyCommand` | Proxy command dialer; `none` means not used |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | Session parameters (agent and X11 forwarding for shell / exec), not connection parameters |
+| `ForwardX11Timeout` | Validity period of the X11 forwarding turned on by `ForwardX11` (`07-forwarding.md` §7.5.7). `ssh_config` time format: a number followed by `s` / `m` / `h` / `d` / `w`, no unit means seconds, several parts add up (`1h30m`); `0` means no expiry. An invalid value is ignored and the default of 20 minutes applies |
 
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;

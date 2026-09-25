@@ -323,6 +323,7 @@ sequenceDiagram
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。跳板拿到哪些调用方凭据见下 |
 | `ProxyCommand` | 代理命令拨号器；`none` 表示不用 |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数 |
+| `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
