@@ -109,17 +109,17 @@ this is precisely why SFTP can achieve throughput, and why replies must be match
 
 ### 3.3 Status codes
 
-| Code | Name | Our mapping |
+| Code | Name | Our mapping (`SftpException.StatusCode`, of type `SftpStatusCode`) |
 | :-: | --- | --- |
 | 0 | `OK` | Success |
 | 1 | `EOF` | **Not an error**: for `READ` it means end of file reached; for `READDIR` it means the directory has been fully read |
-| 2 | `NO_SUCH_FILE` | `SftpErrorCode.NotFound` |
-| 3 | `PERMISSION_DENIED` | `AccessDenied` |
+| 2 | `NO_SUCH_FILE` | `NoSuchFile` |
+| 3 | `PERMISSION_DENIED` | `PermissionDenied` |
 | 4 | `FAILURE` | `Failure` — **the server's catch-all error code**, see below |
-| 5 | `BAD_MESSAGE` | `ProtocolError` |
-| 6 | `NO_CONNECTION` | `NotConnected` |
+| 5 | `BAD_MESSAGE` | `BadMessage` |
+| 6 | `NO_CONNECTION` | `NoConnection` |
 | 7 | `CONNECTION_LOST` | `ConnectionLost` |
-| 8 | `OP_UNSUPPORTED` | `Unsupported` |
+| 8 | `OP_UNSUPPORTED` | `OperationUnsupported` |
 
 〔Important〕**Code 4 (`FAILURE`) carries the vast majority of real errors in v3** —
 "directory not empty", "file already exists", "disk full", "quota exceeded" are all 4 in v3.
@@ -154,6 +154,17 @@ pflags:
 〔Decision〕**Default permissions when creating files are 0644**, directories 0755, both configurable.
 Not passing ATTRS makes the server use its own default (usually affected by umask),
 with unpredictable results — pass explicit values.
+
+**Ask for the length right after opening.** A non-truncating open (read, resume, write without `TRUNC`) sends one `FSTAT` on the handle as soon as it has it;
+the size becomes the starting value of the stream's `Length` — `Seek(SeekOrigin.End)`, the read-ahead bound of §5.5 and the resume prefix of §6.6 all depend on it.
+An open with `TRUNC` need not ask: the length is 0.
+
+- The server refusing `FSTAT` (an error status) **does not fail the open**: the length starts at 0 and is marked "unknown"; the stream reads and writes as usual,
+  only `Length` and `Seek(SeekOrigin.End)` are inaccurate, and sequential reads cannot build up read-ahead (§5.5 only sends ahead within the known length).
+- 〔Decision〕**Any other failure after `OPEN` succeeded and before the stream reaches the caller (cancellation, a broken pipeline, a malformed `FSTAT` reply)
+  first sends `CLOSE` for the handle, then propagates the error.** At that moment the handle exists only on the server and nothing on our side holds it yet;
+  without the close, every such failure leaks one, until the server's `max-open-handles` runs out. This is the other half of the problem in §5.3 ("a late reply to a cancelled `OPEN` must be closed").
+- For the same reason, arguments that can be checked without the server (e.g. a resume offset must not be negative, §6.6) are checked **before** `OPEN` is sent.
 
 ### 4.2 ATTRS structure
 
@@ -274,11 +285,46 @@ Conservative defaults when this extension is absent (〔Decision〕):
 | Item | Default |
 | --- | --- |
 | Block size | 32 KiB (the typical value of an SSH channel's max packet) |
-| In-flight requests | Estimated from BDP: `clamp(RTT × target bandwidth / block size, 8, 256)` |
+
+The number of in-flight requests (the depth) does not depend on this extension; it adapts by itself per the criterion below.
 
 **Why depth must be adaptive**: in-flight requests × block size is the SFTP layer's "window".
 Just like the channel window (`05-connection.md` §3.3), a fixed value caps throughput outright on high-RTT links.
 Hard-coding 64 × 32 KB = 2 MiB likewise caps at 10 MB/s with a 200 ms RTT.
+
+**How the depth adapts**: 〔Decision〕**watch whether requests hit the limit; do not estimate the bandwidth-delay product from RTT.**
+
+| Item | Rule |
+| --- | --- |
+| Start | `SftpOptions.MaxInFlight` (default 64), which is also the floor when shrinking |
+| Evaluation | Once every 32 requests, count how many requests in that window had to **wait** for an in-flight slot |
+| Grow | More than half waited → the depth is the bottleneck; double it, up to `SftpOptions.MaxPipelineDepth` (default 256) |
+| Shrink | None waited → shrink to three quarters (not below the starting value). Slots are reclaimed **without blocking**: if they are in use, try again next window rather than stalling callers here |
+| Off | `SftpOptions.AdaptivePipelineDepth = false`: the depth stays at the starting value and memory use is deterministic (in-flight count × block size), at the cost of throughput being capped at "depth × block size ÷ RTT" on high-RTT links |
+
+Rationale: computing the depth from the bandwidth-delay product requires estimating bandwidth first, and that estimate is very unstable on a link that also carries other traffic;
+"did requests have to wait for a slot" is a more direct signal that is harder to get wrong — the same idea as the channel window growing when it "runs dry" (`05-connection.md` §3.3).
+
+**Choosing the block size**: 〔Decision〕start from the caller's `SftpOptions.BlockSize` (0 = not specified),
+take the minimum of it and the caps below, then clamp to [1, 256 KiB]:
+
+| Cap | Why it counts |
+| --- | --- |
+| `max-write-length` | An over-long `WRITE` is rejected — OpenSSH drops the SFTP session outright on an over-long message, along with every other in-flight request |
+| `max-read-length` | An over-long `READ` is truncated, and sequential reads treat a short read as "a hole in between" (§5.5): every block discards the queue and read-ahead never builds up |
+| `max-packet-length` minus 1 KiB | Besides the data, the request header (length, type, id, a handle of up to 256 bytes, offset) must fit; 1 KiB is ample |
+| 256 KiB | The largest message we accept (256 KiB + 1024 in §2): one `DATA` reply plus protocol header must fit |
+
+- A **0 from the server means "not stated", not "one byte"**, and takes no part in the minimum. Taken literally, the block size would become 1 —
+  a 1 MB file would need a million requests.
+- When the caller does not specify: if the server gave caps, take them (e.g. an announcement of 256 KiB packets and 255 KiB reads/writes yields a 255 KiB block);
+  if all three are 0, use 32 KiB.
+- A block size the caller specifies **obeys the same caps**. When the extension is not announced, or announced but the query fails, the read, write and packet caps
+  are the conservative defaults in the table above (32 KiB) — so in that case a larger requested block still yields 32 KiB.
+
+**At most one block per request.** Writes: `WriteAsync` and `WriteAtAsync` both split data longer than a block into several block-sized `WRITE`s.
+Reads: each `READ` asks for at most one block; when the buffer given to `ReadAtAsync` is larger than a block, it reads one block and returns fewer bytes than the buffer holds —
+a short read that §4.3 allows; callers loop anyway, so the semantics are unchanged.
 
 ### 5.3 Cancellation
 
@@ -290,11 +336,49 @@ The cancellation semantics of `RequestLedger` **must** be explicit:
   and **the case of "the reply carries a handle that needs closing" must be handled** —
   if `OPEN` is cancelled but the server has already opened the file, that handle leaks on the server unless closed.
   〔Decision〕On cancellation, the ledger retains a "cleanup callback" and executes it (sending `CLOSE`) when the late reply arrives.
+- **A request that never went out is withdrawn on the spot.** A request cancelled while queued on the send lock, or whose message failed to encode, will never get a reply for its id;
+  yet the in-flight slot it holds is returned only by a reply — left in the ledger, it is never returned, and after a few cancellations every SFTP operation hangs.
+  〔Decision〕Such a request is removed from the ledger and its slot returned immediately; only requests that already went out take the "keep it for the late reply" path above.
+- **The line for "went out" must be clear.** The message is written straight into the channel's pipe (no intermediate buffer), and it counts as sent once the whole frame is written;
+  after that, the caller's cancellation only interrupts the wait on backpressure and never leaves half a frame. 〔Decision〕The pipe write does not carry the caller's token —
+  with it, the same cancellation exception could mean either "not a single byte written" or "already committed and will go out anyway",
+  and the two cases require opposite handling of the in-flight slot.
 
 ### 5.4 Wrap-up when the channel closes
 
-Channel disconnects → all in-flight requests in the ledger are completed **at once** with the same `SshChannelClosedException`.
-This is a direct benefit of the unified L6 ledger: this logic is written only once and proven only once.
+Once the pipeline stops, all in-flight requests in the ledger are completed **at once** with the same exception — the first fault cause;
+requests sent afterwards throw that exception immediately too. This is a direct benefit of the unified L6 ledger: this logic is written only once and proven only once.
+
+| Why it stopped | Exception the in-flight requests receive |
+| --- | --- |
+| The channel ended normally (the peer sent EOF / CLOSE, e.g. sftp-server exited; or the channel was closed locally) | `SftpTransferInterruptedException`. The pipeline layer does not know how far writes got, so its `DurableLength` is 0; a file stream replaces it in `FlushAsync` / on close with one carrying that stream's exact `DurableLength` (§6.2), keeping the cause as the inner exception |
+| The connection dropped | The connection fault handed out by the channel's reader, as is (`ObjectDisposedException` when the connection was disposed locally) |
+| A malformed frame arrived (length over the limit, too short for a `request-id`, §9) | `SshProtocolException` (`ProtocolError`) |
+| `SftpFileSystem` (and with it the pipeline) disposed locally | `SftpUnavailableException` |
+
+Callers that have no id yet — those waiting on the in-flight limit or the send lock — must be **released too**: they receive the fault from the table above,
+or, in a race during disposal, `ObjectDisposedException`. In-flight slots are returned only by replies, and no reply comes after the pipeline stops; without the release,
+waiters such as the batch of links resolved concurrently while listing a directory (§8) would wait forever.
+
+### 5.5 Read-ahead for sequential reads
+
+**Problem**: if a file stream's sequential read (`ReadAsync`) sends one `READ` at a time and waits for it before sending the next,
+throughput is pinned at "block size ÷ RTT" — on a 100 ms link a 32 KiB block gives only about 320 KB/s,
+and none of the depth the pipelined write side uses comes into play. Downloads take exactly this path.
+
+〔Decision〕**Sequential reads keep a read-ahead window: in-flight `READ`s are queued in offset order and handed to the reader one by one.**
+
+- **Sequential reads only.** `ReadAtAsync` (random read at an offset) still sends one request at a time.
+  When the read position changes (`Seek` / `Position`), or the same handle is written to or resized, the whole queue is discarded and restarts from the new position.
+- **Slow start**: the window starts at 1 request and doubles each time a full block is handed out, up to the in-flight limit (`SftpOptions.MaxInFlight`).
+  Callers that read only the first few bytes of a file don't trigger a burst of needless requests.
+- **No read-ahead past the known length**: requests are sent ahead only for offsets within the known length; beyond it, at most one request —
+  to reach `EOF`, or to notice that the file grew after it was opened. The known length comes from `FSTAT` at open time and is pushed forward by the data read.
+- **Short read** (the server returns fewer bytes than requested, and it is not `EOF`): hand out those bytes and discard the rest of the queue —
+  there is a hole between those requests' offsets and the read position, and restarting from the read position is the simplest and least error-prone option (the read-in-a-loop semantics of §4.3 are unchanged).
+- **Discarded requests must not be abandoned**: their replies still arrive, and are released when they do (the payload is rented from a pool).
+- **Cancellation cancels only that wait**: read-ahead requests belong to the stream, not to a single `ReadAsync`; when the caller cancels one read, the queue stays as it is and the next read continues from it.
+- On `EOF` or an error status: the whole queue is discarded; `EOF` returns 0, errors are thrown as usual.
 
 ---
 
@@ -334,7 +418,7 @@ On each OK reply to a WRITE:
     DurableLength = position of the first hole from 0 (i.e. the right end of the first range, if it starts at 0)
 ```
 
-`SftpStream.DurableLength` exposes it. Resumable transfer continues from this number — **exact, no guessing**.
+`SftpFileStream.DurableLength` exposes it. Resumable transfer continues from this number — **exact, no guessing** (see §6.6 for how to open a resume).
 
 〔Implementation note〕The range set must use an **ordered array + binary insertion** rather than a dictionary —
 with sequential writes a new range almost always attaches to the tail of the last one,
@@ -363,10 +447,68 @@ on the UI thread that freezes the interface for one RTT, and on the thread pool,
 | --- | --- |
 | `Read` / `Write` / `SetLength` (and single-byte, `Span` overloads) | Throw `NotSupportedException`, with the message naming the async version to use |
 | `Flush` | **Non-blocking no-op** (there is no local buffer); known write failures are still thrown. Use `FlushAsync` to confirm persistence |
-| `Dispose` | **Non-blocking**: wrap-up (waiting for in-flight write acknowledgements, closing the handle) is handed to the background and it returns immediately; wrap-up errors are not visible — to see them, use `await using` |
+| `Dispose` | **Non-blocking**: wrap-up (waiting for in-flight write acknowledgements, closing the handle) is handed to the background and it returns immediately; wrap-up errors (write interruption, `CLOSE` failure, §6.5) are not visible — to see them, use `await using` |
 
 `Flush` is kept as a non-throwing no-op because wrapper streams (such as `StreamWriter`) call it synchronously in their own wrap-up;
 making it throw would turn a harmless call into a failure.
+
+The async **array overloads** (the `byte[], int, int, CancellationToken` versions of `ReadAsync` / `WriteAsync`) and the old-style
+`BeginRead` / `EndRead` / `BeginWrite` / `EndWrite` **work as usual**, all forwarding to the async implementation.
+〔Decision〕They must be overridden explicitly: `Stream`'s default implementation routes them to the synchronous `Read` / `Write`,
+so without the override a caller who clearly used an asynchronous form would get the "async only" `NotSupportedException`.
+
+### 6.5 Closing: the `CLOSE` reply matters
+
+The wrap-up order of `DisposeAsync` (`await using`):
+
+1. Discard read-ahead still in flight (§5.5); its replies are released when they arrive;
+2. Wait for all in-flight writes to be acknowledged (same as `FlushAsync`);
+3. **Send `CLOSE` whether or not the previous step succeeded** — a handle must be closed even after a failed write, or it leaks on the server;
+4. Decide what to report per the table below.
+
+| Situation | Behavior |
+| --- | --- |
+| An in-flight write failed | Throw `SftpTransferInterruptedException` (carrying `DurableLength`). `CLOSE` is still sent, but its status is not examined — what happened first is the root cause |
+| All writes acknowledged, and `CLOSE` on a **writable stream** returns an error status | Throw `SftpException` (code and the server's text as in §3.3) |
+| `CLOSE` on a read-only stream returns an error status | Not reported |
+| `CLOSE` cannot be sent or gets no reply (channel gone, pipeline broken) | Not reported |
+| Closing an already closed stream (including after a synchronous `Dispose`) | No-op, does not throw |
+
+〔Decision〕**A writable stream examines the status of `CLOSE`.** Some servers (NFS deferred writes, quotas) report a write failure only at close;
+swallowing it makes the caller believe the file was written completely. "Writable" is by how the stream was opened, whether or not this session wrote anything
+(and not by `CanWrite` — that is already false after close, see below).
+Failing to close a read-only stream does not matter; if the channel is already gone the server reclaims the handle itself, and the real cause has already been reported by another path —
+throwing again on the dispose path would only hide it. A synchronous `Dispose` hands all of this to the background (§6.4) and **cannot see a `CLOSE` failure** — write files with `await using`.
+
+How the stream's members behave after close:
+
+| Member | After close |
+| --- | --- |
+| Those that need the handle: reads, writes (including the offset-based `ReadAtAsync` / `WriteAtAsync`, the array overloads and `BeginRead` / `BeginWrite`), `Seek`, `SetLengthAsync`, `GetAttributesAsync`, `FsyncAsync` | Throw `ObjectDisposedException` and send nothing |
+| `CanRead` / `CanWrite` | Become false (the `Stream` contract: a disposed stream can be neither read nor written) |
+| `Position` / `Length` / `DurableLength` | **Stay readable** |
+
+〔Decision〕**Everything that needs the handle is refused.** The reason is concrete: an OpenSSH handle is an index into a server-side table,
+and once closed it is given to the next file opened — writing again with the old handle writes into someone else's file.
+〔Decision〕**Position, length and `DurableLength` stay readable**: they do not touch the handle, and after a failed close
+the caller needs exactly them to decide where to resume (§6.6) — making them throw too would lock the information a resume needs inside the disposed stream.
+
+### 6.6 Resuming: `OpenAppendAsync`
+
+`OpenAppendAsync(path, offset)` opens the file (creating it if missing) **without truncating**, puts the write position at `offset`, and returns a write-only stream.
+Combined with `DurableLength` (the stream's, or the one in `SftpTransferInterruptedException`) this is exact resumable transfer.
+The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `Seek(0, SeekOrigin.End)` lands at the end of the file.
+
+- 〔Decision〕**Use `WRITE | CREAT`, not the `APPEND` pflag.** The resume point is `DurableLength`, which may be **smaller** than the file length —
+  the part after it contains holes (§6.1) and must be **overwritten** from the resume point. `APPEND` makes the server ignore offsets (§4.1),
+  so the data would land at the end of the file with the holes left in place; nor would we know where each block landed, so the range bookkeeping of §6.2 would be impossible.
+- 〔Decision〕**The returned stream counts `[0, offset)` as acknowledged**, so `DurableLength` starts there rather than at 0.
+  Otherwise, if the resumed transfer is interrupted again, `DurableLength` reports 0 and the next resume starts over from scratch.
+  - The file length is known at open time and `offset` exceeds it: count only up to the end of the file — `[file length, offset)` is a hole, not acknowledged data.
+  - The length is unknown (`FSTAT` refused, §4.1): count up to `offset`.
+- **The caller vouches for this premise**: `offset` should be the `DurableLength` reported by the previous transfer. Passing the server-reported file length as `offset`
+  counts the holes of §6.1 as "acknowledged" too — exactly the guess the watermark exists to eliminate.
+- A negative `offset` is rejected before `OPEN` is sent (`ArgumentOutOfRangeException`), leaving no handle that nobody closes (§4.1).
 
 ## 7 Extensions
 
@@ -431,6 +573,10 @@ Rationale:
 〔Performance〕The supplementary requests for link entries **must be issued concurrently** (they are pipelined on the same channel).
 For a directory like `/usr/lib` with hundreds of `.so` links, filling them in serially takes hundreds of round trips; concurrently it is just one round.
 
+〔Decision〕**A failing supplementary request affects only its own entry.** If the server refuses, or that one reply is malformed (e.g. `READLINK` returns two entries):
+`LinkTarget` is `null`, and a failed following `STAT` is treated as a broken link — one odd link must not make the whole directory unlistable.
+**A broken pipeline** (channel disconnected, malformed frame received) is not covered by this and is thrown as usual: that is not this entry's problem.
+
 ---
 
 ## 9 Edge cases and errors quick reference
@@ -445,5 +591,8 @@ For a directory like `/usr/lib` with hundreds of `.so` links, filling them in se
 | Server version < 3 | 〔Decision〕**Refuse**, throw `SftpUnsupportedVersion`. v0–v2 differ too much to be worth supporting |
 | `READ` returns more data than the requested length | `ProtocolError` |
 | `count` returned by `READDIR` does not match the actual number of entries | `ProtocolError` |
+| Malformed reply payload (truncated field, length out of bounds, etc.) | 〔Decision〕Throw the public `SshProtocolException` (`ProtocolError`); **the internal parsing exception must not leak** — it is an internal type that callers cannot catch by type. Affects only that one call: parsing happens on the caller's path, and the pipeline remains usable |
+| A reply too short to hold even the `request-id` | Pipeline fault; all in-flight requests fail together (§5.4) |
 | Path contains `\0` | Rejected locally (`ArgumentException`), not sent to the server |
 | In-flight request count reaches the limit | Wait (backpressure), no error |
+| The file size seen by `ReadAllBytesAsync` | 〔Decision〕Used only to estimate the initial capacity, **capped at 1 MiB** — it is a number from the peer, and a small file that claims 2 GiB must not make us allocate 2 GiB up front. With more actual data the buffer grows as reads arrive; there is no separate total cap, but the whole file must fit in one array, so large files should use the stream. Reading goes through sequential reads and gets §5.5's read-ahead |

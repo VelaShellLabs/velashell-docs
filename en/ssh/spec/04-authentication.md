@@ -72,16 +72,20 @@ do not assume it always fails.
 candidates = credentials configured by the caller (ordered)
 available  = method list the server gave in the most recent FAILURE
 
-for credential in candidates:
-    if credential.Method not in available: skip (record "skipped because the server does not accept it")
-    result = try(credential)
-    if result == Success: done
-    if result == PartialSuccess: refresh "available", continue the outer loop (§3.3)
-    if result == Failure: refresh "available", continue
+repeat scanning:
+    for credential in candidates (every scan starts from the top):
+        if credential already tried: skip (each credential is tried at most once, item 4)
+        if credential.Method not in available: skip (record "skipped because the server does not accept it"; does not count as tried)
+        if credential.Method ≠ publickey and that method has already failed N times: skip (item 3)
+        result = try(credential)
+        if result == Success: done
+        if result == PartialSuccess: refresh "available", end this scan and start over from the top (§3.3)
+        if result == Failure: refresh "available", continue
+until a scan completes without any PartialSuccess
 throw AuthenticationMethodExhausted, with the per-attempt record attached
 ```
 
-**Three 〔Decision〕s**:
+**Four 〔Decision〕s**:
 
 1. **The credential list configured by the caller is everything; no implicit fallback of any kind.**
    Do not automatically read `~/.ssh/id_*`, do not automatically connect to ssh-agent, unless the caller has explicitly added the corresponding credential.
@@ -89,17 +93,40 @@ throw AuthenticationMethodExhausted, with the per-attempt record attached
    Rationale: implicit fallback is a real problem in desktop clients — the user selects "password" in the UI,
    yet the library first tries some default private key, so inexplicable failure records appear in the server log;
    on Windows `SSH_AUTH_SOCK` often points to an msys/WSL Unix socket,
-   and auto-connecting to the agent hits an exception every time. **To use default keys or the agent, add a
-   `DefaultIdentityCredential` / `AgentCredential`** — a one-liner,
-   but it is the caller's explicit decision.
+   and auto-connecting to the agent hits an exception every time. **To use default keys or the agent, add them to the credential list explicitly**:
+   for a private key file, read a signer with `SshPrivateKeyFile.LoadAsync` and wrap it in a `PublicKeyCredential`;
+   for the agent, `SshAgentClient.GetCredentialsAsync` returns a list of `PublicKeyCredential`s (one per key).
+   A line or two, but it is the caller's explicit decision.
 
 2. **The reason for skipping must be recorded.** The `AuthenticationMethodExhausted` exception
    carries a per-attempt table: which were tried and with what result; which were **not tried because the server does not accept them**.
    Without this table, information like "skipped: publickey" exists only in the log,
    while the user sees "incorrect username or password".
 
-3. **Failure count and backoff**: after the same method fails N times in a row (〔Decision〕N = 3), do not retry it.
-   The server usually has its own counter too, and hitting the limit gets you temporarily banned.
+3. **The failure cap applies only to `password` and `keyboard-interactive`**: once a method has failed N times in total
+   within one authentication (〔Decision〕N = 3, `SshAuthenticator.MaxFailuresPerMethod`), later credentials of that method
+   are not tried; they are recorded as `SkippedNotOffered`, with `Detail` saying the method "has already failed N times in this authentication". When a password answers
+   keyboard-interactive (§6.5), the failure counts under `keyboard-interactive`. Retrying these two methods means guessing
+   **the same secret** again, and the server usually has its own counter too; hitting the limit gets you temporarily banned.
+
+   〔Decision〕**`publickey` is exempt from this cap.** Each key is a different credential and is tried once.
+   It used to fall under "stop after 3 failures" too — with five keys in the agent and the fourth one being right,
+   the fourth was never reached and the machine could never be logged into. The total number of public-key attempts is left
+   to the server's own `MaxAuthTries`: when it is hit the server disconnects (§9).
+   With many keys, put the right one first.
+
+4. **After a partial success, scan again from the top.** A partial success (§3.3) changes the server's list of available methods,
+   so credentials that were skipped because their method was "not accepted at the time" **get another chance** under the new list.
+   The typical case is `AuthenticationMethods publickey,password`: the server initially offers only `publickey`, so a password
+   credential listed earlier is skipped; only after the public-key step passes does the server open up `password`.
+   The loop used to make a single pass, that password credential was never revisited, and authentication failed with
+   "credentials exhausted" even though the caller had configured both.
+
+   〔Decision〕**A rescan only picks up credentials skipped because their method was not accepted; each credential is actually tried at most once.**
+   Credentials already tried — whether the result was partial success, failure, or `SkippedNoMaterial` — are not tried again:
+   the same key or the same password does not become right at a different moment, and retrying only burns the server's `MaxAuthTries`.
+   Every rescan is triggered by a partial success of a credential not tried before, so the number of scans never exceeds the number
+   of credentials. The cost is that one credential may leave several "skipped" entries in the attempt record, one per scan.
 
 ### 2.3 Common fields of `USERAUTH_REQUEST`
 
@@ -152,15 +179,17 @@ On FAILURE(partial_success = true):
     record "method X passed"
     refresh the available method list
     do **not** mark this credential as failed, and do not count it toward the failure count
-    continue the outer loop, picking the next method from the new list
+    go back to the top of the credential list and pick again using the new list (§2.2 item 4)
 ```
 
 〔Decision〕**After a partial success, the same credential type is allowed to appear again.**
 For example, the server requires "publickey twice, with two different keys" — this is a real configuration in high-security environments.
+What is allowed is another credential of the same **type**; the same credential is never tried a second time (§2.2 item 4).
 
 ### 3.4 Authentication attempt record
 
-Every attempt appends one entry to `AuthAttemptLog`:
+Every attempt (skips included) is recorded as one `SshAuthAttempt`; on success the whole table is in `SshAuthenticationResult.Attempts`,
+on failure in `SshAuthenticationException.Attempts`:
 
 | Field | Content |
 | --- | --- |
@@ -168,10 +197,21 @@ Every attempt appends one entry to `AuthAttemptLog`:
 | `CredentialLabel` | Name the caller gave the credential (e.g. the private key path), **containing no key material** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | Method list the server offered after this step |
-| `Detail` | E.g. "private key file could not be read", "server does not accept rsa-sha2-512" |
+| `Detail` | E.g. "private key file could not be read", "server does not accept this public key" |
 
-This table is packed into `SshAuthenticationException`.
 Its reason to exist is concrete: **so that "this machine requires a one-time code" and "the password was mistyped" can be distinguished in the UI.**
+
+〔Decision〕**`SkippedNoMaterial` records only problems with the credential itself**: exceptions thrown by the password callback,
+the keyboard-interactive response callback, or the signer (local private key, agent, external signer) — including
+the library's own exception types, such as an agent refusing to sign.
+All of these calls happen while **no request is in flight** (before a request is sent, or after the previous reply has been read),
+so skipping the credential and sending the next credential's request cannot misalign replies.
+
+**Everything else propagates as-is and is never treated as a skip**: a dropped connection (wrapped as `ClosedByPeer`),
+a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback.
+When these happen the request has usually been sent and its reply not yet read. Treating them as a skip would make the
+next credential read the previous credential's reply; the server may already have accepted the user while the client
+reports "all methods failed". Cancellation (`OperationCanceledException`) also propagates as-is.
 
 ---
 
@@ -252,11 +292,20 @@ Rules:
 | Situation | What we use |
 | --- | --- |
 | `server-sig-algs` received (§7) | The highest-priority one among those we support (`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`) |
-| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; if that fails, **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1) |
+| `server-sig-algs` received, but it lists none we can use | 〔Decision〕Still use our own first preference (`rsa-sha2-512`). Servers with incomplete announcements do exist, and a wrong guess costs only one extra round trip |
+| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; 〔Not implemented yet〕if that fails, **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1). Today only the first preference is used, with no retry on failure |
 
 〔Decision〕**Downgrade is off by default** (`AllowSha1RsaSignatures = false`).
 Rationale: unconditional downgrade hands back the gains of Terrapin-style downgrade attacks.
-Those who need to connect to old servers turn it on explicitly, and "SHA-1 signature was used this time" is visible in the diagnostics.
+Those who need to connect to old servers turn it on explicitly. 〔Not implemented yet〕"SHA-1 signature was used this time" is visible in the diagnostics — today the chosen signature algorithm is not recorded in the attempt record.
+Because the retry in the table's third row does not exist yet either, turning the switch on today only takes effect when `server-sig-algs`
+lists `ssh-rsa` but no `rsa-sha2-*` (or when the signer offers only `ssh-rsa`); an old server that sends no `server-sig-algs` still receives only `rsa-sha2-512`.
+
+〔Note〕**Strip the certificate suffix before deciding "is this SHA-1"** (`SshPublicKey.StripCertificateSuffix`).
+An RSA certificate (§4.5) has three algorithm names: `rsa-sha2-512-cert-v01@openssh.com`, `rsa-sha2-256-cert-v01@openssh.com`
+and `ssh-rsa-cert-v01@openssh.com`. The last one is a SHA-1 signature as well, and with `AllowSha1RsaSignatures = false` it is
+filtered out exactly like `ssh-rsa`. Comparing only against the name `ssh-rsa` means that when logging in with an RSA certificate
+and the server's `server-sig-algs` lists only `ssh-rsa-cert-v01@openssh.com`, SHA-1 still gets picked — the switch would be meaningless.
 
 〔Note〕The type string in the public key blob is **always `"ssh-rsa"`**, independent of the signature algorithm name (§03 5.1).
 
@@ -269,12 +318,68 @@ Certificate authentication is **not** a separate method; it is still `publickey`
 - **The signature is still produced by the corresponding private key**; the certificate is merely the CA's endorsement.
 
 The implementation therefore fully reuses the path of §4.1–§4.4, with just one extra task:
-pairing the certificate file with the private key. 〔Decision〕Following OpenSSH convention,
-the certificate for private key `id_ed25519` is by default at `id_ed25519-cert.pub`; if not found, explicit specification is required.
+pairing the certificate file with the private key. 〔Decision〕**The caller does the pairing explicitly**: `OpenSshCertificate.LoadAsync` reads the certificate,
+`SshCertificateSigner.Create(certificate, private key signer)` combines the two into one signer, which is then wrapped in a `PublicKeyCredential`.
+`Create` checks on the spot that the certificate and the private key belong together and fails immediately on a mismatch — otherwise the only symptom
+is the server's `Permission denied`, indistinguishable from "CA not trusted" or "principal mismatch". The library **does not** look for a matching
+`id_*-cert.pub` next to the private key, consistent with §2.2 item 1: it does not read files the caller did not name.
 
 〔Decision〕**The client does not validate the validity period of its own certificate.** That is the server's job;
-local validation only produces false negatives when clocks are out of sync. But **the expiry fact must be put into
-`AuthAttemptLog.Detail`** — when authentication fails, it is the number-one clue.
+local validation only produces false negatives when clocks are out of sync. 〔Not implemented yet〕The design is to **put the expiry fact into
+`SshAuthAttempt.Detail`** — when authentication fails, it is the number-one clue. Today the authenticator does not look at the certificate's validity period and `Detail` says nothing about it;
+the validity period is exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`, and saying "your certificate has expired" in the UI is up to the caller.
+
+**Certificates in the agent.** When `ssh-add` adds `id_*`, it also adds the matching `id_*-cert.pub`,
+so the agent's identity list often contains entries of type `*-cert-v01@openssh.com`.
+
+〔Decision〕**Certificates in the agent are listed as certificate identities and can be used for authentication directly.**
+`SshAgentClient.ListIdentitiesAsync` parses each identity with `SshPublicKey.Parse`, which understands certificate blobs
+(`IsCertificate = true`); `GetCredentialsAsync` wraps certificate identities into `publickey` credentials just like plain keys.
+The whole certificate is presented, and the signature is still made by the agent with the key inside the certificate — the sign
+request carries that certificate's blob, the same one the agent listed.
+`Parse` used to reject certificates while the listing skipped only a few specific exception types: a single certificate in the agent
+made the whole list fail to parse, and agent authentication, agent forwarding, and automatic key loading all broke at once.
+
+〔Decision〕**An identity that cannot be parsed skips only that entry.** A malformed certificate or a certificate type this library
+does not support (the key inside a certificate must be Ed25519, ECDSA P-256/384/521, or RSA; FIDO `sk-*` and `ssh-dss` are not
+supported) is skipped just like an unrecognized plain key (`sk-*`, `ssh-dss`, vendor-specific types) — failing on one entry would
+make the whole agent unusable.
+
+〔Note〕**For RSA certificates, the sign request's flags are set from the algorithm name with the certificate suffix stripped** (`SshAgentClient.SignAsync`).
+In the agent protocol, which SHA-2 an RSA signature uses is expressed by the `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RSA_SHA2_512` flags;
+no flag means SHA-1. A certificate's algorithm name is `rsa-sha2-512-cert-v01@openssh.com`; compared directly against `rsa-sha2-512`
+it does not match, the flag stays empty, and the agent produces a SHA-1 `ssh-rsa` signature — which contradicts the algorithm declared
+in the request, and is exactly the kind §4.4 disables by default.
+
+〔Decision〕**A certificate's fingerprint is the fingerprint of the key inside it** (`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`),
+matching what `ssh-keygen -l` shows for a certificate. Hashing the whole certificate blob would change the fingerprint on every re-signing,
+while what users compare against is always the key. So the plain identity and the certificate identity of the same key show the same
+fingerprint in the list, and that is correct.
+
+### 4.6 Private key files
+
+Local private keys are read by `SshPrivateKeyFile.LoadAsync` / `Parse`, which recognizes the format from the file header. Supported key
+types are Ed25519, RSA, and ECDSA P-256/384/521.
+
+| Format | File header | Encryption | Decoded by |
+| --- | --- | --- | --- |
+| OpenSSH (`openssh-key-v1`, the `ssh-keygen` default since OpenSSH 7.8) | `BEGIN OPENSSH PRIVATE KEY` | None; or `bcrypt` KDF + `aes{128,192,256}-ctr`, `aes{128,192,256}-cbc`, `aes{128,256}-gcm@openssh.com`, `chacha20-poly1305@openssh.com` | This library |
+| PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | None; or `aes256-cbc` (v2 derives with SHA-1, v3 with Argon2id) | This library |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | None; or PKCS#8's own passphrase encryption | BCL (Ed25519 in PKCS#8 cannot be read) |
+| PKCS#1 RSA / SEC1 EC, unencrypted | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | None | BCL |
+| Legacy encrypted PEM | Header of the previous row + `Proc-Type: 4,ENCRYPTED` | Passphrase derived with a single MD5 + 3DES / AES-CBC | **Refused** (see below) |
+
+〔Decision〕**Only the modern formats in the table above are supported; legacy encrypted PEM is intentionally not implemented.**
+It was the `ssh-keygen` default for passphrase-protected keys before OpenSSH 7.8 (`ssh-keygen -m PEM` still writes it today):
+the passphrase becomes the key after a single MD5 pass, with no iterations and no tunable cost, often paired with 3DES. Carrying
+that weak format in a security library is not worth it, and converting takes one command. When encountered, an `SshPrivateKeyException`
+is thrown **before any passphrase is asked for**, stating clearly that the format is not supported and how to convert:
+`ssh-keygen -p -f <private key file>` changes the passphrase once (old and new may be the same) and rewrites the file as `openssh-key-v1`.
+
+〔Decision〕**This exception has `NeedsPassphrase = false`.** `NeedsPassphrase = true` means "the passphrase is missing or wrong, asking again
+helps", and the UI relies on it to decide whether to show the input box again; for an unsupported format no number of prompts helps.
+Such files used to be handed to the BCL, which did not recognize them, yet the verdict was reported as "the passphrase is probably wrong"
+with `NeedsPassphrase = true` — the user kept re-entering the correct passphrase and the UI kept prompting again.
 
 ---
 
@@ -296,9 +401,9 @@ The server may reply with `SSH_MSG_USERAUTH_PASSWD_CHANGEREQ` (**60**, a method-
 | 2 | `string` | Prompt text (UTF-8) |
 | 3 | `string` | Language tag (ignored) |
 
-〔Decision〕**Implement it, but do not handle it by default** — when no `PasswordChangeHandler` is configured,
-treat it as a failure with an explicit reason (`Detail = "server requires a password change"`),
-rather than as an incomprehensible message.
+〔Decision〕**Recognize it, but do not implement the password-change flow** — receiving it is always recorded as one failure of that password credential,
+with the reason in `Detail` ("the server requires the password to be changed first; this library does not implement the password-change flow yet"),
+rather than treated as an incomprehensible message. There is no password-change callback to configure, and the request's "change password" flag is always sent as `FALSE`.
 
 Rationale: password expiry is very common in enterprise environments, and "the client simply disconnects without saying why"
 is the kind of failure users find hardest to recover from on their own.
@@ -452,6 +557,8 @@ Both positions must be accepted. **Received at any other position → protocol e
 | --- | --- | --- |
 | `SERVICE_REQUEST` rejected | `ProtocolError` | Server does not provide `ssh-userauth`; extremely rare |
 | All methods tried without success | `AuthenticationMethodExhausted` | **Carries the per-attempt record** (§3.4) |
+| Server disconnects after hitting its own `MaxAuthTries` | `Disconnected` | §2.2 item 3. Public keys are exempt from the library's failure cap; this is the backstop for their total |
+| Private key is legacy encrypted PEM (`Proc-Type: 4,ENCRYPTED`) | `Unsupported` | §4.6. `SshPrivateKeyException.NeedsPassphrase = false` — do not prompt for a passphrase again |
 | Server offers only `keyboard-interactive` and we have no matching credential configured | `TwoFactorRequired` | 〔Decision〕A separate reason code — so the UI can say "this machine requires a one-time code" |
 | `INFO_RESPONSE` count mismatch | `ProtocolError` | |
 | Interaction rounds / prompt count / length exceeded | `ProtocolError` | §6.4 |

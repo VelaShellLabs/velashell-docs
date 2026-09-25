@@ -156,7 +156,7 @@ flowchart TB
     subgraph API["VelaShell.Ssh — user-facing"]
         CONN["SshConnection<br/>state · lifecycle · events"]
         CMD["SshCommand · SshShell"]
-        SFTP["SftpFileSystem · SftpStream"]
+        SFTP["SftpFileSystem · SftpFileStream"]
         FWD["PortForwarder · SshTunnelStream"]
     end
 
@@ -279,7 +279,7 @@ interface ISshCipherSuite : IDisposable
 into **data**; the framing layer only needs to look at `Shape` to know how to cut packets — instead of every decryptor
 implementing "read 4 bytes first or decrypt first" on its own.
 
-> The encryption algorithms themselves all come from the BCL: `AesGcm` (AES-NI hardware acceleration), `ChaCha20Poly1305`.
+> The encryption algorithms themselves are not hand-written: AES-GCM uses the BCL's `AesGcm` (AES-NI hardware acceleration).
 > `chacha20-poly1305@openssh.com` is OpenSSH's custom construction (**two keys, length field encrypted separately**);
 > the BCL's `ChaCha20Poly1305` is the RFC 8439 one and is of no use — what is needed here is the raw ChaCha20 block function
 > and a standalone Poly1305, both from **BouncyCastle**.
@@ -363,9 +363,12 @@ throughput ceiling ≈ window / RTT
 2 MB / 200 ms ≈ 10 MB/s   ← on a transoceanic link SFTP can never beat this number
 ```
 
-We adapt by BDP: continuously measure RTT (keepalives and SFTP replies are natural probes) and the actual consumption rate,
-adjust the window within `[256 KiB, 64 MiB]` using "slow start + congestion avoidance", and expose
-`SshChannelOptions.WindowPolicy` (`Fixed(n)` / `Adaptive(min,max)`).
+We let the window adapt within `[256 KiB, 64 MiB]`, but **without estimating RTT or BDP**. The criterion looks only at two things visible locally:
+whether the window **ran low** in this round (between two top-ups; ≤ 1/8 left), and whether the reader was **starved — read everything and waited** — recently (this round or the previous one).
+Only when both hold does it double — with too small a window, a fast reader drains the data and waits a round trip; with a slow reader, running low is the reader's doing and a bigger window buys no throughput.
+After 3 rounds that never ran low it shrinks ×0.75. No timing criterion like "how long between two top-ups": that is always true on a LAN and would inflate the window to the maximum for nothing.
+The policy is exposed via `SshChannelOptions.WindowPolicy` (`SshWindowPolicy.Fixed(n)` / `Adaptive(min, max)`);
+the exact rules are in `spec/05-connection.md` §3.3.
 **Saves memory on a LAN, saturates bandwidth on transoceanic links.**
 
 > The window top-up trigger hangs off `PipeReader.AdvanceTo` — if the consumer doesn't read, the window isn't topped up;
@@ -450,15 +453,17 @@ Split into three layers, each independently unit-testable:
 
 1. **Write watermark — eliminates `ResumeSafetyMargin` outright.**
    The pipeline records the "highest **contiguously** acknowledged offset" (contiguous acked offset, rather than "highest acknowledged offset"),
-   and `SftpStream.DurableLength` exposes it. Resuming continues from that number, **no blind 2 MB back-off**;
+   and `SftpFileStream.DurableLength` exposes it. Resuming continues from that number, **no blind 2 MB back-off**;
    when the channel drops, it is written into the exception so the host can use it directly.
 2. **OpenSSH extensions as first-class citizens**: `posix-rename@openssh.com`, `hardlink@openssh.com`,
    `fsync@openssh.com`, `statvfs@openssh.com`, `limits@openssh.com`, `copy-data`,
    `home-directory`. The negotiation result is exposed as `SftpCapabilities`, **so the host can ask "does this server support it"**
    — instead of, as today, `PosixRenameFileAsync` silently falling back to a plain rename.
-3. **Pipeline depth set automatically from `limits@openssh.com`**: the server tells you its `max-read-length` /
-   `max-write-length` / `max-open-handles`; follow them instead of hard-coding 64 × 32 KB.
-   Deepen when RTT is high; converge when the server is small.
+3. **Block size from `limits@openssh.com`, pipeline depth adapted by "did requests wait"**, instead of hard-coding 64 × 32 KB:
+   the server's `max-read-length` / `max-write-length` cap the block size of a single request;
+   the in-flight request count starts at 64, and every 32 requests it checks how many of them **had to wait for an in-flight slot** —
+   more than half waiting means depth is the bottleneck, so it doubles (up to 256); none waiting gives a quarter back (not below the starting value).
+   No BDP estimate from RTT: that needs a bandwidth estimate first, which is unstable on a link that carries other traffic; "did we hit the limit" is more direct and harder to get wrong.
 
 ### 5.9 L8 forwarding and tunnels — metering inside the library
 
@@ -536,7 +541,7 @@ Used for: the connection diagnostics panel, protocol-level troubleshooting, reco
 | `Credential` | `SshCredential` | — |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **Split in two.** A one-shot command and an interactive shell differ in lifecycle, read/write shape and exit semantics; today they are crammed into one 1,198-line class, and properties like `HasTerminal` are what that cramming squeezes out |
 | `SftpClient` | `SftpFileSystem` | It is not a "client"; it is a view of a file system |
-| `SftpFile` | `SftpStream` | It is a subclass of `Stream`, and the name should say so |
+| `SftpFile` | `SftpFileStream` | It is a subclass of `Stream`, and the name should say so |
 | `SftpDirectory` / `ISftpDirectory` | `SftpDirectoryHandle` | — |
 | `SshDataStream` | `SshTunnelStream` | — |
 | `LocalForward`/`RemoteForward`/`SocksForward` | `PortForwarder` + `ForwardKind` | The three classes have nearly identical public surfaces; they differ only in "who listens" |
@@ -612,10 +617,10 @@ A **thin shim**: the type names and method signatures of `Tmds.Ssh`, forwarding 
 | :-: | --- | --- | --- |
 | 1 | **Send coalescing** | A single writer drains the queue in one go, Seals each frame into the PipeWriter, and Flushes once | High-concurrency SFTP writes: syscalls per round **64 → 1–2** |
 | 2 | **Large-block receive** | PipeReader reads in 64 KiB, replacing a fixed 4 KiB | 32 KiB packets: reads **8 → 1** |
-| 3 | **Adaptive channel window** | BDP estimate, `[256 KiB, 64 MiB]` | SFTP over a 200 ms RTT link: **~10 MB/s → near the bandwidth ceiling** |
-| 4 | **Adaptive SFTP pipeline** | Depth set from `limits@openssh.com` + RTT instead of a hard-coded 64×32 KB | Markedly higher throughput on high-latency links; small servers no longer get flooded |
+| 3 | **Adaptive channel window** | Ran low and the reader was starved → ×2, 3 rounds without running low → ×0.75, `[256 KiB, 64 MiB]`; no RTT / BDP estimate (§5.5) | SFTP over a 200 ms RTT link: **~10 MB/s → near the bandwidth ceiling** |
+| 4 | **Adaptive SFTP pipeline** | Block size from `limits@openssh.com`; depth scaled by how often requests wait for an in-flight slot (starts at 64, capped at 256) instead of a hard-coded 64×32 KB (§5.8) | Markedly higher throughput on high-latency links; small servers no longer get flooded |
 | 5 | **Zero-copy read path** | `PipeReader` hands over a `ReadOnlySequence<byte>` that consumers can parse directly | Removes the Sequence→Memory copy (one per packet) |
-| 6 | **Inline ChaCha20** | Three paths via AVX2 / SSE2 / AdvSimd with `Vector256`/`Vector128` | 2–4× encryption/decryption throughput on devices without AES-NI (some ARM) |
+| 6 | **Default cipher order by hardware** | With AES-NI / ARM Crypto extensions AES-GCM comes first, without them chacha20-poly1305 comes first (`SshAlgorithmSet.Default`); ChaCha20 and Poly1305 come from BouncyCastle's `ChaChaEngine` / `Poly1305`, not hand-written, with the engines kept resident and only the nonce changed per packet (§11.2.22) | Devices without AES hardware acceleration (some ARM) don't fall into software AES, which is an order of magnitude slower |
 | 7 | **Pooling on every path** | `ArrayPool` + `IValueTaskSource` (unified ledger §5.6) + `PoolingAsyncValueTaskMethodBuilder` | Near-zero GC allocation in steady-state transfers (target: < 50 Gen0 collections for a 1 GB SFTP transfer) |
 
 **Acceptance**: a BenchmarkDotNet suite that runs the same set of scenarios against `Tmds.Ssh` / `SSH.NET` on the same target machine
@@ -2346,6 +2351,155 @@ xauth always has `-f`, timer paused during verdict, SFTP sync API, SOCKS5 (inclu
 (including 407, the hint for proxies that only allow 80/443, **the reply and the SSH identification string arriving in the same write**), per-hop info for nested proxies, jump hosts,
 the proxy command's stderr, `ssh_config` mapping (jump chains, cycle detection, host key policy, IdentityFile, session options).
 
+### 11.2.20 A whole-library review after merging into the host, and the fixes (2026-09-24)
+
+The library was read through subsystem by subsystem (framing and cipher suites, KEX and rekeying, session core, channels, authentication and private keys, SFTP, forwarding, dialing and configuration),
+and the review kept to the same clean-room discipline (the only references were RFCs, OpenSSH `PROTOCOL*`, and this repository's specs). Issues that directly hurt users were fixed first,
+then the DoS limits and the window budget; the remaining findings are left for later. Every fix has a test that was confirmed to fail with the fix removed and to pass with it.
+
+#### Issues that directly hurt users
+
+| Problem | Root cause | Fix |
+| --- | --- | --- |
+| A single certificate, FIDO or DSA key in the agent breaks agent authentication, agent forwarding and auto-add-to-agent | Listing identities caught `SshWireFormatException`, while `SshPublicKey.Parse` throws `SshPublicKeyException` | Catch the right exception; skip identities we don't recognize |
+| An agent refusing to sign aborts the whole credential chain; a dropped connection is instead recorded as a "skip", and the next credential reads the previous one's reply | The chain decided "credential problem" by exception **type** | Only exceptions thrown by the credential's callbacks and the signer count (`spec/04` §3.4) |
+| Callers writing stdin hang forever when the channel closes | The stdin pump `return`ed from the middle of its loop, skipping reader completion; completing the writer does not release a pending `FlushAsync` | Every exit path of the pump completes the reader |
+| Channel opens in progress hang forever when the connection is disposed | Only `Fault` settles `_pendingOpens`, and disposal does not go through `Fault` | Disposal settles them too |
+| Cancelling a channel open leaks the channel on the server (using up `MaxSessions`) | The late confirmation after a cancel was dropped | A sent open stays in the ledger; when the confirmation arrives the channel is closed |
+| CLOSE could be skipped for good; the channel number was reclaimed before the peer's CLOSE; requests / EOF / data could still be sent after CLOSE | "Sent" was set before sending; the number was returned as soon as the local side finished; sends didn't check state | "Sent" is set under the enqueue lock at the moment of enqueueing; the number is held until both CLOSEs; nothing is sent after CLOSE (`spec/05` §1 rules 2 and 6) |
+| Disposing a channel stream drops the tail and sends no EOF; `FlushAsync` is a no-op | The channel was closed directly | Flush stdin and send EOF first, then close; `FlushAsync` waits until the data is handed to the session (`spec/09` §5.1) |
+| After a few cancellations every SFTP operation hangs | Requests never sent stayed in the ledger and never returned their in-flight slot; waiters were not woken on failure | Unsent requests are removed and give their slot back immediately; bytes are committed whole-frame and cancellation only interrupts backpressure; waiters are tied to the pipeline's lifetime |
+| Under strict KEX the connection drops after a rekey (chacha20 / HMAC suites) | Strict KEX was recomputed from each peer KEXINIT, so when the rekey KEXINIT omitted the marker the sequence numbers were not reset; the test server had the same bug | Fixed by the initial exchange and kept for the whole connection; rule (a) applies only to the initial exchange (`spec/03` §6) |
+| SFTP download throughput pinned at "block size ÷ RTT" | Sequential reads sent one `READ` at a time | Read-ahead for sequential reads (`spec/06` §5.5, spec written first) |
+
+#### DoS limits and the window budget
+
+| Problem | Fix |
+| --- | --- |
+| The session window budget meant nothing: refunded twice on refusal, growth never charged, refunded at the grown size on close | Refund exactly what was charged; growth requests budget first, shrinking gives it back (`spec/05` §3.3) |
+| When the peer sends but never reads, the receive loop's replies queue without bound | Hard limit `MaxQueuedReplyBytes` (16 MiB by default), exceeding it is a protocol violation; replies count toward backpressure |
+| A peer flooding unknown channel requests grows the event stream without bound (up to 256 KiB each) | At most 64 unread unknown requests are kept |
+| Refusing a channel open echoed a 64 KiB type name verbatim | Description truncated to 256 characters |
+| Rekeying had no timeout: the connection silently stopped when the peer never answered KEXINIT or stalled midway | 2 minutes by default; timing out disconnects with `Timeout / Rekeying` (`spec/03` §8.2) |
+| Starting a rekey while one was in progress sent a second KEXINIT (the "packet-count threshold" test failed about 1 in 4 full runs because of it — **this predates this round**) | "In progress" lasts until the gate reopens; closing the gate and KEXINIT are enqueued under the same lock |
+
+Also: `ReadAllBytesAsync` used to preallocate its initial capacity from the length the server reported (a server claiming 2 GiB got 2 GiB allocated up front); it is now capped at 1 MiB.
+
+#### Verification
+
+626 unit tests (606 pass, 20 interop tests skip without an sshd), 10 consecutive full runs green; the host's `VelaShell.Infrastructure.Tests` 536 pass.
+No interop run against real OpenSSH this round — how the strict-KEX fix plays out in practice depends on whether the server includes the marker in its rekey KEXINIT,
+so an interop test "chacha20 across a rekey" is worth adding the next time the target server is up.
+
+### 11.2.21 Second batch: the remaining security findings (2026-09-24)
+
+| Problem | Fix |
+| --- | --- |
+| Rekeying re-ran the whole host key policy (an interactive policy prompted mid-session while the receive loop waited; a lenient one let a swapped key through) | Pin the host key from the initial exchange and stop consulting the policy; if `K_S` changes, disconnect with `HostKeyChanged / Rekeying`; rekeying only negotiates algorithms of the pinned key's type (`spec/03` §8.4 already said so) |
+| After disposing the agent forwarder, agent channels already open kept signing for the remote | The forwarder has its own lifetime; disposing it closes the open channels too (`spec/07` §7.2) |
+| `DISPLAY=localhost:N` tried the Linux abstract socket first, so another local user binding it first received the real cookie | "Where to connect" and "which cookie" are separated: `localhost:N` is TCP only, cookie selection still treats it as local (`spec/07` §7.5.6 corrected too) |
+| Private key KDF parameters were unbounded (Argon2 4 GiB memory, one million bcrypt rounds) and used before the MAC is checked | bcrypt capped at 4096 rounds; Argon2 at 256 MiB, 256 passes, parallelism 1–16, with a cap on memory × passes; also pick the Argon2 variant named by `Key-Derivation` |
+| On Windows, connecting to a named-pipe agent didn't check who was on the other end (another user squatting `openssh-ssh-agent` would receive signing requests and, when adding keys, plaintext private keys) | Check the pipe owner: current user / SYSTEM / Administrators; the impersonation level is not lowered — the OpenSSH agent service stores keys as the connecting user (`spec/07` §7.2) |
+| Peer text went verbatim into exception messages (terminal escape injection) | `PeerText.Sanitize`: control characters, `DEL`, C1 and bidi controls become `?`, and the text is truncated; the verbatim text stays in `PeerDescription` / `ServerMessage` (`spec/08` §1) |
+| `KnownHostsPolicy` treated an unrecorded key type as "never seen"; `!pattern` was ignored; appends didn't add a missing newline; `ProxyCommand` could be injected | `OtherKeyTypesKnown` handled like "changed", and `IHostKeyTypePreference` makes connections prefer recorded types (`spec/03` §5.4); a negation vetoes the whole line; appends add the newline first; values are checked before substitution (`spec/09` §6) |
+
+Verification: 655 unit tests (635 pass, 20 interop tests skipped), 25 consecutive full runs green; of the 29 new tests, 19 were confirmed to fail with their fix removed.
+Two things could not be verified on this machine and are recorded as such: the X11 `localhost` difference only shows on Linux/macOS; the named-pipe owner check was only tested with "an agent run by the same user still connects" and the decision function —
+neither the real OpenSSH agent pipe owned by SYSTEM nor "another user squatting the name" was exercised.
+
+### 11.2.22 Third batch: correctness, performance and design, plus host certificates (2026-09-25)
+
+The remaining sections 3–5 of the review report (correctness, performance, design) were fixed in this round. The same day the user set the scope for algorithm support —
+"compatible with the mainstream algorithms is enough; leave the too-old, insecure ones aside" — and on that basis host certificates were added and legacy encrypted PEM was explicitly placed on the unsupported side.
+All behavior is written into the specs; the section noted in each item is where.
+
+#### Correctness: a failure must look like a failure
+
+| Problem | Decision |
+| --- | --- |
+| The forwarding relay treated errors as EOF: when one direction failed reading, it still sent FIN / `CHANNEL_EOF` to the other side, so truncated data was accepted as complete; the other direction hung | A normal end of reading half-closes only that direction; an error in either direction (including cancellation) **aborts** both ends — TCP gets a linger-0 RST, the channel a `CLOSE` without a preceding EOF; the side that failed first is reported, not the cancellation it caused on the other side (`spec/07` §2.2, §6) |
+| When the connection died mid-way, channel readers saw an EOF-like "done" | The read throws the connection's failure; `ObjectDisposedException` when the connection was disposed locally; only the peer's EOF / `CLOSE` counts as done (`spec/05` §4.4) |
+| After a channel closed entirely (`CLOSE`), the relay direction writing to it stayed stuck reading the local socket, holding the socket and a forwarding slot | An `SshChannel.Closed` token; the relay stops that direction on it (`spec/05` §4.4) |
+| Connection failures leaked to callers as-is: internal parse exception types, raw `IOException` / `SocketException`, both during a session and during setup; a mid-packet close during key exchange was reported as `ProtocolError`; `SshPublicKeyException` and `SshKeyExchangeException` were not under `SshException` | Normalized to public types before being handed out, with the same rules during setup (from a successful dial until authentication finishes) and `Phase` recording the failing step (`spec/08` §2.1); both exceptions now derive from `SshException` (`spec/08` §2). **Known limitation, not changed**: a session fault normalized this way always has `Phase` `Open`, even when it happened during a rekey |
+
+These share one judgement: **"the peer is done" and "the link broke" must look different to the reader.** Treat them alike,
+and a half-transferred file or half-run command output is handed out as a complete result, and a terminal cannot tell whether the user typed `exit` or the link broke (only the latter should trigger an automatic reconnect).
+
+#### Performance: control messages must not queue behind data
+
+| Problem | Decision |
+| --- | --- |
+| During a heavy upload, another channel's `WINDOW_ADJUST` queued behind the outbound backlog (and first waited on backpressure for room): the peer kept waiting for window, and downloads were dragged almost to a stop by the upload | Our window top-ups go through a priority lane that the send pump checks before every item, exempt from backpressure; the lane only moves a top-up earlier, never past `CLOSE` or the rekey gate (`spec/05` §3.2) |
+| Keep-alive probes waited on backpressure, or started their clock only once on the wire: a dead link typically looks exactly like the send pump stuck on one write, so the probe got stuck too, and the connection could not be declared dead precisely when it mattered most | Probes bypass backpressure, and their deadline starts when they are enqueued; at most one frame per interval, so this is not unbounded (`spec/05` §6.3) |
+| The adaptive window looked only at "ran low": a slow consumer pushed the window all the way to the maximum, piling up tens of MiB of unread data locally | Grow only when it ran low **and** the reader was recently starved; shrink after 3 rounds without running low (`spec/05` §3.3, §5.5 here) |
+| On a peer channel open, the receive loop awaited the user's handler in place (it may show a prompt or look up configuration): a slow handler stalled receiving for every channel on the connection | Parsing and handler lookup finish on the receive loop; "ask the handler, create the channel, confirm" runs in the background; at most 64 are being decided at once, and the excess is refused with `RESOURCE_SHORTAGE` (`spec/05` §8.1) |
+
+#### Performance: allocations on the hot path
+
+- **Channel data buffers are rented from a pool**: every block on the upload path used to allocate a new array. When the sender's `await` returns, the send pump no longer references the buffer, so it can go straight back to the pool;
+  **it is copied only when the rekey gate stashes it** — the stash holds on to it until the gate reopens, by which time the sender has long returned the buffer. The frame sent directly needs no copy: encryption has already copied it out.
+- **SFTP request frames are written directly into the channel's pipe**, with no intermediate buffer. They used to be assembled in a buffer that started at 256 bytes and doubled, so a 256 KiB `WRITE` was reallocated a dozen times and its data moved one extra time.
+- **Cipher suite objects live with the suite, not per packet**: the HMAC context is reused; ChaCha20-Poly1305's two engines and its Poly1305 stay resident, with only the nonce changed per packet;
+  CTR XORs in vector-width batches and advances the counter by the block count at once rather than one block at a time. A suite serves one direction on one thread only, so reuse is safe.
+  It brings one new risk: after a rekey the new set must start fresh from the new keys, and any leftover state makes the first packet under the new keys undecryptable —
+  yet when we encrypt and decrypt ourselves both sides are wrong in exactly the same way, and only another implementation shows it. Hence the interop test that lands a rekey **in the middle** of a large output (see verification below).
+
+Measured (Release, 32 KiB payload):
+
+| Suite | Throughput | Allocation per packet |
+| --- | --- | --- |
+| AES-CTR + HMAC | ~800 → ~1100–1200 MB/s | 288 B → 0 |
+| ChaCha20-Poly1305 | ~430–480 MB/s (bounded by BouncyCastle) | ~1.4 KB → 272 B |
+| AES-GCM | Unchanged: seal ~6.2–6.9 GB/s, open ~5 GB/s | 0 (already 0) |
+
+#### The link simulator was the bottleneck
+
+`DelayedStream` (`Transport/LinkCharacteristics.cs`) used to sleep the whole one-way latency inside its write lock on every write before handing the data down:
+writes were serialized by the latency, at most one write was in flight on the link at any moment, and throughput was capped at "size of one write ÷ one-way latency" —
+**part of what the window and pipeline-depth tests measured was the simulator itself**.
+
+It is now pipelined, like a real link: a write returns as soon as bandwidth throttling allows, and the data becomes readable at the other end after the one-way latency;
+data in flight sits in a bounded queue that a background task hands down in order when due — when the lower stream cannot keep up the queue fills and writers wait, so backpressure does not disappear with pipelining.
+`DisposeAsync` lets the data in flight arrive before closing the lower stream (the FIN goes after the bytes already sent; otherwise the final `DISCONNECT` never reaches the other end),
+and if the lower stream is stuck it waits one one-way latency plus 1 second before treating the link as cut; synchronous `Dispose` does not wait, which amounts to cutting the link.
+
+> The test harness is part of the system under test: if its model is wrong, what you measure is the harness.
+
+#### Dialing and `ssh_config`
+
+| Problem | Decision |
+| --- | --- |
+| Multiple addresses were tried one by one: on networks that advertise IPv6 but don't route it, the first address waited out a ~21-second SYN timeout before IPv4 got a turn | Happy Eyeballs (RFC 8305): interleave address families, stagger attempts 250 ms apart, the first to connect wins, the rest are closed (`spec/09` §2.5) |
+| The TCP step was fixed at 30 seconds, and a longer timeout configured on the connection had no effect on it | Dialers default to no limit; the connect timeout governs everything (`spec/09` §2.4) |
+| Authentication on a jump host counted against the outer connect timeout; an outer expiry was reported as "TCP connect timed out"; caller cancellation and expiry could not be told apart | The outer timer is paused during jump host authentication; expiry is reported as `Timeout / Dialing` naming the hop; cancellation propagates as-is (`spec/09` §2.4) |
+| `Include` contents were appended after the whole file: a later `Host *` in the main file beat the host-specific settings in the included file; the same file included from two blocks was skipped the second time as a "cycle". After switching to in-place expansion, the enclosing condition was lost as soon as the included file opened a block, and settings after the `Include` fell into the included file's last block | Expanded in place as a conditional include: the included file's own blocks are scoped under the enclosing condition (`SshConfigBlock.Enclosing`; every level must hold), and parsing returns to the block containing the `Include` afterwards; cycle detection looks only at the current include chain (`spec/09` §7.1) |
+| A `Match` condition that could not be evaluated counted as "not satisfied", so a leading `!` made it satisfied; `Match host` compared against the typed alias | Tri-state: cannot be evaluated means the whole block does not apply, negated or not; `Match host` compares against the name after `HostName` rewriting (`spec/09` §7.1) |
+| One unreadable `IdentityFile` failed the whole resolution; jump hosts and the target each read the same key (two KDF runs, two passphrase prompts) | Skip only that key and notify the caller; share by path within one resolution, no caching across calls (`spec/09` §7) |
+| The password the caller meant for the target was also handed to jump hosts | Password and keyboard-interactive go only to the final target; jump hosts get only public-key credentials (`spec/09` §7) |
+| With `ask` / absent, merely setting `UserKnownHostsFile` in the configuration discarded the caller's policy; `none` / `/dev/null` were treated as file paths | The caller's policy wins; `none` / `/dev/null` mean no `known_hosts` (`spec/09` §7) |
+
+#### Host certificates, and the private key format we do not read
+
+Under the "mainstream algorithms, nothing too old" scope:
+
+- **Host certificates are in** (`spec/03` §5.5). Certificate algorithms come **after** the plain ones: with no CA configured for the host, negotiating a certificate adds no assurance, and ordering them last keeps behavior exactly as before.
+  The certificate is validated only when `known_hosts` has a matching `@cert-authority` line; what gets recorded is the **plain key** inside the certificate (the blob changes on every re-signing, so recording the certificate would guarantee a "changed" next time);
+  a CA-managed host presenting a key the CA does not vouch for is rejected **without falling back to TOFU** — configuring a CA for a host is precisely about no longer relying on blind first-use trust; SHA-1 `ssh-rsa` CA signatures are refused.
+  A CA-vouched but invalid certificate, or a certificate algorithm negotiated while `K_S` is not a certificate, is reported as `HostKeyRejected` (`spec/08` §3).
+- **Rekeying negotiates only host key algorithms of the pinned key's type and of the same certificate-ness** (`SshConnection.RestrictToPinnedHostKey`).
+  The check used to strip the certificate suffix: with a pinned certificate the plain algorithm stayed in the list, and once it was negotiated the server presented its plain key, which did not match the pinned certificate,
+  so the connection was dropped as "host key changed" (`spec/03` §5.5).
+- **Legacy encrypted PEM (`Proc-Type: 4,ENCRYPTED`) is not read**; only modern formats are supported (OpenSSH, PuTTY `.ppk`, PKCS#8, and unencrypted PKCS#1 / SEC1).
+  The passphrase goes through a single MD5 to become the key, often paired with 3DES; carrying a decryptor for it in a security library is not worth it, and conversion is one command.
+  It is refused **before** asking for a passphrase, with conversion guidance (`ssh-keygen -p` to change the passphrase once rewrites the file in OpenSSH format); it used to go to the BCL, which does not understand it, and the result read "the passphrase is probably wrong" (`spec/04` §4.6).
+
+#### Verification
+
+The full suite is 761 tests, 22 of them interop tests against real OpenSSH (`linuxserver/openssh-server`), run this round with the target server up, none skipped.
+The two new interop tests cover what previously could only be checked against the in-memory stub: every encryption algorithm in the default list (chacha20-poly1305, AES-GCM, AES-CTR)
+keeps working across a rekey that lands **in the middle** of a large output — the to-do left by §11.2.20, and the real acceptance test for the cipher object reuse above;
+and a real `ssh-keygen`-signed host certificate validated against a `known_hosts` `@cert-authority` line.
+
 ### 11.3 Switch-over strategy with VelaShell
 
 1. VelaShell's `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`
@@ -2364,7 +2518,7 @@ the proxy command's stderr, `ssh_config` mapping (jump chains, cycle detection, 
 | Risk | Mitigation |
 | --- | --- |
 | **Interop long tail** — SSH's pitfalls are all on old devices | The §10.3 matrix runs from M1 onward, not left to the end; old-device algorithm priorities are a separate group |
-| **Cryptographic implementation errors** | Principle 6: only assemble, don't build primitives; the only self-written one, ChaCha20, is pinned with RFC vectors; external audit before 1.0 |
+| **Cryptographic implementation errors** | Principle 6: only assemble, don't build primitives (ChaCha20 / Poly1305 come from BouncyCastle too); the only hand-written one is `bcrypt_pbkdf` (§11.2.18), which does only that one KDF and is verified only end to end against real `ssh-keygen` output; external audit before 1.0 |
 | **Schedule overrun** | Milestones are cut by capability, and every M is a usable state; VelaShell keeps using Tmds until M6, so we can stop at any time |
 | **Staffing** — 24 weeks of work | Understand it clearly before starting. **The cost of giving up halfway is a half-built SSH stack**, which is far worse than today's 1,200 lines of patches |
 | "Still looks similar" | The clean-room procedure from §2.2 is followed from the very first commit of M0 — not added at the end, by which point it's too late |

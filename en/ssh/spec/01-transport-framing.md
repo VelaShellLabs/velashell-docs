@@ -34,16 +34,16 @@ byte[m]   mac                —— m = MAC length (0 under AEAD suites; the tag
 | Phase | `packet_length` upper limit | Basis |
 | --- | --- | --- |
 | Before authentication completes | **35000** | RFC 4253 §6.1 requires implementations to support at least 35000; the handshake needs nothing larger |
-| After authentication completes | **`ReceiveMaxPacketBytes`, default 262144 (256 KiB)** | 〔Decision〕see below |
+| After authentication completes | **262144 (256 KiB)** | 〔Decision〕see below |
 
-〔Decision〕**After authentication, relax to 256 KiB, configurable.**
+〔Decision〕**After authentication, relax to 256 KiB.**
 Rationale: the RFC only specifies a lower bound. SFTP on high-latency links relies on large packets to reduce round trips;
 permanently locking the limit at 35000 would directly shut off the throughput optimizations of §7. But there cannot be no limit either ——
 it is the largest single block of memory the peer can make us allocate, a clear denial-of-service surface.
 256 KiB is the compromise between "large enough not to limit throughput" and "small enough not to be worth using to exhaust memory".
 
 〔Decision〕The relaxation happens **at the moment authentication succeeds**, performed by the connection factory (the same switch point as delayed compression).
-The `maximum packet size` announced when opening a channel MUST fit within this limit (minus the packet header and maximum padding),
+The `maximum packet size` announced when opening a channel (the channel option `ReceiveMaxPacketBytes`, default 32 KiB) MUST fit within this limit (minus the packet header and maximum padding),
 otherwise opening the channel is refused on the spot —— rather than waiting for the peer to send an "oversized packet" per our announcement and then judging it a protocol error.
 〔History〕A comment in an early implementation said "relax after authentication", but no code actually performed the relaxation:
 once a channel's announced packet limit exceeded roughly 34 KB, the server's packets were treated as protocol errors.
@@ -55,8 +55,9 @@ are already parsing at the wrong position, and all subsequent bytes are untrustw
 
 - The padding **MUST** make `packet_length + 4` (including the length field itself) an
   **integer multiple of `max(8, cipher block size)`**.
-  - Stream and AEAD suites (ChaCha20, AES-CTR, AES-GCM) align to a block size of 8.
-  - AES-CBC aligns to 16.
+  - ChaCha20-Poly1305 and the null suite of the handshake align to 8.
+  - AES-CTR and AES-GCM align to the AES block size of 16 (§2.1).
+  - CBC is not implemented (00 §6.3).
 - **Exception: two cases where the length field does not enter the alignment computation.**
   What is aligned is `padding_length + payload + padding`, **excluding** the 4-byte length, when:
   1. the encryption algorithm is **AEAD** (`aes*-gcm@openssh.com` see RFC 5647,
@@ -143,12 +144,14 @@ LengthIsEncrypted = false   AadBytes = 4   TagBytes = 16   BlockBytes = 16(align
   "the connection runs for a while and then suddenly fails authentication". This is the most insidious pitfall in GCM implementations.
 - Alignment is to 16, **excluding** the length field (the exception in §1.2).
 
-#### ③ `aes*-ctr` / `aes*-cbc` + separate MAC
+#### ③ `aes*-ctr` + separate MAC
 
 ```
-LengthIsEncrypted = true(both CTR and CBC encrypt the length)   AadBytes = 0
+LengthIsEncrypted = true(CTR encrypts the length)   AadBytes = 0
 TagBytes = MAC length   BlockBytes = 16   EtM = determined by the MAC algorithm name
 ```
+
+CBC has this same shape in framing terms, but this library does not implement it (00 §6.3).
 
 Two MAC orders:
 
@@ -203,6 +206,7 @@ sequenceDiagram
     C-->>F: payload
     F->>P: AdvanceTo(end of frame)
     F->>F: sequence number += 1
+    F->>F: Decompress (when compression is on, §6)
     F->>S: Deliver payload
 ```
 
@@ -247,6 +251,15 @@ socket writes. Coalescing them into 1–2 writes is the entire content of item 1
 - 〔Decision〕**Flush immediately when the queue is empty, without waiting**. No Nagle-style delayed aggregation ——
   keystroke latency in an interactive shell matters far more than throughput, and in bulk scenarios the queue is not empty anyway.
 
+**Disposal**:
+
+〔Decision〕**Disposing the transport no longer writes to the stream.** The send pump flushes explicitly after every batch, so any bytes still in the write buffer at disposal
+can only have been left behind by a flush that was cancelled —— and that flush was most likely cancelled precisely because the peer stopped reading
+(TCP zero window, a half-open link). Flushing again at disposal means waiting on the disposal path for a peer that is never coming back,
+until TCP itself gives up (which can take a dozen minutes or more), with the caller's `await using` stuck there the whole time.
+So the write side is completed with a "disposed" error and the leftover bytes are discarded; the read side is completed as usual.
+The whole disposal path **does not throw**: it usually runs while cleaning up after some error, and a secondary I/O error surfacing there would only mask the real cause.
+
 ---
 
 ## 5 Boundaries and errors
@@ -262,6 +275,15 @@ socket writes. Coalescing them into 1–2 writes is the entire content of item 1
 | Unknown message number | Reply `SSH_MSG_UNIMPLEMENTED` (carrying the sequence number that triggered it), **do not disconnect** |
 | Peer closes the connection mid-frame | `ClosedByPeer`. **Not** `ProtocolError` —— distinguishing the two matters for the upper layer's reconnect decision |
 | Peer closes cleanly (EOF on a frame boundary) | `ClosedByPeer` |
+| Decompression fails (over the §6 limit, or a corrupt zlib stream) | Disconnect, `ProtocolError`; the reported cause MUST be the decompression failure itself (§6) |
+
+〔Decision〕**EOF in the middle of a frame is an error, but the error must say "the peer closed mid-packet".**
+The framing layer cannot quietly return "end of stream" the way it does for EOF on a frame boundary —— that would silently swallow a truncated packet,
+and the upper layer would believe the peer left normally. But it is not the peer sending garbage either: the frame format error the framing layer raises carries a "peer closed mid-packet" flag,
+and **all three phases** —— key exchange, authentication, and the session after the connection is established —— use it to classify the failure as `ClosedByPeer`
+(`SshConnectionClosedException`, with phase `KeyExchange` / `Authenticating` / `Open` respectively, the same class as socket I/O failures);
+only the remaining frame format and integrity errors are classified as `ProtocolError`.
+Automatic reconnect acts only on "the link dropped" —— report a dropped link as a protocol error and reconnect never kicks in.
 
 〔Decision〕**An unknown message number does not disconnect.** RFC 4253 §11.4 requires replying `SSH_MSG_UNIMPLEMENTED`.
 Disconnecting would make it impossible to coexist with servers that implement new extensions —— and that is precisely how the SSH ecosystem evolves.
@@ -283,10 +305,21 @@ Receive: decrypt/verify → strip padding → payload → decompress → message
   **No** compressor is installed at the NEWKEYS of the first key exchange.
 - `zlib` (RFC 4253 §6.2): **not implemented** (rationale in 00 §6.5). It compresses from the first NEWKEYS;
   if it were negotiated but treated as no compression, the two ends would desynchronize on the first authentication packet, surfacing only as an unexplained decompression error.
-  So if the negotiated compression algorithm is anything other than `none` / `zlib@openssh.com`, negotiation fails on the spot with a key-exchange error.
+  So if our compression list contains any name other than `none` / `zlib@openssh.com`, the pre-connect list check rejects it (03 §2.2);
+  when key exchange is run directly, bypassing the connection factory, a negotiated result other than these two still fails on the spot with a key-exchange error.
 - **After every key re-exchange, the compression context MUST be reset**.
   The symptom of not resetting it is that the peer fails to decompress after rekeying —— by which time it is no longer recognizable as a compression problem.
 
 The compressed `payload` length is still subject to the limit of §1.1;
-**the decompressed length MUST also be capped** (〔Decision〕4 times `ReceiveMaxPacketBytes`),
-otherwise a small packet could decompress into arbitrarily large memory —— i.e. a zip bomb.
+**the decompressed length MUST also be capped**, otherwise a small packet could decompress into arbitrarily large memory —— i.e. a zip bomb.
+
+〔Decision〕**The decompression cap is the `packet_length` limit in force at the time** (§1.1). `zlib@openssh.com` is only enabled after authentication, so in practice it is 256 KiB.
+The cap is checked **before** the decompressed data is written out; exceeding it disconnects with `ProtocolError`.
+Rationale: a normal peer splits data according to the channel packet limit we announce (32 KiB by default; raising it must still fit within the §1.1 limit) and every other message is small, so decompressed payloads fit anyway;
+allowing some multiple of the packet limit buys no interoperability and only enlarges the memory a compression bomb can occupy.
+
+> 〔2026-09-25 correction〕This rule used to say "4 times `ReceiveMaxPacketBytes`". The implementation uses the packet limit itself; the text now matches it.
+
+〔Note〕Decompression happens **after** the frame has already been consumed from the read buffer. When decompression fails, the "parse failure → hand the read buffer back untouched" cleanup
+**MUST NOT** run —— the read position is already past this frame, so that step throws a separate internal error that masks the real cause (hitting the decompression cap, a corrupt zlib stream),
+and the user sees only an internal exception with nothing to act on. What reaches the upper layer must be the decompression failure itself.

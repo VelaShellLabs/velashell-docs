@@ -155,7 +155,7 @@ flowchart TB
     subgraph API["VelaShell.Ssh —— 面向使用者"]
         CONN["SshConnection<br/>状态 · 生命周期 · 事件"]
         CMD["SshCommand · SshShell"]
-        SFTP["SftpFileSystem · SftpStream"]
+        SFTP["SftpFileSystem · SftpFileStream"]
         FWD["PortForwarder · SshTunnelStream"]
     end
 
@@ -278,7 +278,7 @@ interface ISshCipherSuite : IDisposable
 变成了**数据**，帧层只看 `Shape` 就知道该怎么切包 —— 而不是让每个 decryptor
 各自实现一遍「先读 4 字节还是先解密」。
 
-> 加密算法本身一律走 BCL：`AesGcm`（AES-NI 硬件加速）、`ChaCha20Poly1305`。
+> 加密算法本身不自己写：AES-GCM 走 BCL 的 `AesGcm`（AES-NI 硬件加速）。
 > `chacha20-poly1305@openssh.com` 是 OpenSSH 的自定义构造（**两把密钥，长度字段单独加密**），
 > BCL 的 `ChaCha20Poly1305` 是 RFC 8439 的那一个，用不上 —— 这里需要的是 raw ChaCha20 块函数
 > 与独立的 Poly1305，两样都走 **BouncyCastle**。
@@ -362,9 +362,12 @@ Tmds 的 `DefaultWindowSize` 固定 2 MB，窗口在消费到一半时补满（�
 2 MB / 200 ms ≈ 10 MB/s   ← 跨洋链路上 SFTP 怎么也跑不过这个数
 ```
 
-我们按 BDP 自适应：持续测量 RTT（keepalive 与 SFTP 应答天然就是探针）与实际消费速率，
-窗口在 `[256 KiB, 64 MiB]` 间按「慢启动 + 拥塞避免」调整，并暴露
-`SshChannelOptions.WindowPolicy`（`Fixed(n)` / `Adaptive(min,max)`）。
+我们让窗口在 `[256 KiB, 64 MiB]` 间自适应，但**不估 RTT，也不估 BDP**。判据只看本端看得见的两件事：
+这一轮（两次回补之间）窗口有没有**见底**（剩余 ≤ 1/8），以及读的一方最近（这一轮或上一轮）有没有**读空了在等**。
+两者同时成立才 ×2 —— 窗口太小时，读得快的一方会读空、空等一个往返；读得慢时见底是读的一方造成的，扩窗换不来吞吐。
+连续 3 轮没见底就 ×0.75。不用「两次回补隔了多久」这类时间判据：它在局域网上永远成立，会让窗口白涨到上限。
+策略经 `SshChannelOptions.WindowPolicy` 暴露（`SshWindowPolicy.Fixed(n)` / `Adaptive(min, max)`），
+逐条规则见 `spec/05-connection.md` §3.3。
 **局域网上省内存，跨洋链路上跑满带宽。**
 
 > 窗口回补的触发点挂在 `PipeReader.AdvanceTo` 上 —— 消费者不读，窗口就不补，
@@ -449,15 +452,17 @@ interface ISshSigner
 
 1. **写入水位线（write watermark）—— 直接消灭 `ResumeSafetyMargin`。**
    管线记录「已**连续**确认的最高偏移」（contiguous acked offset，而不是「最高确认偏移」），
-   `SftpStream.DurableLength` 暴露它。断点续传从这个数续，**不用盲退 2 MB**；
+   `SftpFileStream.DurableLength` 暴露它。断点续传从这个数续，**不用盲退 2 MB**；
    通道断开时把它写进异常，宿主可以直接用。
 2. **OpenSSH 扩展一等公民**：`posix-rename@openssh.com`、`hardlink@openssh.com`、
    `fsync@openssh.com`、`statvfs@openssh.com`、`limits@openssh.com`、`copy-data`、
    `home-directory`。协商结果暴露为 `SftpCapabilities`，**宿主能查「这台服务器支不支持」**
    —— 而不是像现在这样，`PosixRenameFileAsync` 只能静默退化成普通 rename。
-3. **管线深度按 `limits@openssh.com` 自动定**：服务器告诉你它的 `max-read-length` /
-   `max-write-length` / `max-open-handles`，照着来，而不是写死 64 × 32 KB。
-   RTT 高时加深，服务器小时收敛。
+3. **块大小按 `limits@openssh.com` 定，管线深度按「有没有等过」自适应**，而不是写死 64 × 32 KB：
+   服务器宣告的 `max-read-length` / `max-write-length` 给出单个请求的块大小上限；
+   在途请求数从 64 起步，每 32 个请求看一次其中有多少是**等着才拿到在途额度**的 ——
+   过半在等说明深度是瓶颈，翻倍（上限 256）；一次都没等过就收回四分之一（不低于起步值）。
+   不按 RTT 估 BDP：那要先估出带宽，而带宽估计在一条还有别的流量的链路上很不稳；「有没有撞到上限」更直接，也更难估错。
 
 ### 5.9 L8 转发与隧道 —— 库内计量
 
@@ -536,7 +541,7 @@ enum SshFailureReason {
 | `Credential` | `SshCredential` | — |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **拆成两个。** 一次性命令与交互式 shell 的生命周期、读写形状、退出语义都不一样，现在挤在一个 1,198 行的类里，`HasTerminal` 这种属性就是挤出来的 |
 | `SftpClient` | `SftpFileSystem` | 它不是一个「客户端」，它是一个文件系统视图 |
-| `SftpFile` | `SftpStream` | 它是 `Stream` 的子类，名字就该说这件事 |
+| `SftpFile` | `SftpFileStream` | 它是 `Stream` 的子类，名字就该说这件事 |
 | `SftpDirectory` / `ISftpDirectory` | `SftpDirectoryHandle` | — |
 | `SshDataStream` | `SshTunnelStream` | — |
 | `LocalForward`/`RemoteForward`/`SocksForward` | `PortForwarder` + `ForwardKind` | 三个类的公开面几乎一样，差别只在「谁监听」 |
@@ -612,10 +617,10 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown
 | :-: | --- | --- | --- |
 | 1 | **发送合并** | 单写者一次取尽队列，逐帧 Seal 进 PipeWriter，一次 Flush | SFTP 高并发写：每轮 syscall **64 → 1~2** |
 | 2 | **大块收包** | PipeReader 按 64 KiB 读，替代固定 4 KiB | 32 KiB 包：read **8 次 → 1 次** |
-| 3 | **自适应通道窗口** | BDP 估计，`[256 KiB, 64 MiB]` | 200 ms RTT 链路 SFTP：**~10 MB/s → 接近带宽上限** |
-| 4 | **SFTP 管线自适应** | 按 `limits@openssh.com` + RTT 定深度，而非写死 64×32 KB | 高延迟链路吞吐显著提升；小服务器不再被打爆 |
+| 3 | **自适应通道窗口** | 见底且读的一方读空过 → ×2，连续 3 轮没见底 → ×0.75，`[256 KiB, 64 MiB]`；不估 RTT / BDP（§5.5） | 200 ms RTT 链路 SFTP：**~10 MB/s → 接近带宽上限** |
+| 4 | **SFTP 管线自适应** | 块大小按 `limits@openssh.com`；深度按「请求等在途额度的次数」伸缩（64 起步，上限 256），而非写死 64×32 KB（§5.8） | 高延迟链路吞吐显著提升；小服务器不再被打爆 |
 | 5 | **零拷贝读路径** | `PipeReader` 交 `ReadOnlySequence<byte>`，消费者可直接解析 | 去掉 Sequence→Memory 那一次拷贝（每包一次） |
-| 6 | **内联 ChaCha20** | AVX2 / SSE2 / AdvSimd 三路 `Vector256`/`Vector128` | 无 AES-NI 的设备（部分 ARM）上加解密吞吐 2–4× |
+| 6 | **按硬件排默认加密算法** | 有 AES-NI / ARM Crypto 扩展时 AES-GCM 排第一，没有时 chacha20-poly1305 排第一（`SshAlgorithmSet.Default`）；ChaCha20 与 Poly1305 走 BouncyCastle 的 `ChaChaEngine` / `Poly1305`，不自己写，引擎常驻、每个报文只换 nonce（§11.2.22） | 无 AES 硬件加速的设备（部分 ARM）上不落进慢一个数量级的软件 AES |
 | 7 | **全路径池化** | `ArrayPool` + `IValueTaskSource`（统一账本 §5.6）+ `PoolingAsyncValueTaskMethodBuilder` | 稳态传输接近零 GC 分配（目标：1 GB SFTP 传输 Gen0 < 50 次） |
 
 **验收方式**：BenchmarkDotNet 套件，与 `Tmds.Ssh` / `SSH.NET` 在同一台靶机上跑同一组场景
@@ -2283,6 +2288,155 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 （含 407、只放行 80/443 的提示、**应答与 SSH 标识串同一次写到达**）、代理嵌套的逐跳信息、跳板、
 代理命令的 stderr、`ssh_config` 映射（跳板链、环检测、主机密钥策略、IdentityFile、会话项）。
 
+### 11.2.20 并入宿主之后的一次全库审查与修补（2026-09-24）
+
+按八个子系统分头通读（帧层与密码套件、KEX 与重协商、会话核心、通道、认证与私钥、SFTP、转发、拨号与配置），
+审查过程同样守净室规程（依据只有 RFC、OpenSSH `PROTOCOL*` 与本仓库的规格）。先修直接伤到使用者的，
+再修 DoS 上限与窗口预算；其余发现留作后续。每一条修补都有一条先在撤掉修复时确认失败、再确认通过的用例。
+
+#### 直接伤到使用者的
+
+| 问题 | 根因 | 修补 |
+| --- | --- | --- |
+| agent 里只要有一张证书、一把 FIDO 或 DSA 钥，agent 认证、agent 转发、自动加钥一起失败 | 列身份时接的是 `SshWireFormatException`，而 `SshPublicKey.Parse` 抛的是 `SshPublicKeyException` | 接对异常，不认识的身份跳过 |
+| agent 拒签整条凭据链中断；断网反被记成「跳过」，下一条凭据读到上一条的应答 | 认证链按异常**类型**筛「凭据问题」 | 只接凭据回调与签名器自己抛的（`spec/04` §3.4） |
+| 通道关闭时写 stdin 的调用方永远挂住 | stdin 泵从循环中间 `return`，跳过了完成 reader；完成 writer 放不出挂起的 `FlushAsync` | 泵的每条出口都完成 reader |
+| 释放连接时正在开的通道永远挂住 | 只有 `Fault` 结算 `_pendingOpens`，释放不走 `Fault` | 释放时一并结算 |
+| 取消开通道会在服务端泄漏通道（占 `MaxSessions`） | 取消后迟到的确认被丢在地上 | 已上线的开通道请求不摘账本，确认到了就关 |
+| CLOSE 可能永远不发；通道号在对端 CLOSE 之前就回收；CLOSE 之后还会发请求 / EOF / 数据 | 先设「已发」后发送；本端收尾即还号；发送前不看状态 | 「已发」与入队同一刻在入队锁里设；号扣到双向 CLOSE；CLOSE 之后一律不发（`spec/05` §1 规则 2、6） |
+| 通道流释放时丢掉尾部、不发 EOF；`FlushAsync` 空操作 | 直接关通道 | 先冲刷 stdin、发 EOF 再关；`FlushAsync` 等数据交给会话（`spec/09` §5.1） |
+| SFTP 取消几次之后所有操作挂住 | 没发出去的请求留在账本里，在途额度永不归还；故障时排队者不被唤醒 | 没上线就当场摘账本还额度；字节整帧提交、取消只打断背压；排队者连上生命周期 |
+| 严格 KEX 下重协商之后连接断开（chacha20 / HMAC 套件） | 严格 KEX 每次按对端 KEXINIT 重算，重协商时不再带标记就不归零序号；测试桩错在同一处 | 首次交换定下、整条连接沿用；规则 (a) 只管首次交换（`spec/03` §6） |
+| SFTP 下载吞吐被钉死在「块大小 ÷ RTT」 | 顺序读一次只发一个 `READ` | 顺序读预读（`spec/06` §5.5，先写规格再实现） |
+
+#### DoS 上限与窗口预算
+
+| 问题 | 修补 |
+| --- | --- |
+| 会话窗口总预算形同虚设：被拒一次退两次、扩窗从不计、关闭按扩后的大小退 | 退款以实际计过的数为准；扩窗先申请、缩窗退还（`spec/05` §3.3） |
+| 对端只发不收时，接收循环的应答无界排队 | `MaxQueuedReplyBytes`（默认 16 MiB）硬上限，超限判违规；应答计入背压 |
+| 对端灌未知通道请求，事件流无界增长（每条最长 256 KiB） | 未读的未知请求最多留 64 条 |
+| 拒绝开通道时原样回显 64 KiB 的类型名 | 描述截到 256 字符 |
+| 重协商没有超时：对端不回 KEXINIT 或卡在半路时连接无声停住 | 默认 2 分钟，超时以 `Timeout / Rekeying` 断开（`spec/03` §8.2） |
+| 交换进行中再发起重协商会发出第二个 KEXINIT（「报文数到阈值」用例满跑约 1/4 挂在这里，**修前就在**） | 「在谈」覆盖到开闸为止；关闸与 KEXINIT 在同一把锁里入队 |
+
+顺带：`ReadAllBytesAsync` 的初始容量曾按服务端报的长度预分配（谎报 2 GiB 就先分配 2 GiB），封顶 1 MiB。
+
+#### 验证
+
+单元用例 626 条（606 通过、20 条互操作在无 sshd 时跳过），满跑连续 10 轮全绿；宿主 `VelaShell.Infrastructure.Tests` 536 通过。
+本轮没有对真实 OpenSSH 跑互操作 —— 严格 KEX 那一条的真实表现依赖服务端在重协商 KEXINIT 里带不带标记，
+值得在下次起靶机时补一条「开着 chacha20 跨过重协商」的互操作用例。
+
+### 11.2.21 第二批：审查报告的其余安全项（2026-09-24）
+
+| 问题 | 修补 |
+| --- | --- |
+| 重协商时把主机密钥策略整个再跑一遍（交互式策略在会话中途弹窗、接收循环停着等；宽松策略让换过的钥悄悄通过） | 钉住首次交换的主机密钥，不再问策略；`K_S` 变了就以 `HostKeyChanged / Rekeying` 断开；重协商只谈与它同类型的算法（`spec/03` §8.4 本来就这么写） |
+| 释放 agent 转发器之后，已经打开的 agent 通道照样替远端签名 | 转发器有自己的生命周期，释放时连已打开的通道一起断（`spec/07` §7.2） |
+| `DISPLAY=localhost:N` 先试 Linux 抽象套接字，同机别的用户抢先绑上就收到真 cookie | 「连哪里」与「用哪个 cookie」分开：`localhost:N` 只走 TCP，挑 cookie 仍按本机显示（`spec/07` §7.5.6 一并改正） |
+| 私钥 KDF 参数不设上限（Argon2 4 GiB 内存、bcrypt 一百万轮）而且在验 MAC 之前就要算 | bcrypt 上限 4096 轮；Argon2 内存 256 MiB、256 遍、并行度 1–16 且限制两者乘积；顺带按 `Key-Derivation` 选对 Argon2 变体 |
+| Windows 上连命名管道 agent 不看另一头是谁（别的用户抢注 `openssh-ssh-agent` 就收到签名请求与加钥时的明文私钥） | 校验管道属主：当前用户 / SYSTEM / Administrators；不降模拟级别 —— OpenSSH 的 agent 服务要以连进来的用户身份存钥（`spec/07` §7.2） |
+| 对端文本原样进异常消息（终端转义注入） | `PeerText.Sanitize`：控制字符、`DEL`、C1、双向控制符换成 `?` 并截断；原话仍在 `PeerDescription` / `ServerMessage`（`spec/08` §一） |
+| `KnownHostsPolicy` 换一种没记过的类型就判「没见过」；`!pattern` 被忽略；追加不补换行；`ProxyCommand` 可注入 | `OtherKeyTypesKnown` 按「变了」处理，`IHostKeyTypePreference` 让连接时优先已记下的类型（`spec/03` §5.4）；取反否决整行；追加前补换行；代入前检查字符集（`spec/09` §六） |
+
+验证：单元用例 655 条（635 通过、20 条互操作跳过），满跑连续 25 轮全绿；新增 29 条中 19 条先撤掉修复确认失败。
+本机验证不到的两处如实记下：X11 `localhost` 的差别只在 Linux/macOS 上测得出；命名管道属主检查只测了「同一用户的 agent 照常能连」与判定函数，
+属主为 SYSTEM 的真实 OpenSSH agent 管道与「别的用户抢注」都没有实测。
+
+### 11.2.22 第三批：正确性、性能与设计，外加主机证书（2026-09-25）
+
+审查报告剩下的第三到第五节（正确性、性能、设计）在这一轮修完。同一天用户给了算法支持面的口径 ——
+「兼容主要算法即可，太旧的、不安全的先不考虑」—— 据此补上了主机证书，并把传统加密 PEM 明确划到不支持的一边。
+行为都已写进规格，下面各条括注的是对应章节。
+
+#### 正确性：出错必须看得出是出错
+
+| 问题 | 决定 |
+| --- | --- |
+| 转发的搬运循环把出错当成 EOF：一个方向读出错，照样给对面发 FIN / `CHANNEL_EOF`，截断的数据被当成完整的收下；另一个方向一直挂着 | 正常读完只半关闭那一个方向；任何一个方向出错（含取消），两端一起**中止** —— TCP 是 linger 0 的 RST，通道是不先发 EOF 的 `CLOSE`；上报最先出错的那一侧，不报被牵连的那个取消（`spec/07` §2.2、§6） |
+| 连接中途断了，通道的读者读到的是一个像 EOF 的「读完」 | 读抛出连接的故障；本端释放连接时抛 `ObjectDisposedException`；只有对端的 EOF / `CLOSE` 才算读完（`spec/05` §4.4） |
+| 通道整个关了（`CLOSE`），搬运循环往它写的那个方向还卡在本机 socket 的读上，socket 与转发名额一直占着 | `SshChannel.Closed` 令牌；搬运循环据此停下那个方向（`spec/05` §4.4） |
+| 连接的故障原样漏给调用方：内部的解析异常类型、裸的 `IOException` / `SocketException`，会话期间与建连期间都有；密钥交换期间报文中途断开报成 `ProtocolError`；`SshPublicKeyException` 与 `SshKeyExchangeException` 不在 `SshException` 之下 | 交出之前归成公开类型，建连期间（拨通之后到认证结束）用同一套口径，`Phase` 记失败的那一步（`spec/08` §2.1）；两个异常改派生自 `SshException`（`spec/08` §2）。**已知局限，没改**：会话期间归一出来的故障 `Phase` 一律是 `Open`，即使发生在重协商期间 |
+
+这一组共用一个判断：**「对端说完了」与「链路断了」在读的一方眼里必须不同。**当成一回事，
+传到一半的文件、跑到一半的命令输出会被当成完整结果交出去，终端也分不清用户敲了 `exit` 还是链路断了（后者才该自动重连）。
+
+#### 性能：控制报文不能排在数据后面
+
+| 问题 | 决定 |
+| --- | --- |
+| 大量上传时，另一条通道的 `WINDOW_ADJUST` 排在出站积压后面（还要先在背压上等空位）：对端一直等窗口，下载被上传拖到几乎停住 | 本端的窗口回补走插队队列，发送泵每取一项先看它，不受背压；插队只让它提前，不越过 `CLOSE` 与重协商闸门（`spec/05` §3.2） |
+| 保活探测在背压上等，或者上线之后才开始计时：死链的典型样子正是发送泵卡在一次写上，探测跟着卡住，恰恰在最需要判死的时候判不了 | 探测不受背压，期限从入队那一刻算起；每个周期至多一帧，不会无界（`spec/05` §6.3） |
+| 自适应窗口只看「见底」：消费者一慢，窗口就一路翻到上限，几十 MiB 没读的数据堆在本端 | 见底**并且**读的一方最近读空过才扩；连续 3 轮没见底就缩（`spec/05` §3.3，本文 §5.5） |
+| 对端开通道时，接收循环就地等使用者的处理器（它可能弹窗、查配置）：处理器一慢，整条连接上所有通道的收包都停住 | 解析与查处理器在接收循环上做完，「问处理器、建通道、回确认」交给后台；同时在决定的最多 64 条，超出的以 `RESOURCE_SHORTAGE` 拒绝（`spec/05` §8.1） |
+
+#### 性能：热路径上的分配
+
+- **通道数据的缓冲从池里租**：上传路径上每一块曾经新分配一个数组。发送方的 `await` 返回时发送泵已经不再引用它，可以立刻还回池里；
+  **只有在重协商期间被闸门暂存时才复制一份** —— 暂存要引用到开闸，而那时发送方早已把缓冲还掉了。直接发走的那一条不必复制：加密时已经拷走了。
+- **SFTP 请求帧直接写进通道的管道**，不经中转缓冲。曾经先拼进一个从 256 字节起翻倍长的缓冲，一个 256 KiB 的 `WRITE` 要重新分配十来次、把数据多搬一遍。
+- **密码套件的对象跟着套件走，不按报文新建**：HMAC 上下文复用；ChaCha20-Poly1305 的两个引擎与 Poly1305 常驻，每个报文只换 nonce；
+  CTR 的异或按向量宽度一批一批做，计数器一次加上块数而不是逐块加一。一个套件只服务一个方向、只在一个线程上用，复用是安全的。
+  代价是一处新风险：换钥之后新的一组必须从新钥重新起步，残留一点旧状态第一个新钥报文就解不开 ——
+  而自己加密自己解密时两边错得一模一样，只有对着另一份实现才看得出来。所以互操作用例让重协商落在大块输出的**中途**（见下面的验证）。
+
+实测（Release，32 KiB 载荷）：
+
+| 套件 | 吞吐 | 每报文分配 |
+| --- | --- | --- |
+| AES-CTR + HMAC | 约 800 → 约 1100–1200 MB/s | 288 B → 0 |
+| ChaCha20-Poly1305 | 约 430–480 MB/s（上限在 BouncyCastle） | 约 1.4 KB → 272 B |
+| AES-GCM | 未变：封装约 6.2–6.9 GB/s，解封约 5 GB/s | 0（本来就是 0） |
+
+#### 链路模拟器自己成了瓶颈
+
+`DelayedStream`（`Transport/LinkCharacteristics.cs`）曾经每一次写都在写锁里整段睡掉单向时延、再交给下层：
+写与写被时延串了起来，链路上任一时刻最多一次写在飞，吞吐被压在「单次写的大小 ÷ 单向时延」——
+**窗口与管线深度的用例量到的，有一部分是模拟器自己**。
+
+现在它是流水线式的，与真实链路一致：写入按带宽计时之后立刻返回，数据在单向时延之后才对另一端可读；
+在途的数据放在一个有上限的队列里，由后台任务按顺序、到点交给下层 —— 下层写不动时队列会满，写入方照样会等，背压不因为流水线而消失。
+`DisposeAsync` 先让在途数据送达再关下层（FIN 排在已发出的字节后面；不这样，最后那条 `DISCONNECT` 另一端就收不到），
+下层卡住时等单向时延再加 1 秒就当链路被切断；同步 `Dispose` 不等，相当于直接切断。
+
+> 测试设施也是被测系统的一部分：它的模型错了，量出来的就是它自己。
+
+#### 拨号与 `ssh_config`
+
+| 问题 | 决定 |
+| --- | --- |
+| 多个地址逐个顺序试：通告了 IPv6 却不通的网络上，第一个地址要等约 21 秒的 SYN 超时才轮到 IPv4 | Happy Eyeballs（RFC 8305）：按地址族交替、每 250 ms 错开发起、先连上的胜出、其余关掉（`spec/09` §2.5） |
+| TCP 这一步固定 30 秒，连接上配置的更长超时对它无效 | 拨号器默认不限时，由连接超时统管（`spec/09` §2.4） |
+| 跳板上的认证计入外层连接超时；外层到点时报成「建立 TCP 连接超时」；分不清调用方取消与到点 | 跳板认证期间外层停表；到点报 `Timeout / Dialing` 并标出哪一跳；取消原样往外传（`spec/09` §2.4） |
+| `Include` 的内容接在整个文件后面：主文件里更靠后的 `Host *` 压过被包含文件里为具体主机写的设置；同一个文件被两个块各包含一次，第二次被当成环跳过。改成就地展开之后，被包含文件一开新块外层条件就丢了，`Include` 之后的设置落进被包含文件的最后一个块 | 就地展开、带条件的包含：被包含文件自己的块套在外层条件之下（`SshConfigBlock.Enclosing`，每一层都满足才生效），读完回到 `Include` 所在的块；环检测只看当前这条包含链（`spec/09` §7.1） |
+| 判不了的 `Match` 条件算成「不满足」，前面加个 `!` 就成了满足；`Match host` 拿输入的别名去比 | 三态：判不了就整块不生效，取反也一样；`Match host` 比 `HostName` 改写之后的名字（`spec/09` §7.1） |
+| 一个 `IdentityFile` 读不出来，整个解析失败；跳板与目标各读一遍同一把钥（KDF 跑两遍、口令问两遍） | 只跳过那一把并通知调用方；一次解析内按路径共用，不跨调用缓存（`spec/09` §7） |
+| 调用方为目标准备的口令也交给了跳板 | 口令与键盘交互只给最终目标，跳板只拿公钥凭据（`spec/09` §7） |
+| `ask` / 缺省时只要配置写了 `UserKnownHostsFile`，调用方给的策略就被丢掉；`none` / `/dev/null` 被当成文件路径 | 调用方策略优先；`none` / `/dev/null` 即不用 `known_hosts`（`spec/09` §7） |
+
+#### 主机证书，与不读的私钥格式
+
+按「主要算法、不要太旧」的口径：
+
+- **主机证书做了**（`spec/03` §5.5）。证书算法排在普通算法**之后**：没为这台主机配 CA 时，谈成证书得不到任何额外保证，排在后面就保证行为与以前完全一样。
+  `known_hosts` 里有对上这台主机的 `@cert-authority` 时才验证证书；记下的是证书里那把**普通钥**（证书每次重签 blob 都会变，记证书等于下次必报「变了」）；
+  由 CA 管的主机出示一把没有担保的钥时拒绝，**不退回 TOFU** —— 给主机配 CA，要的正是不再靠第一次盲信；CA 的 SHA-1 `ssh-rsa` 签名不认。
+  CA 担保而证书不合格、或者协商出证书算法而 `K_S` 不是证书，都报 `HostKeyRejected`（`spec/08` §3）。
+- **重协商只谈与钉住的钥同类型、且同为证书（或同为普通钥）的主机密钥算法**（`SshConnection.RestrictToPinnedHostKey`）。
+  曾经判定时去掉了证书后缀：钉住的是证书时普通算法也留着，一旦谈成普通算法，服务端出示的是那把普通钥，与钉住的证书对不上，
+  连接被当成「换了主机密钥」断开（`spec/03` §5.5）。
+- **传统加密 PEM（`Proc-Type: 4,ENCRYPTED`）不读**，只支持现代格式（OpenSSH、PuTTY `.ppk`、PKCS#8，以及不加密的 PKCS#1 / SEC1）。
+  口令只经一次 MD5 就成了密钥、常配 3DES，为它在安全库里带一套解密不划算，而转换只要一条命令。
+  在要口令**之前**就拒绝并给出转换办法（`ssh-keygen -p` 改一次口令即转成 OpenSSH 格式）；曾经交给 BCL，BCL 不认，报出来的却是「口令多半不对」（`spec/04` §4.6）。
+
+#### 验证
+
+全套 761 条用例，其中 22 条是对真实 OpenSSH（`linuxserver/openssh-server`）的互操作用例，这一轮在起着靶机的情况下跑，没有跳过。
+新增的两条互操作补上了此前只能在内存桩上验的东西：默认清单里的每一种加密算法（chacha20-poly1305、AES-GCM、AES-CTR）
+在大块输出**中途**跨过一次重协商照常收发 —— §11.2.20 留下的那条待办，也是上面「套件对象复用」的真正验收；
+以及按 `known_hosts` 的 `@cert-authority` 验过一张真实 `ssh-keygen` 签发的主机证书。
+
 ### 11.3 与 VelaShell 的切换策略
 
 1. VelaShell 的 `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`
@@ -2301,7 +2455,7 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 | 风险 | 缓解 |
 | --- | --- |
 | **互操作长尾** —— SSH 的坑全在老设备上 | §10.3 矩阵从 M1 起就跑，不留到最后；老设备算法优先级单独一组 |
-| **密码学实现出错** | 原则 6：只装配不造原语；唯一自写的 ChaCha20 用 RFC 向量钉死；1.0 前外部审计 |
+| **密码学实现出错** | 原则 6：只装配不造原语（ChaCha20 / Poly1305 也走 BouncyCastle）；唯一自写的是 `bcrypt_pbkdf`（§11.2.18），只做那一个 KDF，只认真 `ssh-keygen` 的产物做端到端比对；1.0 前外部审计 |
 | **工期超预期** | 里程碑按能力切，每个 M 都是可用状态；M6 之前 VelaShell 继续用 Tmds，随时可以停 |
 | **人手** —— 24 周的活 | 认清楚再开工。**中途放弃的代价是一个半成品的 SSH 栈**，那比现在的 1,200 行补丁糟得多 |
 | 「还是像」 | §2.2 的净室规程从 M0 第一次提交就执行 —— 不是最后来补，那时候已经晚了 |

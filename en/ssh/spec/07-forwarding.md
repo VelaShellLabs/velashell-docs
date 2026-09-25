@@ -48,9 +48,13 @@ sequenceDiagram
         end
     else Rejected (AllowTcpForwarding no / target unreachable)
         S->>F: CHANNEL_OPEN_FAILURE(reason)
-        F->>App: TCP reset
+        F->>App: TCP reset 〔Not implemented yet: closed normally today〕
     end
 ```
+
+〔Not implemented yet〕When the server refuses to open the tunnel, the design is to **reset** that local connection (RST): a refusal is an error too, the same rule as §2.2's "an error is not an EOF".
+Today the implementation raises `Error` and closes that connection **normally** (FIN), so the local application reads an end with no data at all.
+(Dynamic forwarding also sends a SOCKS failure reply that tells the client why, §3.2.)
 
 ### 2.1 Extra fields of `direct-tcpip`
 
@@ -65,20 +69,34 @@ sequenceDiagram
 The server writes it to its logs; a fake value would leave the server administrator unable to trace anything, with no privacy benefit whatsoever
 (the server already knows where our connection comes from).
 
-### 2.2 Handling half-close correctly
+### 2.2 Half-close and error teardown
 
-Both TCP and SSH channels support half-close, and they **must be mapped per direction**:
+Both TCP and SSH channels support half-close, and they **must be mapped per direction**; and **a clean end must be kept apart from an error**.
+The two sides of a forwarded connection are the local socket and the SSH channel; what happens on one side reaches the other as follows:
 
-| Event | Action |
+| What happens on one side | What the other side sees |
 | --- | --- |
-| Local application does shutdown(SEND) | Send `CHANNEL_EOF` |
-| `CHANNEL_EOF` received | `shutdown(SEND)` on the local socket |
-| Local socket fully closed | Send `CHANNEL_CLOSE` |
-| `CHANNEL_CLOSE` received | Close the local socket, reply `CHANNEL_CLOSE` |
+| Local application does `shutdown(SEND)` (we read a FIN) | `CHANNEL_EOF`; the other direction keeps flowing |
+| `CHANNEL_EOF` received | `shutdown(SEND)` on the local socket (FIN); the other direction keeps flowing |
+| Both directions end cleanly | Channel `CHANNEL_CLOSE`, local socket closed |
+| The peer's `CHANNEL_CLOSE` received | Data already received is still delivered, then the local socket gets a FIN; the direction writing into the channel stops there, and the local socket is closed afterwards (the connection layer replies `CLOSE`) |
+| Read or write error on the local socket (reset, etc.) | The channel gets **no EOF**, just `CHANNEL_CLOSE` |
+| Read or write error on the channel (including the SSH connection dropping) | The local socket is **reset** (RST) |
+| Cancellation from disposing the forwarder or the SSH connection dropping | Treated as an error: both sides are aborted together |
 
 **Treating EOF as "connection over" truncates data.** Typical symptom:
 `curl` POSTs a request body through the tunnel and waits for the response, but we close the whole channel
 when it shuts down its write side, so the response never arrives.
+
+〔Decision〕**An error is not an EOF.** When either direction fails (cancellation included), both sides are **aborted** together: the TCP side is closed with linger 0, so the far end receives an RST
+(Unix sockets may not support linger 0; then it is simply closed); the channel side gets `CHANNEL_CLOSE` without a preceding `EOF`.
+Closing as if it had ended cleanly (FIN / `EOF`) is wrong — the far end would take truncated data for complete data, and a half-downloaded file would look finished;
+stopping only the failed direction is wrong too — the other direction would hang until the far end happens to close.
+The reported cause is taken from **the side that failed first**, not from the side that was aborted as a consequence (that is usually just a cancellation).
+
+〔Decision〕**Once the peer's `CLOSE` arrives, the direction writing into the channel stops, and that is not an error.** That direction is most likely blocked reading the local socket at that point —
+the local program is waiting for a response and will not close first; if it is not stopped, the socket and a concurrency slot stay occupied.
+The direction reading from the channel is unaffected; data already received is drained as usual. Whatever the local end sends afterwards, the OS answers with an RST once the socket is closed.
 
 ### 2.3 Bind address
 
@@ -93,6 +111,24 @@ binding to `0.0.0.0` by default would expose it to everyone on the same network 
 OpenSSH defaults to this as well (`GatewayPorts no`).
 
 〔Decision〕**Port 0 means the OS assigns one**; the assigned endpoint is reported back via `PortForwarder.BoundEndPoint`.
+
+### 2.4 Listener resilience and teardown
+
+Local and dynamic forwarding share the same listener (`PortForwarder`); the following holds for both.
+
+〔Decision〕**Back off when accepting fails.** When accepting an inbound connection fails, raise one `Error` (`accept`), then wait before accepting again:
+50 ms the first time, doubling each time after that, capped at 1 second; one successful accept resets it.
+Failures such as file-descriptor exhaustion (EMFILE) come back immediately and repeatedly — without a wait this is a loop that pins a core and raises tens of thousands of error events per second,
+and it happens exactly when the machine is already under pressure.
+
+〔Decision〕**When the SSH connection drops, close the listener and release the port.** Otherwise the port stays taken: re-creating the same forward after reconnecting only yields "port already in use",
+and meanwhile every accepted connection just earns another "tunnel could not be opened". The listener is closed first and `IsActive` becomes false after that —
+whoever sees it false can be sure the port has been released. In-flight connections are aborted as errors (§2.2); local applications receive an RST.
+The forwarder object must still be disposed by the caller.
+
+〔Decision〕**Disposal returns only after every connection has finished its teardown.** The forwarder tracks each connection in progress; disposal stops the listener,
+cancels all connections (aborted as errors), waits for them to finish their teardown, and only then releases the concurrency slots and other resources.
+It used to release them right away: a connection still tearing down would then return a slot to an already-disposed limiter, with the exception landing in a task nobody observed; and the connections were still open when disposal returned.
 
 ---
 
@@ -121,6 +157,9 @@ This is the single most important semantic of dynamic forwarding — `curl --soc
 Local resolution would cause a "DNS goes local, connection goes through the tunnel" split,
 which simply fails for internal domain names and also leaks the destination.
 
+〔Decision〕**A zero-length domain name gets `0x08` (address type not supported), and that connection is closed.** An empty name is not a target:
+let through, opening the tunnel fails on an invalid argument and the client gets no SOCKS reply at all, with no way to tell what went wrong.
+
 ### 3.2 Reply code mapping
 
 | SSH `CHANNEL_OPEN_FAILURE` reason | SOCKS5 REP |
@@ -129,10 +168,21 @@ which simply fails for internal domain names and also leaks the destination.
 | 2 `CONNECT_FAILED` | 0x05 connection refused |
 | 3 `UNKNOWN_CHANNEL_TYPE` | 0x01 general failure |
 | 4 `RESOURCE_SHORTAGE` | 0x01 general failure |
-| Channel open timed out | 0x06 TTL expired |
+| Channel open timed out 〔Not implemented yet〕 | 0x06 TTL expired |
 
 Getting the mapping right has real consequences: `curl` and browsers decide from the REP code whether to retry
 and which message to show the user. Replying `0x01` for everything throws that information away.
+
+〔Not implemented yet〕Opening a channel has no time limit of its own yet, so the last row never applies: today the forwarder waits for the server's answer;
+if the forwarder is disposed or the SSH connection drops first, that connection is closed without any reply.
+A failure without a reason code (for example our own channel count or window budget being exhausted) gets `0x01`.
+
+### 3.3 Handshake time limit
+
+〔Decision〕**The SOCKS handshake has a time limit** (`PortForwardOptions.SocksHandshakeTimeout`, 30 seconds by default):
+from accepting the connection until the `CONNECT` request has been read. On timeout that connection is closed and `Error` (`socks`) is raised; the forwarder keeps running.
+Every client that connects and says nothing holds a concurrency slot for nothing; without a limit, once they fill the cap (§8) no legitimate connection gets in.
+Browsers and `curl` send the handshake as soon as they connect; 30 seconds is plenty.
 
 ---
 
@@ -142,30 +192,32 @@ and which message to show the user. Replying `0x01` for everything throws that i
 
 ```mermaid
 sequenceDiagram
-    participant F as PortForwarder
+    participant F as RemoteForwarder
     participant S as SSH server
     participant R as Remote client
 
+    Note over F: Register the forwarded-tcpip handler first
     F->>S: GLOBAL_REQUEST "tcpip-forward"<br/>bind_addr ‖ bind_port (want_reply=true)
     alt Allowed
         S->>F: REQUEST_SUCCESS [‖ uint32 actual port]
+        Note over F: Record the actual port right there on the receive loop
     else Rejected
         S->>F: REQUEST_FAILURE
-        Note over F: Throw, **leave no half-open listener**
+        Note over F: Remove the handler and throw, **leave no half-open listener**
     end
 
     R->>S: Connects to the server's bind_port
     S->>F: CHANNEL_OPEN "forwarded-tcpip"<br/>bind_addr ‖ bind_port ‖ orig_addr ‖ orig_port
-    F->>F: Find the matching PortForwarder by bind address + port
+    F->>F: Find the matching forwarder by bind address + port
     alt Found
         F->>S: CHANNEL_OPEN_CONFIRMATION
         Note over F: Connect to the local target, copy both ways
     else Not found
-        F->>S: CHANNEL_OPEN_FAILURE(3)
+        F->>S: CHANNEL_OPEN_FAILURE(1)
     end
 ```
 
-### 4.2 Two musts
+### 4.2 Three musts
 
 1. **When `bind_port = 0`, the actual port is in the payload of `REQUEST_SUCCESS`**
    (a `uint32`). `want_reply` must be true, otherwise the port number cannot be obtained.
@@ -174,18 +226,50 @@ sequenceDiagram
    〔Decision〕The routing table key is `(bind_addr verbatim string, bind_port)` —
    **do not** normalize the address (`""`, `"*"`, `"0.0.0.0"`, `"localhost"` have different semantics on the server,
    and what it sends back to us is the exact string we used in the request).
+3. **The handler is registered before the request is sent, and the actual port is recorded the moment the reply arrives.**
+   Right after replying `REQUEST_SUCCESS` the server may open a forwarded channel (someone is already waiting to connect to that port), and that `CHANNEL_OPEN`
+   is processed by the receive loop immediately afterwards. Registering the handler only after the reply, or recording the port in the caller's continuation (which runs on the thread pool),
+   means that channel has already been rejected as "unclaimed".
+   〔Decision〕So the reply ledger lets a request be registered with a callback: when the reply arrives, the callback is invoked synchronously on the receive loop first (recording the port),
+   and only then is the waiting task completed. The callback must be short and non-blocking; if the connection drops, it receives a failed reply.
+   The handler is removed when the server refuses or sending the request fails.
 
-### 4.3 Cancellation
+### 4.3 Cancellation and the grace period
 
-The `cancel-tcpip-forward` global request, with the same fields as `tcpip-forward`.
-〔Decision〕After cancellation, **continue accepting in-flight `forwarded-tcpip` channels** for a few seconds;
-otherwise connections that are being established get rejected for no apparent reason.
+The `cancel-tcpip-forward` global request, with the same fields as `tcpip-forward` (the port is the one actually bound).
+〔Decision〕After cancellation, **continue accepting in-flight `forwarded-tcpip` channels** for a few seconds (`DrainGrace`, 2 seconds);
+otherwise connections that are being established get rejected for no apparent reason. Disposal proceeds in this order:
+
+1. Send `cancel-tcpip-forward` (`cancel-streamlocal-forward@openssh.com` for the Unix socket variant). From this moment `IsActive` is false.
+2. During the grace period the handler stays in place: matching forwarded channels are still accepted and relayed, and existing connections keep relaying.
+3. When the grace period ends, the handler is removed — forwarded channels arriving after that are rejected.
+4. All of this forwarder's connections are ended, aborted as errors (§2.2): the local target receives an RST, and the server's channel receives a `CLOSE` without `EOF`.
+
+If the SSH connection is already gone (the cancel request cannot be sent, or the connection drops during the grace period), there is no waiting — no more forwarded channels will arrive.
+
+〔History〕The early implementation marked itself "disposed" as soon as disposal began, and the handler rejected everything once that flag was set —
+the grace period did nothing, and in-flight forwarded channels were rejected anyway.
 
 ### 4.4 Unix socket variant
 
 `streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com`
 (global requests) + `forwarded-streamlocal@openssh.com` (channel type);
 the fields replace `addr ‖ port` with a single `string socket_path`.
+
+### 4.5 State and lifetime
+
+| Property | Meaning |
+| --- | --- |
+| `BoundPort` | The port the server **actually** bound: taken from the `REQUEST_SUCCESS` payload when port 0 was requested, otherwise the requested port. 0 for the Unix socket variant |
+| `IsActive` | False once disposal has begun, or once the SSH connection has dropped. It reads the connection's state directly and does not wait for any callback |
+
+〔Decision〕If port 0 was requested and the server replies `REQUEST_SUCCESS` without a port: remove the handler and throw.
+Routing forwarded channels by `(bind_addr, 0)` would match none of them, and the symptom is "the forward looks established, but every incoming connection is rejected".
+
+〔Decision〕**Each forwarded connection is tied to the lifetimes of both the SSH connection and the forwarder**; whichever ends first ends it too (aborted as an error, §2.2).
+Tied only to the connection, a forwarder's connections would keep relaying after the forwarder was disposed, until the whole SSH connection dropped.
+
+Once the SSH connection drops, the server's listener disappears with it, and there is no local port to release; the forwarder object must still be disposed (disposal sees that the connection is gone and skips the grace period).
 
 ---
 
@@ -223,6 +307,12 @@ Also published through `System.Diagnostics.Metrics`:
 Metrics for server scenarios (feeding OpenTelemetry). Picking only one would force users to rewrite the data plane themselves —
 which is exactly the 376 lines we set out to eliminate.
 
+〔Decision〕**Exceptions from event subscribers do not affect forwarding.** Subscribers are invoked one by one; whatever one throws is swallowed, without affecting later subscribers, let alone the connection.
+Events are there to refresh a panel, and a bug in a subscriber should not turn into a forwarding failure —
+a throwing `ConnectionOpened` subscriber used to stop that connection from relaying, and the active-connection count only ever went up.
+
+〔Decision〕Cancellation caused by the forwarder itself shutting down (disposal, the SSH connection dropping) **is not an error of the individual connection** and does not raise `Error`.
+
 〔Implementation note〕Counters use `Interlocked`; reads use `Volatile.Read`.
 Byte counts are accumulated **in the copy loop**, not at the channel layer — channel-layer byte counts include protocol overhead,
 whereas the panel should show application data volume.
@@ -246,8 +336,13 @@ Only "how the outbound side is established" differs:
 | Remote | Inbound is the channel given by the server, outbound is local TCP — direction reversed, loop unchanged |
 
 〔Decision〕**The copy layer is independent of SSH and testable on its own.**
-It only sees two `Stream`s (or `IDuplexPipe`s). So the main path of half-close, metering
-and error teardown can be verified without standing up a real server.
+It only sees two endpoints (`IRelayEndpoint`), each offering five things: read; write; "I will send no more"
+(half-close — `shutdown(SEND)` for TCP, `CHANNEL_EOF` for a channel); "abort on error" (an RST for TCP, a `CLOSE` without `EOF` for a channel);
+and a signal that "this end is entirely finished" (the channel received `CLOSE`, or the session is gone). So the main path of half-close, metering
+and error teardown (§2.2) can be verified without standing up a real server.
+
+An endpoint that cannot provide an abort action (a plain stream, for instance) degrades abort to closing it: the far end learns the connection is gone but cannot tell an error from a clean end.
+One that cannot provide a half-close action does nothing on half-close: the far end only learns we are done sending when the whole connection closes.
 
 **Buffers**: 〔Decision〕32 KiB per direction, rented from `ArrayPool`.
 Same order of magnitude as an SSH channel's max packet, without making every connection hold a large chunk of memory
@@ -267,6 +362,14 @@ Same order of magnitude as an SSH channel's max packet, without making every con
 
 Handled by `IIncomingChannelHandler` (architecture §8, item 8).
 
+〔Decision〕**Not a byte-level pass-through**: each agent message (4-byte length + contents) is collected in full and decoded before it is handled —
+only that way can §7.2's "forward only the specified keys" and "confirm each signature" be done.
+
+〔Decision〕**The agent channel's receive window holds at least one whole agent message of the maximum size** (4-byte length + 256 KiB).
+Nothing is consumed until a message is complete, and the window is replenished only as data is consumed — a window smaller than a message means the peer waits for window while we wait for the message, and neither can move.
+It used to be 32 KiB, and signing slightly longer data (`ssh-keygen -Y sign`, certificates) stalled right there.
+The window is only a credit, not memory allocated up front; ordinary messages are a few hundred bytes. A message with length 0 or over 256 KiB is treated as malformed and the channel is closed.
+
 ### 7.2 Security requirements
 
 > **Agent forwarding is a loaded gun.** Root on the remote host can, while forwarding is active,
@@ -279,6 +382,27 @@ Handled by `IIncomingChannelHandler` (architecture §8, item 8).
    instead of exposing the entire agent.
 3. **An optional signature confirmation callback** (`AgentForwardPolicy.ConfirmEachSignature`):
    ask the user each time the remote requests a signature. For jump-host scenarios this is the only approach that lets people rest easy.
+
+〔Decision〕**The allow-list compares the key inside a certificate.** A certificate and its key use the same private key: allowing the key allows its certificate,
+and allowing the certificate allows the key. Listing identities and sign requests use the same comparison — a key that is not listed is refused even if the remote
+has learned its public key elsewhere (for example `authorized_keys`) and asks for a signature directly; the request never reaches the local agent.
+
+〔Decision〕**Keys in the agent that this library cannot recognize are skipped, rather than failing the whole list** (FIDO, DSA, certificate types this library does not support):
+the remote does not see them in the list, and sign requests for them are refused — even when `AllowedKeys` is empty. Certificates it does recognize are listed, and their sign requests are passed to the agent as usual.
+For RSA, the digest is chosen by the flags in the remote's request (SHA-256 / SHA-512; SHA-1 only when neither is set), **judged by the type of the key inside the certificate** —
+an RSA certificate gets the SHA-2 the remote asked for, just like an RSA key; judged by the certificate's own type string, the flags would be ignored and the certificate signed with SHA-1.
+It used to be that a single certificate in the agent made listing identities fail entirely, and agent forwarding with it.
+
+〔Decision〕**Forwarding lasts exactly as long as the forwarder.** Disposing the forwarder not only stops accepting new `auth-agent@openssh.com` channels,
+**it also closes the ones already open**. Removing the handler alone is not enough: the connection may still be open (SFTP, other sessions),
+and an agent channel the remote opened earlier would keep signing for it until the whole connection drops.
+After each request is read and before it is handled, the forwarder checks once more whether it has been disposed: the cancellation issued by disposal reaches each channel in the background,
+and a request that arrives in between must not get one more signature after disposal has returned.
+
+〔Decision〕**On Windows, before connecting to an agent exposed as a named pipe, confirm that the pipe's owner is trusted**: the current user, SYSTEM or Administrators;
+otherwise refuse the connection. The OpenSSH agent's pipe name is fixed (`openssh-ssh-agent`); while the service isn't running, any local user can create that name first
+and then receive our signing requests — and, when adding keys to the agent (§7.3), **plaintext private keys**. Whoever creates the pipe first can only make themselves its owner.
+This is not defended by lowering the impersonation level to Identification: the OpenSSH agent service stores keys as the connecting user, so lowering it would break the legitimate agent too.
 
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
@@ -455,9 +579,15 @@ and macOS launchd socket paths.
 
 | Case | Where to connect |
 | --- | --- |
-| Local (empty host, `unix`, `localhost`) | Try the Linux abstract socket first, then `/tmp/.X11-unix/X<N>` |
-| Local + Windows | TCP `127.0.0.1:(6000+N)` (VcXsrv and the like) |
+| Local socket (empty host, `unix`) | Try the Linux abstract socket first, then `/tmp/.X11-unix/X<N>`, then loopback TCP |
+| Local socket + Windows | TCP `127.0.0.1:(6000+N)` (VcXsrv and the like) |
+| `localhost` | TCP `127.0.0.1:(6000+N)` **only**; no local socket is tried |
 | Remote host | TCP `host:(6000+N)` |
+
+〔Decision〕**`localhost:N` is TCP, not a local socket.** By X convention it means `6000+N`, and that is exactly the form sshd sets for a nested `ssh -X`.
+Treating it as a local socket and trying the Linux abstract socket is dangerous: the abstract namespace has no permission checks,
+so another user on the same machine can bind `@/tmp/.X11-unix/X<N>` first and receive the **real** cookie we substitute in.
+For cookie selection it still counts as a local display (the local host name's FamilyLocal entry, §7.5.7) — "where to connect" and "which cookie to use" are separate questions.
 
 ### 7.5.7 Where the real cookie comes from
 
@@ -524,6 +654,13 @@ in the X protocol a client that has finished sending has ended the connection; t
 reply" pattern, so falling back to a full close loses nothing. Skip this step and the X server never reads EOF: the remote
 program exited long ago, yet its window stays up until the whole SSH session ends.
 
+### 7.5.10 Error teardown
+
+〔Decision〕Relaying an `x11` channel uses the same copy loop, so **a clean end and an error are kept apart exactly as in TCP forwarding** (§2.2):
+a clean end is a per-direction half-close; when either direction fails, both sides are aborted together — with a local socket the display side gets an RST,
+and the channel side gets a `CLOSE` without `EOF`.
+A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades to closing the whole stream: the X server learns the connection is gone but cannot tell an error from a clean end.
+
 ## 8. Edge cases and errors at a glance
 
 | Situation | Handling |
@@ -531,10 +668,16 @@ program exited long ago, yet its window stays up until the whole SSH session end
 | Local port already in use | Throw `SshForwardException`, **leave no half-open listener** |
 | `tcpip-forward` rejected | Throw; the message points out "the server may have disabled AllowTcpForwarding / GatewayPorts" |
 | Channel open fails for a single connection | Raise the `Error` event, close that one inbound connection, **the forwarder keeps running** |
-| SSH session disconnected | All forwarders stop, `IsActive` becomes false, `Error` is raised |
+| A single connection fails while relaying | Both sides aborted together (local RST, channel `CLOSE` without `EOF`), `Error` raised, the forwarder keeps running (§2.2) |
+| Accepting inbound connections fails repeatedly (e.g. EMFILE) | `Error` (`accept`) each time; back off starting at 50 ms, doubling, capped at 1 second, then accept again (§2.4) |
+| SSH session disconnected | Local/dynamic forwards close the listener and release the port; every forwarder's `IsActive` becomes false; in-flight connections are aborted as errors. The forwarder raises no separate `Error` for the disconnect (§2.4, §4.5) |
 | Invalid SOCKS handshake | Close that one, count it in `errors`, the forwarder keeps running |
-| No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(3)` |
-| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected |
+| Zero-length domain name in a SOCKS request | Reply `0x08`, close that one (§3.1) |
+| SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`socks`), the forwarder keeps running (§3.3) |
+| No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(1)`; `(3)` when the connection has no remote forward at all |
+| A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
+| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`too-many-connections`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
+| An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
 
 〔Decision〕**A single connection's failure must never affect the forwarder itself.**
 A tunnel has to be able to run for days, during which unreachable targets and reset connections are inevitable.

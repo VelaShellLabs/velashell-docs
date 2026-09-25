@@ -131,8 +131,8 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔Interop〕old devices often offer only this |
-| `diffie-hellman-group14-sha1` | RFC 4253 | ❌ off by default | 〔Interop〕Cisco IOS / old VRP have only this. **MUST be explicitly enabled by the user** |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ not implemented yet | 〔Interop〕old devices often offer only this. Specified in 03 §3.5; until it is implemented, putting it in the list is rejected before connecting (03 §2.2) |
+| `diffie-hellman-group14-sha1` | RFC 4253 | ❌ off by default | 〔Interop〕Cisco IOS / old VRP have only this. **MUST be explicitly enabled by the user** (§6.6) |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | Not real algorithms but **indicators**; see 03 |
 
 ### 6.2 Host keys
@@ -142,9 +142,13 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `ssh-ed25519` | RFC 8709 | ✅ |
 | `ecdsa-sha2-nistp256/384/521` | RFC 5656 | ✅ |
 | `rsa-sha2-512` / `rsa-sha2-256` | RFC 8332 | ✅ |
-| The `-cert-v01@openssh.com` variants of the above algorithms | OpenSSH `PROTOCOL.certkeys` | ✅ |
-| `ssh-rsa` (SHA-1 signatures) | RFC 4253 | ❌ off by default |
+| The `-cert-v01@openssh.com` variants of the three rows above (host certificates) | OpenSSH `PROTOCOL.certkeys` | ✅ after all the plain algorithms |
+| `ssh-rsa` (SHA-1 signatures) | RFC 4253 | ❌ off by default (§6.6) |
+| `ssh-rsa-cert-v01@openssh.com` (certificate with SHA-1 signatures) | OpenSSH `PROTOCOL.certkeys` | ❌ not in the default list, and the §6.6 switch does not add it either |
 | `ssh-dss` | RFC 4253 | ❌ **Not implemented**. Fixed at 1024 bits, no longer acceptable |
+
+The default list is ordered `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-512`, `rsa-sha2-256`,
+followed by the six certificate variants in the same order. Why the certificate variants come last, and when they are moved forward, is in 03 §5.5.
 
 ### 6.3 Encryption
 
@@ -153,8 +157,14 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `chacha20-poly1305@openssh.com` | AEAD, length field **encrypted separately** | ✅ highest priority |
 | `aes256-gcm@openssh.com` / `aes128-gcm@openssh.com` | AEAD, length field is plaintext AAD | ✅ |
 | `aes256-ctr` / `aes192-ctr` / `aes128-ctr` | Stream + separate MAC | ✅ |
-| `aes256-cbc` / `aes128-cbc` | Block + separate MAC | ❌ off by default. 〔Interop〕old devices |
+| `aes256-cbc` / `aes128-cbc` | Block + separate MAC | ❌ **Not implemented**. The §6.6 switch does not include it either |
 | `3des-cbc` / `arcfour*` | — | ❌ **Not implemented** |
+
+〔Decision〕**CBC is not implemented, and the legacy switch does not offer it to the peer either.**
+Once a name we do not implement appears in our KEXINIT, it only gets "negotiated" against a device that has nothing but CBC left,
+and then fails during key derivation —— with a "not implemented" message that is much harder to understand than "no common encryption algorithm",
+and that shows up only when connecting to that one device. Not offering it makes such devices fail on the spot during negotiation, with both sides' complete lists in the exception (03 §2.2).
+The name constants for `aes256-cbc` / `aes128-cbc` are kept and marked as not implemented; they only serve to recognize names in the peer's list and must not be put in our list.
 
 ### 6.4 MAC (used only with non-AEAD encryption)
 
@@ -177,11 +187,22 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 so authentication packets (passwords, public-key signatures) are in the compressed stream too —— ciphertext length leaks the
 compressibility of the plaintext, and an unauthenticated party can mount a CRIME-style compression side channel.
 OpenSSH servers have long compressed only after authentication, so leaving out plain `zlib` does not hurt real-world interop.
-Even if a caller adds `zlib` to the list by hand, negotiating it fails on the spot rather than being silently treated as no compression (see 01 §6).
+Even if a caller adds `zlib` to the list by hand, the pre-connect list check rejects it (§6.6) rather than it being silently treated as no compression (see 01 §6).
 
 〔Decision〕**Compression is off by default**, consistent with OpenSSH.
 Rationale: on modern links compression is usually not worth it (trading CPU for bandwidth), and the combination of compression + encryption carries
-the historical lesson of CRIME-style side channels. Those who need it (weak networks, high latency) turn it on explicitly.
+the historical lesson of CRIME-style side channels. Those who need it (weak networks, high latency) turn it on explicitly with `WithCompression()`.
+
+### 6.6 The legacy switch and list validation
+
+The old algorithms outside the default list are enabled in one go by `SshAlgorithmSet.WithLegacyInterop()`: it **appends**
+`diffie-hellman-group14-sha1`, `ssh-rsa` (host keys with SHA-1 signatures), `hmac-sha1-etm@openssh.com` and `hmac-sha1` to the **end** of the respective lists.
+Appended rather than prepended —— as long as the peer still supports one modern algorithm, the negotiation result is the same as without the switch.
+It does **not** include CBC (§6.3).
+
+Callers may also build their own lists, but no category may be empty, and every name in the key exchange, encryption, MAC and compression categories
+must be one this library implements. This is checked **when connecting starts, before dialing**; a bad list throws `ArgumentException` right away,
+without dialing. The rule and its rationale are in 03 §2.2.
 
 ## 7 How algorithm priority is ordered
 
@@ -193,8 +214,8 @@ the historical lesson of CRIME-style side channels. Those who need it (weak netw
 3. At equal security, prefer what has hardware acceleration: AES-GCM beats ChaCha20 on machines with AES-NI;
    **but ChaCha20-Poly1305 is still first by default** —— it is fast on every platform,
    while AES drops to very ugly numbers on devices without AES-NI.
-   〔Decision〕At runtime the relative order of these two is adjusted dynamically according to `System.Runtime.Intrinsics.X86.Aes.IsSupported` /
-   `AdvSimd.Arm64`.
+   〔Decision〕At runtime the relative order of these two is adjusted dynamically according to `System.Runtime.Intrinsics.X86.Aes.IsSupported` (together with `Pclmulqdq.IsSupported`) /
+   `System.Runtime.Intrinsics.Arm.Aes.IsSupported`: with AES hardware acceleration, AES-GCM is placed before ChaCha20-Poly1305.
 4. Algorithms that are off by default (old algorithms) are not in the default list; they are added only when the user configures them explicitly.
 
 ## 8 Glossary

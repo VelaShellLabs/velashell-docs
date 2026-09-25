@@ -70,16 +70,20 @@ sequenceDiagram
 候选 = 使用者配置的凭据（有序）
 可用 = 服务端在最近一次 FAILURE 中给出的方法列表
 
-for 凭据 in 候选:
-    if 凭据.Method not in 可用: 跳过（记录「因服务端不接受而跳过」）
-    结果 = 尝试(凭据)
-    if 结果 == Success: 完成
-    if 结果 == PartialSuccess: 刷新「可用」，继续外层循环（§3.3）
-    if 结果 == Failure: 刷新「可用」，继续
+重复扫描:
+    for 凭据 in 候选（每次扫描都从头开始）:
+        if 凭据已经试过: 跳过（每条凭据至多试一次，第 4 条）
+        if 凭据.Method not in 可用: 跳过（记录「因服务端不接受而跳过」，不算试过）
+        if 凭据.Method ≠ publickey 且该方法已失败 N 次: 跳过（第 3 条）
+        结果 = 尝试(凭据)
+        if 结果 == Success: 完成
+        if 结果 == PartialSuccess: 刷新「可用」，结束本次扫描、从头再扫（§3.3）
+        if 结果 == Failure: 刷新「可用」，继续
+直到某次扫描走完都没有出现 PartialSuccess
 抛 AuthenticationMethodExhausted，附上逐条尝试记录
 ```
 
-**三个〔决策〕**：
+**四个〔决策〕**：
 
 1. **使用者配置的凭据列表就是全部，不做任何隐式回退。**
    不自动读 `~/.ssh/id_*`，不自动连 ssh-agent，除非使用者显式加了对应凭据。
@@ -87,17 +91,37 @@ for 凭据 in 候选:
    理由：隐式回退在桌面客户端里是实打实的问题 —— 用户在界面上选了「密码」，
    库却先拿某把默认私钥去试，于是服务器日志里出现莫名其妙的失败记录；
    Windows 上 `SSH_AUTH_SOCK` 常指向 msys/WSL 的 Unix 套接字，
-   自动连 agent 每次都撞一发异常。**要用默认密钥或 agent，加一个
-   `DefaultIdentityCredential` / `AgentCredential` 即可**，一行的事，
-   但那是使用者的显式决定。
+   自动连 agent 每次都撞一发异常。**要用默认密钥或 agent，显式把它们加进凭据列表即可**：
+   私钥文件用 `SshPrivateKeyFile.LoadAsync` 读出签名器、包成 `PublicKeyCredential`；
+   agent 用 `SshAgentClient.GetCredentialsAsync` 取回一组 `PublicKeyCredential`（每把钥一条）。
+   一两行的事，但那是使用者的显式决定。
 
 2. **跳过的原因必须记录下来。** `AuthenticationMethodExhausted` 的异常里
    带一张逐条表：哪些试了、结果如何；哪些**因为服务端不接受而没试**。
    没有这张表，「skipped: publickey」这种信息就只存在于日志里，
    而用户看到的是一句「用户名或密码不正确」。
 
-3. **失败次数与退避**：同一个方法连续失败 N 次（〔决策〕N = 3）后不再重试。
+3. **失败次数上限只管 `password` 与 `keyboard-interactive`**：同一次认证里某个方法累计失败 N 次
+   （〔决策〕N = 3，`SshAuthenticator.MaxFailuresPerMethod`）后，排在后面的同方法凭据不再尝试，
+   记成 `SkippedNotOffered`，`Detail` 写明「在这次认证里已经失败 N 次」。密码经 keyboard-interactive 作答（§6.5）时
+   计在 `keyboard-interactive` 名下。这两种方法的重试是对**同一个秘密**的反复猜测，
    服务端通常也有自己的计数，撞满会被临时封禁。
+
+   〔决策〕**`publickey` 不受这个上限约束。** 每把钥是不同的凭据，各自只试一次。
+   曾经它也按「失败 3 次就停」算 —— agent 里有五把钥、对的是第四把时，第四把永远轮不到，
+   那台机器就永远登不上。公钥的总次数交给服务端自己的 `MaxAuthTries`：撞满时服务端断开连接（§9）。
+   钥多的时候，把对的那把排在前面。
+
+4. **部分成功之后从头再扫一遍。** 部分成功（§3.3）之后服务端的可用方法列表变了，
+   之前因方法「当时不被接受」而跳过的凭据，要按新列表**再给一次机会**。
+   典型场景是 `AuthenticationMethods publickey,password`：服务端起初只报 `publickey`，
+   排在前面的口令凭据被跳过；公钥那一步通过之后服务端才开放 `password`。
+   曾经循环只走一遍，那条口令凭据再也轮不到，认证以「凭据试完了」失败，而使用者明明两样都配了。
+
+   〔决策〕**重扫只捡回「因方法不被接受而跳过」的凭据，每条凭据至多真正尝试一次。**
+   试过的 —— 不论结果是部分成功、失败还是 `SkippedNoMaterial` —— 不再试：同一把钥、同一个口令
+   换个时机也不会变成对的，再试只是白耗服务端的 `MaxAuthTries`。每次重扫都由一条新凭据的部分成功触发，
+   所以扫描次数不会超过凭据条数。代价是同一条凭据可能在尝试记录里留下多条「跳过」，每次扫描一条。
 
 ### 2.3 `USERAUTH_REQUEST` 的通用字段
 
@@ -150,15 +174,17 @@ RFC 4252 §5 允许中途改用户名，但服务端行为未定义 —— 我�
     记录「方法 X 已通过」
     刷新可用方法列表
     **不要**把这条凭据标记为失败，也不要计入失败计数
-    继续外层循环，用新列表挑下一个方法
+    回到凭据列表开头，按新列表重新挑（§2.2 第 4 条）
 ```
 
 〔决策〕**部分成功后，允许同一个凭据类型再次出现。**
 例如服务端要求「publickey 两次，两把不同的密钥」—— 这在高安全环境里是真实配置。
+允许的是同一**类型**的另一条凭据；同一条凭据不会试第二次（§2.2 第 4 条）。
 
 ### 3.4 认证尝试记录
 
-每一次尝试都往 `AuthAttemptLog` 里记一条：
+每一次尝试（包括跳过）都记一条 `SshAuthAttempt`；成功时整张表在 `SshAuthenticationResult.Attempts` 里，
+失败时在 `SshAuthenticationException.Attempts` 里：
 
 | 字段 | 内容 |
 | --- | --- |
@@ -166,10 +192,19 @@ RFC 4252 §5 允许中途改用户名，但服务端行为未定义 —— 我�
 | `CredentialLabel` | 使用者给凭据起的名字（如私钥路径），**不含任何密钥材料** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | 这一步之后服务端给出的方法列表 |
-| `Detail` | 例如「私钥文件读不出来」「服务端不接受 rsa-sha2-512」 |
+| `Detail` | 例如「私钥文件读不出来」「服务端不接受这把公钥」 |
 
-这张表会装进 `SshAuthenticationException`。
 它的存在理由很具体：**要让「这台机器需要动态码」和「密码打错了」在 UI 上能区分开。**
+
+〔决策〕**`SkippedNoMaterial` 只记「凭据自己出的问题」**：取口令的回调、keyboard-interactive 的应答回调、
+签名器（本地私钥、agent、外部签名）抛出的异常 —— 包括 agent 拒签这类库自己的异常类型。
+这些调用都发生在**没有请求在途**的时刻（发请求之前，或读完上一个应答之后），
+跳过它、接着发下一条凭据的请求不会让应答错位。
+
+**其余一律照实抛出，不许当成跳过**：连接中断（包成 `ClosedByPeer`）、服务端报文格式非法（包成 `ProtocolError`）、
+横幅回调抛出的异常。它们发生时请求往往已经发出、应答还没读 —— 当成「跳过」接着试下一条，
+下一条凭据读到的就是上一条的应答；服务端其实已经认证通过，客户端却报「所有方法都失败」。
+取消（`OperationCanceledException`）同样照实抛出。
 
 ---
 
@@ -250,11 +285,20 @@ string    公钥 blob
 | 情况 | 我们用什么 |
 | --- | --- |
 | 收到 `server-sig-algs`（§7） | 取其中我们支持的、优先级最高的（`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`） |
-| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；若因此失败，**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1） |
+| 收到 `server-sig-algs`，但其中没有我们能用的 | 〔决策〕仍用我们自己的第一偏好（`rsa-sha2-512`）。宣告不完整的服务端确实存在，试错的代价只是一次多余的往返 |
+| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；〔未实现〕若因此失败，**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1）。今天只用第一偏好，失败了不重试 |
 
 〔决策〕**降级默认关闭**（`AllowSha1RsaSignatures = false`）。
 理由：无条件降级会把 Terrapin 那类降级攻击的收益还回去。
-需要连老服务器的人显式打开，并且在诊断信息里能看到「本次使用了 SHA-1 签名」。
+需要连老服务器的人显式打开。〔未实现〕在诊断信息里能看到「本次使用了 SHA-1 签名」—— 今天选中的签名算法不进尝试记录。
+由于上表第三行的重试也还没有，今天打开这个开关只在 `server-sig-algs` 列了 `ssh-rsa`、却没列 `rsa-sha2-*` 时
+（或签名器只提供 `ssh-rsa` 时）起作用；不发 `server-sig-algs` 的老服务器照样只收到 `rsa-sha2-512`。
+
+〔注意〕**判断「是不是 SHA-1」之前先去掉证书后缀**（`SshPublicKey.StripCertificateSuffix`）。
+RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`、`rsa-sha2-256-cert-v01@openssh.com`
+与 `ssh-rsa-cert-v01@openssh.com`，最后一个同样是 SHA-1 签名，`AllowSha1RsaSignatures = false` 时
+与 `ssh-rsa` 一样被滤掉。只比对 `ssh-rsa` 这个名字的话，拿 RSA 证书登录、服务端的 `server-sig-algs`
+又只列了 `ssh-rsa-cert-v01@openssh.com` 时，SHA-1 照样会被挑出来用 —— 开关形同虚设。
 
 〔注意〕公钥 blob 里的类型串**永远是 `"ssh-rsa"`**，与签名算法名无关（§03 5.1）。
 
@@ -267,12 +311,64 @@ string    公钥 blob
 - **签名仍然由对应的私钥产生**，证书只是 CA 的背书。
 
 因此实现上它完全复用 §4.1–§4.4 的路径，只多一件事：
-把证书文件与私钥配对。〔决策〕按 OpenSSH 惯例，
-私钥 `id_ed25519` 的证书默认在 `id_ed25519-cert.pub`，找不到则要求显式指定。
+把证书文件与私钥配对。〔决策〕**配对由使用者显式完成**：`OpenSshCertificate.LoadAsync` 读证书，
+`SshCertificateSigner.Create(证书, 私钥签名器)` 把两者合成一个签名器，再包成 `PublicKeyCredential`。
+`Create` 当场核对证书与私钥是不是一对，配错了立刻报 —— 否则表现只是服务端一句 `Permission denied`，
+与「CA 不被信任」「主体不匹配」分不开。库**不会**去私钥旁边找同名的 `id_*-cert.pub`，
+与 §2.2 第 1 条一致：不读使用者没点名的文件。
 
 〔决策〕**客户端不校验自己证书的有效期。** 那是服务端的职责；
-本地校验只会在时钟不同步时制造假阴性。但**要把过期事实放进
-`AuthAttemptLog.Detail`** —— 认证失败时这是头号线索。
+本地校验只会在时钟不同步时制造假阴性。〔未实现〕设计是**把过期事实放进
+`SshAuthAttempt.Detail`** —— 认证失败时这是头号线索。今天认证器不看证书的有效期，`Detail` 里没有这一条；
+有效期由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者，要在界面上说「证书过期了」得自己判断。
+
+**agent 里的证书。** `ssh-add` 加 `id_*` 时会顺手把同名的 `id_*-cert.pub` 一起加进去，
+所以 agent 的身份列表里常有 `*-cert-v01@openssh.com` 类型的条目。
+
+〔决策〕**agent 里的证书作为证书身份列出，可以直接用来认证。**
+`SshAgentClient.ListIdentitiesAsync` 用 `SshPublicKey.Parse` 解析每条身份，它认得证书 blob
+（`IsCertificate = true`）；`GetCredentialsAsync` 把证书身份与普通钥一样包成 `publickey` 凭据。
+出示的是整张证书，签名仍由 agent 用证书里那把钥来做 —— 签名请求里带的也是那张证书的 blob，与 agent 列出的一致。
+曾经 `Parse` 不认证书，而列表只跳过特定几种异常：agent 里只要有一张证书，整个列表就解析失败，
+agent 认证、agent 转发、自动加钥三条路一起断。
+
+〔决策〕**解析不了的身份只跳过那一条。** 格式坏掉的证书、本库不支持的证书类型
+（证书里的钥只认 Ed25519、ECDSA P-256/384/521 与 RSA；FIDO 的 `sk-*`、`ssh-dss` 都不认），
+与不认识的普通钥（`sk-*`、`ssh-dss`、厂商私有类型）一样，跳过即可 —— 为其中一条报错等于让整个 agent 用不了。
+
+〔注意〕**RSA 证书的签名请求要按去掉证书后缀的算法名设标志位**（`SshAgentClient.SignAsync`）。
+agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RSA_SHA2_512` 标志位表达，
+不带标志位就是 SHA-1。证书的算法名是 `rsa-sha2-512-cert-v01@openssh.com`，直接拿它去比 `rsa-sha2-512`
+对不上，标志位就空着，agent 签出来的是 SHA-1 的 `ssh-rsa` —— 与请求里声明的算法不符，
+而且正是 §4.4 默认要禁掉的那一种。
+
+〔决策〕**证书的指纹就是证书里那把钥的指纹**（`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`），
+与 `ssh-keygen -l` 对证书显示的一致。按整张证书的 blob 算的话，每次重签指纹都会变，
+而用户拿去对照的永远是那把钥。因此同一把钥的普通身份与证书身份在列表里显示同一个指纹，这是对的。
+
+### 4.6 私钥文件
+
+本地私钥由 `SshPrivateKeyFile.LoadAsync` / `Parse` 读入，按文件头认格式。密钥类型支持 Ed25519、RSA、
+ECDSA P-256/384/521。
+
+| 格式 | 文件头 | 加密 | 谁来解 |
+| --- | --- | --- | --- |
+| OpenSSH（`openssh-key-v1`，OpenSSH 7.8 起 `ssh-keygen` 的默认） | `BEGIN OPENSSH PRIVATE KEY` | 不加密；或 `bcrypt` KDF + `aes{128,192,256}-ctr`、`aes{128,192,256}-cbc`、`aes{128,256}-gcm@openssh.com`、`chacha20-poly1305@openssh.com` | 本库 |
+| PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | 不加密；或 `aes256-cbc`（v2 用 SHA-1 派生，v3 用 Argon2id） | 本库 |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | BCL（PKCS#8 里的 Ed25519 读不了） |
+| PKCS#1 RSA / SEC1 EC，不加密 | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | 无 | BCL |
+| 传统加密 PEM | 上一行的文件头 + `Proc-Type: 4,ENCRYPTED` | 口令经一次 MD5 派生 + 3DES / AES-CBC | **拒绝**（见下） |
+
+〔决策〕**只支持上表里的现代格式，传统加密 PEM 有意不实现。**
+它是 OpenSSH 7.8 之前 `ssh-keygen` 加口令时的默认格式（今天 `ssh-keygen -m PEM` 仍会写出它）：
+口令只经一次 MD5 就成了密钥，没有迭代、没有可调的代价，常配 3DES。为读这种弱格式在安全库里带上它不划算；
+而转换只要一条命令。遇到时抛 `SshPrivateKeyException`，**在要口令之前**就说清楚是格式不受支持，
+并给出转换办法：`ssh-keygen -p -f <私钥文件>` 改一次口令（新旧口令可以相同），它会把文件重写成 `openssh-key-v1`。
+
+〔决策〕**这个异常的 `NeedsPassphrase` 为 `false`。** `NeedsPassphrase = true` 的含义是
+「缺口令或口令不对，再问一次有用」，界面靠它决定要不要再弹输入框；格式不受支持时问多少次都没用。
+曾经这种文件被交给 BCL，BCL 不认，结论却报成「口令多半不对」且 `NeedsPassphrase = true` ——
+用户一遍遍重输正确的口令，界面一遍遍再弹输入框。
 
 ---
 
@@ -294,9 +390,9 @@ string    公钥 blob
 | 2 | `string` | 提示文本（UTF-8） |
 | 3 | `string` | 语言标记（忽略） |
 
-〔决策〕**实现它，但默认不处理** —— 没有配置 `PasswordChangeHandler` 时，
-把它当作一次带明确原因的失败（`Detail = "服务器要求修改密码"`），
-而不是一个无法理解的报文。
+〔决策〕**认得它，但不实现改密码流程** —— 收到它一律记为这条口令凭据的一次失败，
+`Detail` 写明原因（「服务端要求先修改密码（本库尚未实现改密码流程）」），而不是当成一个无法理解的报文。
+没有改密码的回调可配，请求里的「改密码」标志永远发 `FALSE`。
 
 理由：密码过期在企业环境里很常见，而「客户端直接断开且不说为什么」
 是用户最难自救的一种失败。
@@ -450,6 +546,8 @@ sequenceDiagram
 | --- | --- | --- |
 | `SERVICE_REQUEST` 被拒 | `ProtocolError` | 服务端不提供 `ssh-userauth`，极罕见 |
 | 全部方法试完仍未成功 | `AuthenticationMethodExhausted` | **带逐条尝试记录**（§3.4） |
+| 服务端撞满自己的 `MaxAuthTries` 后断开 | `Disconnected` | §2.2 第 3 条。公钥不受本库的失败上限约束，总次数由它兜底 |
+| 私钥是传统加密 PEM（`Proc-Type: 4,ENCRYPTED`） | `Unsupported` | §4.6。`SshPrivateKeyException.NeedsPassphrase = false` —— 不要再弹口令框 |
 | 服务端只给 `keyboard-interactive` 且我们没配对应凭据 | `TwoFactorRequired` | 〔决策〕单独一个原因码 —— 让 UI 能说「这台机器需要动态码」 |
 | `INFO_RESPONSE` 条数不符 | `ProtocolError` | |
 | 交互轮数 / 提示数 / 长度超限 | `ProtocolError` | §6.4 |
