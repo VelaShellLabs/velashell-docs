@@ -570,6 +570,11 @@ are always rejected — consistent with OpenSSH.
 then accumulate both data sections according to the lengths in the header. Assuming "the first read is the complete message"
 fails randomly on small MTUs or slow links.
 
+〔Decision〕**Each authorization field is limited to 256 bytes, and this is checked as soon as the 12-byte header is in.** Both lengths come from the remote side,
+and these bytes must be buffered before the cookie is checked — waiting for whatever length the header claims (the protocol allows up to 64 KiB each)
+would let a peer that has not proven anything decide how much we buffer and how long we wait. The only thing that can pass the check is the 18-byte
+`MIT-MAGIC-COOKIE-1` plus the 16-byte fake cookie; every real X11 authorization protocol name and data is far below this limit. Anything larger rejects the channel on the spot, without connecting to the local X server.
+
 ### 7.5.6 Locating the local display
 
 Forms of `DISPLAY`: `:0`, `:10.2`, `unix:0`, `host:0`, `[::1]:0`,
@@ -613,7 +618,18 @@ the user's own local X programs can no longer connect to their own display.
 〔Decision〕The display name passed to `xauth` preserves the host and socket path: a local Unix socket is written as `:N`,
 a remote display as `host:N`, and a macOS launchd one as the full socket path — if only `:N` were left,
 `xauth` would look up (or generate) the entry for a different display.
-〔Decision〕Untrusted mode has a **lifetime** (20 minutes by default); after it expires, new `x11` channels are rejected.
+〔Decision〕Forwarding has a **validity period** (default 20 minutes, corresponding to `ForwardX11Timeout` in `ssh_config`); after it expires, new `x11` channels are refused,
+while existing ones are unaffected; 0 means valid for the whole connection.
+〔Intentional difference from OpenSSH〕In OpenSSH `ForwardX11Timeout` only governs untrusted mode; we apply it to **both modes** —
+trusted mode is by far the more dangerous one, and it makes no sense for it alone to have no time limit.
+
+〔Decision〕**The `timeout` given to `xauth` is our validity period plus 60 seconds; when the validity period is 0, pass 0.**
+The X SECURITY extension specifies that a restricted authorization is purged by the X server once it has spent `timeout` seconds in the state of
+"no connection is using it", and that 0 means it never expires (the default when omitted is 60 seconds). The two sides keep separate clocks: the X server counts from
+the moment of generation, we count from the forwarding request — with equal values there is an edge case where we have just accepted an `x11` channel and the X server
+has just purged the authorization, so that connection is refused by the X server. The margin guarantees the X server side always ends later than ours.
+When the validity period is 0, any concrete number of seconds would make the X server purge the authorization after being idle that long while we still accept new connections —
+so neither side has a time limit.
 
 ### 7.5.8 What to do on failure
 
@@ -623,6 +639,10 @@ a remote display as `host:N`, and a macOS launchd one as the full socket path �
 | --- | --- |
 | The caller **explicitly** requested it on this execution | **Throw** — they explicitly want X11; silently degrading would be lying to them |
 | Only a connection-level switch (e.g. `ForwardX11 yes` in `ssh_config`) | **Log and start normally** — otherwise an existing configuration would make every command fail to run |
+
+〔Decision〕**"X11 could not be set up" covers any preparation failure on the local side**: no display, `xauth` missing or not runnable,
+the temporary directory for `xauth` cannot be created, and the server refusing `x11-req`. **The connection itself breaking and the caller cancelling are still thrown as-is** —
+they are not swallowed as an X11 failure: once swallowed, the next request fails on the same dead channel anyway and the real cause is lost.
 
 ### 7.5.9 Reaching the local display through a connector
 
