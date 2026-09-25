@@ -106,7 +106,10 @@ each request's effects are visible to everything after it. Therefore:
 - **One execution loop** (single thread, `Channel<work item>`) runs all requests, host input and timers. Protocol state
   takes no locks — all mutable state is touched only on that thread. The one thing shared across threads is top-level
   pixels, guarded by `PixelLock`: the loop holds it for a batch within a **4 ms** time budget, then releases it so the
-  host can copy pixels.
+  host can copy pixels. A host reading pixels through `XTopLevelWindow.ReadPixels` / `CopyPixels` first registers that it is waiting:
+  after every work item the loop checks, releases early if someone is waiting, and re-takes the lock only after the read finishes
+  (bounded at 20 ms) — `lock` is unfair, the loop re-takes it within microseconds of releasing it, and a waiting UI thread could lose
+  that race again and again, freezing the whole host UI.
 - **Host callbacks are never made while holding the lock**: notifications produced by the loop (map, geometry, damage,
   cursor, WM requests…) are queued in `DeferredHost` and invoked in order after the lock is released — so a host that
   synchronously waits for its UI thread inside a callback, while that UI thread waits for the lock in `CopyPixels`,
@@ -132,7 +135,7 @@ The library defines the interface and the host implements it; notifications flow
 
 | Direction | Content |
 | --- | --- |
-| Library → host | Top-level window mapped / unmapped / destroyed; geometry changes (client ConfigureWindow); title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent, override-redirect; non-rectangular outline (`XTopLevelWindow.Shape`, the SHAPE bounding shape, null when rectangular); window-manager hints (`WindowType`, `States`, `Decorated` — false for windows that draw their own title bar, min / max size and increments, icons, `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine / role, `HasAlpha`); clients' window-manager requests (`WindowManagerRequest`: interactive move / resize, state changes, activate, close, minimize — a default interface method, so existing hosts need no change); damage rectangles (the host then copies from that window's pixel buffer); cursor shape (cursor-font glyph number, −1 default arrow, −2 hidden); bell; an X client copied text (`ClipboardChanged`) |
+| Library → host | Top-level window mapped / unmapped / destroyed; geometry changes (client ConfigureWindow); title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent, override-redirect; non-rectangular outline (`XTopLevelWindow.Shape`, the SHAPE bounding shape, null when rectangular); window-manager hints (`WindowType`, `States`, `Decorated` — false for windows that draw their own title bar, min / max size and increments, icons, `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine / role, `HasAlpha`); clients' window-manager requests (`WindowManagerRequest`: interactive move / resize, state changes, activate, close, minimize — a default interface method, so existing hosts need no change); damage rectangles (the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); cursor shape (cursor-font glyph number, −1 default arrow, −2 hidden); bell; an X client copied text (`ClipboardChanged`) |
 | Host → library | The user moved / resized the native window (the library updates geometry and sends ConfigureNotify / Expose); close button (ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected); pointer motion / buttons / wheel (as buttons 4/5; 6 and up are horizontal wheel and side buttons); keys (X keycodes); focus in / out; the system clipboard has new text (`SetClipboardText`); window states and frame extents (`SetTopLevelStates` / `SetFrameExtents`, written back to `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`); monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and RESOURCE_MANAGER), keyboard layout (`SetKeyboardMapping`, sends MappingNotify and XKB notifications) |
 
 Clipboard exchange is controlled by `XServerOptions.SyncClipboard` (CLIPBOARD, on by default) and `SyncPrimary`
@@ -378,3 +381,25 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   built-in engine uses keymap tables shipped with the app (generated from xkeyboard-config through libxkbcommon by
   `scripts/xserver/keymaps/generate.cs`, 27 layouts). All three sources go through one outlet (four levels in the §17 core column
   order) into the server's core keymap, from which XKB is derived as usual; the server library itself is unchanged.
+- **Rendering path review (2026-09-25)**: the whole chain from "a client draws" to "a frame on screen" was reviewed.
+  ① **The host reads only damaged rectangles, in one copy**: new `XTopLevelWindow.ReadPixels` (hands the buffer to a callback under the
+  pixel lock; width and height come from the buffer itself). The Avalonia host splits each window into 256 × 256 tiles, one bitmap per
+  tile, and on each display frame (`RequestAnimationFrame`) copies the accumulated damage rectangles straight into the locked tiles
+  under the pixel lock. Before, every damage batch (hundreds per second under load) copied the whole window twice — into a temporary
+  array, then pixel by pixel with an alpha fix-up into one full-window bitmap — and the renderer then re-uploaded the whole window to the
+  GPU every frame; now there is at most one copy per frame and only touched tiles are re-uploaded. Damage is coalesced across threads on
+  the host side, with at most one delivery queued on the UI thread at a time. This also fixes a crash: the UI thread read `Width` /
+  `Height` before copying, and a client enlarging the window in between made the copy run out of bounds.
+  ② **The pixel lock yields to the host** (see §5): the loop releases early when the host is waiting and re-takes it only after the read.
+  ③ **PutImage touches only what can be drawn**: PutImage and MIT-SHM PutImage decode and blit only the part of the image that falls inside
+  the part of the target that can actually be drawn; 32-bit ZPixmap (Qt, GTK4 through llvmpipe, browsers pushing whole windows) is blitted row by row straight
+  from the request data or the shared segment, without a temporary array. ShmPutImage used to copy the whole shared image out, decode all
+  of it and copy the source rectangle out again — four passes over the whole image for a small update; bitmap-format PutImage used to
+  allocate pixels for the full image (eight pixels per byte, so a 16 MB request became 512 MB). Format / depth validation now runs before
+  the length is computed from the depth.
+  ④ RENDER FillRectangles computes the target region once per request (it used to clone the visible region for every rectangle).
+  ⑤ Request buffers are no longer zero-filled before the read overwrites them.
+  Benchmark (`scripts/xserver/bench/bench.cs` gained three scenarios: full-window 800×600 PutImage, FillRectangles with 50 rectangles,
+  and host pixel reads under load): full-window PutImage throughput +6–13 %, CPU −12–26 %; the in-process benchmark is bound by its test
+  client and pipes, so the server-side savings show up mainly as CPU and lock-hold time, and the other scenarios are within noise. The
+  host half (damage-only, per-frame, tiled uploads) is not covered by this benchmark.

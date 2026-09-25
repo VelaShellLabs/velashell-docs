@@ -90,7 +90,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 - **一个执行循环**(单线程,`Channel<工作项>`)执行全部请求、宿主输入与定时器。协议状态不加锁 ——
   所有可变状态只在这个线程上被碰。唯一跨线程的是顶层像素,由 `PixelLock` 保护:执行循环每次持锁按 **4 毫秒**
-  的时间预算跑一批,然后放锁让宿主拷像素。
+  的时间预算跑一批,然后放锁让宿主拷像素。宿主经 `XTopLevelWindow.ReadPixels` / `CopyPixels` 读像素时先登记「在等」:执行循环每执行完一项就看一眼,
+  有人在等就提前放锁,并且等它读完(最多 20 毫秒)再拿 —— `lock` 不公平,执行循环放锁后几微秒内就会再拿,等锁的 UI 线程可能一直抢不到,整个宿主界面跟着卡。
 - **宿主回调不在持锁时调**:执行循环里产生的通知(映射、几何、损伤、光标、WM 请求……)先攒进 `DeferredHost`,
   放锁之后按原顺序调用 —— 宿主在回调里同步等 UI 线程、UI 线程又在 `CopyPixels` 里等锁,这种死锁因此不会出现;
   宿主回调抛异常也不会拖垮执行循环。
@@ -110,7 +111,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 | 方向 | 内容 |
 | --- | --- |
-| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);窗口管理器提示(`WindowType`、`States`、`Decorated` —— 自绘标题栏的窗口为 false、最小 / 最大尺寸与步长、图标、`Urgent`、`AcceptsFocus`、`Opacity`、`ClientFrameExtents`、进程号 / 机器名 / 角色、`HasAlpha`);客户端的窗口管理器请求(`WindowManagerRequest`:移动 / 缩放拖拽、改状态、激活、关闭、最小化 —— 接口的默认实现方法,老宿主不必改);损伤矩形(随后宿主从该窗口的像素缓冲拷贝);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
+| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);窗口管理器提示(`WindowType`、`States`、`Decorated` —— 自绘标题栏的窗口为 false、最小 / 最大尺寸与步长、图标、`Urgent`、`AcceptsFocus`、`Opacity`、`ClientFrameExtents`、进程号 / 机器名 / 角色、`HasAlpha`);客户端的窗口管理器请求(`WindowManagerRequest`:移动 / 缩放拖拽、改状态、激活、关闭、最小化 —— 接口的默认实现方法,老宿主不必改);损伤矩形(随后宿主经 `XTopLevelWindow.ReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
 | 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5,6 以上是水平滚轮与侧键);按键(X 键码);焦点进出;系统剪贴板有了新文本(`SetClipboardText`);窗口状态与外框尺寸(`SetTopLevelStates` / `SetFrameExtents`,写回 `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`);显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS 与 RESOURCE_MANAGER)、键盘布局(`SetKeyboardMapping`,发 MappingNotify 与 XKB 通知) |
 
 剪贴板互通由 `XServerOptions.SyncClipboard`(CLIPBOARD,默认开)与 `SyncPrimary`(PRIMARY,默认关)控制。
@@ -290,3 +291,16 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   才保留第三、四层(xkeyboard-config 的表里总有一个虚拟 `<LVL3>` 键,扫全表会把美式也判成有 AltGr)。设置里的「键盘布局」改为两种引擎共用,
   手选时内置引擎用随程序带的键位表(`scripts/xserver/keymaps/generate.cs` 经 libxkbcommon 从 xkeyboard-config 生成,27 个布局)。
   三条来源经同一个出口(四层按 §17 的核心列序)换进服务端的核心键位表,XKB 照常推出;服务端库本身不变。
+- **渲染路径复查(2026-09-25)**:从「客户端的一次绘图」到「屏幕上的一帧」整条链路过了一遍。
+  ① **宿主只读损伤矩形、一趟拷贝**:新增 `XTopLevelWindow.ReadPixels`(在像素锁里把缓冲交给回调,宽高取自缓冲本身)。
+  Avalonia 宿主把每个窗口切成 256 × 256 的小块、每块一张位图,跟着显示器的帧(`RequestAnimationFrame`)取攒下的损伤矩形,
+  在像素锁里直接写进锁好的小块。原先每批损伤(负载重时一秒几百批)都整窗拷两遍 —— 先拷进中转数组,再逐像素补 alpha 写进一张整窗位图 ——
+  渲染层随后每帧把整窗重传给 GPU;现在一帧最多取一次,只有被改到的块重传。宿主侧的损伤跨线程攒着,UI 线程上同一时刻最多排一次投递。
+  顺带修掉一个崩溃:UI 线程先读 `Width` / `Height`、再拷像素,客户端恰在中间把窗口改大时越界抛异常。
+  ② **像素锁让行**(见 §5):执行循环看到宿主在等就提前放锁、等它读完再拿。
+  ③ **PutImage 只处理画得到的部分**:PutImage 与 MIT-SHM 的 PutImage 只解码、只贴目标上画得到的那一块;32 位 ZPixmap(Qt、GTK4 经 llvmpipe、浏览器整窗送像素)
+  直接从请求数据或共享内存段按行贴进缓冲,不经中转数组。ShmPutImage 原先把整幅共享图像拷出、整幅解码、再拷出源矩形 —— 一次小块更新要扫四遍整幅图;
+  位图格式的 PutImage 原先按整幅宽高分配像素(一个字节八个像素,16 MB 的请求放大成 512 MB)。格式与深度的校验提到按深度算长度之前。
+  ④ RENDER FillRectangles 整个请求只算一次目标区域(原先每个矩形都克隆一次可见区域)。⑤ 读请求时不再先把缓冲清零。
+  基准(`scripts/xserver/bench/bench.cs` 新增整窗 800×600 PutImage、50 个矩形的 FillRectangles、满载时宿主读像素三个场景):整窗 PutImage 吞吐 +6–13%、
+  CPU −12–26%;进程内基准的瓶颈在测试客户端与管道,服务端省下的主要体现在 CPU 与持锁时间上,其余场景在噪声范围内。宿主那一半(只取损伤、按帧、分块上传)不在这个基准里。
