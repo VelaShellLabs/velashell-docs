@@ -62,26 +62,32 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 ## 4. 分层
 
 ```
+Host/         全部公开类型,一律在根命名空间 VelaShell.XServer:IX11ServerHost、X11ServerOptions、XTopLevelWindow 与 XTopLevelSnapshot /
+              XTopLevelChanges / XFrameExtents、XCursor / XCursorShape / XCursorImage、XKeymap、XMonitor、窗口管理器请求与枚举、
+              XKeycodes、XRect。其余一律 internal
 Protocol/     常量(操作码、事件码、错误码、掩码、预定义原子)、字节序感知的请求读取与回复 / 事件 / 错误写出
-Server/       X11Server:监听(TCP 6000+N、Unix 套接字)与 ServeAsync(任意双工流)、连接建立与授权(MIT-MAGIC-COOKIE-1 / 仅本机)、
-              单线程执行循环、连接层背压、宿主回调的延后调用(DeferredHost)、客户端表与序号、GrabServer、BIG-REQUESTS 长度;
-              请求处理按领域拆成 partial 文件(Windows / Exposure / Events / Properties / Graphics / Text / Colors / Input /
-              Extensions / Queries,以及各扩展:Shape / XFixes / RandR / Monitors / Render / Damage / CompositeDbe / Sync /
-              Present / Xkb / XkbSetMap / XInput / XiHierarchy / SyncGrabs / XTest / ScreenSaver / Shm / Glx,
-              窗口管理器角色 Ewmh、剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings)
+Server/       X11Server:公开成员全在 X11Server.cs(构造、生命周期、宿主注入);执行循环(WorkLoop)、监听与连接(Connection、
+              UnixSocket;TCP 6000+N、Unix 套接字与 ServeAsync 任意双工流,连接建立与授权 MIT-MAGIC-COOKIE-1 / 仅本机、背压、
+              BIG-REQUESTS、断开时的清理)、资源表与 XC-MISC(Resources)、请求分派(Dispatch)、宿主回调的延后调用(DeferredHost)、
+              扩展注册表(Extensions:编号表、事件 / 错误编号不重叠的检查、断开与窗口销毁的清理钩子,Generic Event);
+              请求处理按领域拆成 partial 文件(Windows / Exposure / Events / Properties / Graphics / Text / Colors / Cursors / Input /
+              GrabFreeze,以及各扩展:Shape / XFixes / RandR / Monitors / Xinerama / Render / Damage / Composite / Dbe / Sync /
+              Present / Xkb / XkbSetMap / XInput / XiHierarchy / XTest / ScreenSaver / Dpms / XRes / Shm),
+              与宿主之间的顶层窗口桥(TopLevels:句柄、快照与变化、损伤交付、宿主作为窗口管理器的动作)、窗口管理器角色 Ewmh、
+              剪贴板互通 Clipboard、XSETTINGS 管理器 XSettings;自成一体的 GLX 是独立的类 GlxExtension
 Windowing/    窗口模型(树、几何、属性、事件选择、被动抓取、顶层缓冲、SHAPE 的三种形状)
-Resources/    GC、像素图、颜色表、光标、字体句柄、颜色名表、RENDER 的 picture 与字形集
+Resources/    资源类型:GC、像素图、颜色表、光标、字体句柄,以及各扩展的资源(RENDER 的 picture 与字形集、SYNC、DAMAGE、
+              XFIXES 区域、Present 事件上下文、MIT-SHM 段、GLX 上下文与可绘对象);颜色名表
 Drawing/      32 位软件帧缓冲、区域(Region)、光栅化:16 种光栅操作、平面掩码、填充样式、裁剪;
               点 / 线(细线 Bresenham + 宽线多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字;
               RENDER:像素格式、合成运算与混合模式、取样源(图像 / 纯色 / 渐变,repeat、变换、过滤)、梯形覆盖率
 Gl/           GLX 间接渲染的软件 GL:渲染命令解码、显示列表、矩阵栈、光照、裁剪、三角形 / 线 / 点光栅化、纹理、逐片元操作、查询
 Fonts/        BDF 解析、内置 misc-fixed 字体、XLFD 名称匹配、合成的 cursor 与 nil2 字体
 Input/        键码 ↔ 键值表(evdev 风格键码)、XKB 的 evdev 键名、修饰键映射、抓取的数据结构(核心与 XI2)
-Host/         面向宿主的接口:IXServerHost、XTopLevelWindow、XServerOptions、XMonitor、窗口管理器请求与枚举、XKeycodes
 ```
 
 Unix 套接字:Windows 以外默认监听 `/tmp/.X11-unix/X{N}`,Linux 另在抽象命名空间里监听同名套接字(Xlib / XCB 对 `:N` 先试它);
-`XServerOptions.UnixSocketPath` 可指定或关掉,`ListenTcp` 可关掉 TCP。宿主字体提供者接口还没有:核心字体只服务老程序,现代工具包都走 RENDER + 客户端栅格化,接入宿主之后也没有遇到非它不可的程序。
+`X11ServerOptions.UnixSocketPath` 可指定或关掉,`ListenTcp` 可关掉 TCP。宿主字体提供者接口还没有:核心字体只服务老程序,现代工具包都走 RENDER + 客户端栅格化,接入宿主之后也没有遇到非它不可的程序。
 
 ## 5. 线程模型
 
@@ -89,11 +95,11 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 所有请求可见。所以:
 
 - **一个执行循环**(单线程,`Channel<工作项>`)执行全部请求、宿主输入与定时器。协议状态不加锁 ——
-  所有可变状态只在这个线程上被碰。唯一跨线程的是顶层像素,由 `PixelLock` 保护:执行循环每次持锁按 **4 毫秒**
+  所有可变状态只在这个线程上被碰。唯一跨线程的是顶层像素,由像素锁保护(不对外公开):执行循环每次持锁按 **4 毫秒**
   的时间预算跑一批,然后放锁让宿主拷像素。宿主经 `XTopLevelWindow.ReadPixels` / `CopyPixels` 读像素时先登记「在等」:执行循环每执行完一项就看一眼,
   有人在等就提前放锁,并且等它读完(最多 20 毫秒)再拿 —— `lock` 不公平,执行循环放锁后几微秒内就会再拿,等锁的 UI 线程可能一直抢不到,整个宿主界面跟着卡。
 - **宿主回调不在持锁时调**:执行循环里产生的通知(映射、几何、损伤、光标、WM 请求……)先攒进 `DeferredHost`,
-  放锁之后按原顺序调用 —— 宿主在回调里同步等 UI 线程、UI 线程又在 `CopyPixels` 里等锁,这种死锁因此不会出现;
+  放锁之后按原顺序调用 —— 宿主在回调里同步等 UI 线程、UI 线程又在 `ReadPixels` 里等锁,这种死锁因此不会出现;
   宿主回调抛异常也不会拖垮执行循环。
 - 每个连接一个**读取任务**(64 KB 缓冲):按长度字段切出完整请求,交给执行循环;一个**写出任务**:把执行循环
   放进该连接输出队列的消息拼进一块池化缓冲再写。执行循环从不在套接字上阻塞,慢客户端拖不住别人。
@@ -111,10 +117,10 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 | 方向 | 内容 |
 | --- | --- |
-| 库 → 宿主 | 顶层窗口映射 / 取消映射 / 销毁;几何变化(客户端 ConfigureWindow);标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口、override-redirect;非矩形轮廓(`XTopLevelWindow.Shape`,SHAPE 的边界形状,null 为矩形);窗口管理器提示(`WindowType`、`States`、`Decorated` —— 自绘标题栏的窗口为 false、最小 / 最大尺寸与步长、图标、`Urgent`、`AcceptsFocus`、`Opacity`、`ClientFrameExtents`、进程号 / 机器名 / 角色、`HasAlpha`);客户端的窗口管理器请求(`WindowManagerRequest`:移动 / 缩放拖拽、改状态、激活、关闭、最小化 —— 接口的默认实现方法,老宿主不必改);损伤矩形(随后宿主经 `XTopLevelWindow.ReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标形状(cursor 字体字形号,−1 默认箭头,−2 隐藏);响铃;X 客户端复制了文本(`ClipboardChanged`) |
-| 宿主 → 库 | 用户移动 / 缩放了原生窗口(库据此改几何并发 ConfigureNotify / Expose);关闭按钮(有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端);指针移动 / 按键 / 滚轮(换成 Button 4/5,6 以上是水平滚轮与侧键);按键(X 键码);焦点进出;系统剪贴板有了新文本(`SetClipboardText`);窗口状态与外框尺寸(`SetTopLevelStates` / `SetFrameExtents`,写回 `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`);显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS 与 RESOURCE_MANAGER)、键盘布局(`SetKeyboardMapping`,发 MappingNotify 与 XKB 通知) |
+| 库 → 宿主(`IX11ServerHost`,回调名一律「主语 + 过去分词」) | 顶层窗口映射 / 取消映射(`TopLevelMapped` / `TopLevelUnmapped`,销毁也算取消映射);快照变了(`TopLevelChanged`,附 `XTopLevelChanges` 说明变了哪几组:几何、标题、状态、图标、形状、其余提示)。窗口的属性在 `XTopLevelWindow.Snapshot` 这份不可变快照里 —— 几何、标题(`WM_NAME` / `_NET_WM_NAME`)、类名、瞬态父窗口(`TransientFor`,另一个 `XTopLevelWindow`)、override-redirect、非矩形轮廓(`Shape`,SHAPE 的边界形状,null 为矩形)、窗口管理器提示(`WindowType`、`States`、`Decorated` —— 自绘标题栏的窗口为 false、最小 / 最大尺寸与步长、图标、`Urgent`、`AcceptsFocus`、`Opacity`、`ClientFrameExtents`、进程号 / 机器名 / 角色、`HasAlpha`);服务端每次变更整份替换,宿主先取到局部变量再读;客户端的窗口管理器请求(`WindowManagerRequested`:移动 / 缩放拖拽、改状态、激活、关闭、最小化 —— 接口的默认实现方法);损伤矩形(`TopLevelDamaged`,随后宿主经 `XTopLevelWindow.ReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标(`CursorChanged`,`XCursor`:语义形状 `XCursorShape`,位图 / ARGB 光标另带图像 `XCursorImage`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100);X 客户端复制了文本(`ClipboardChanged`) |
+| 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(滚轮换成 Button 4/5,6 以上是水平滚轮与侧键)、指针离开、按键(X 键码);窗口管理器的动作 `*TopLevel`:焦点(`FocusTopLevel`,null = 没有焦点)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何并发 ConfigureNotify / Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage,否则断开该客户端)、窗口状态与外框尺寸(`SetTopLevelStates` / `SetTopLevelFrameExtents`,写回 `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`);运行中换配置 `Set*`:键位表(`SetKeymap`,一个 `XKeymap` 带着键值、布局名与「右 Alt 是不是 AltGr」一次换掉,只发一轮 MappingNotify 与 XKB 通知)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS 与 RESOURCE_MANAGER)、系统剪贴板有了新文本(`SetClipboardText`) |
 
-剪贴板互通由 `XServerOptions.SyncClipboard`(CLIPBOARD,默认开)与 `SyncPrimary`(PRIMARY,默认关)控制。
+剪贴板互通由 `X11ServerOptions.SyncClipboard`(CLIPBOARD,默认开)与 `SyncPrimary`(PRIMARY,默认关)控制。
 
 **每个顶层窗口有一块自己的像素缓冲**(相当于常开的 backing store + Composite):子窗口画在所属顶层的
 缓冲里,裁剪到自己的可见区域。好处是被别的原生窗口遮住的内容不丢,换来的只是内存 —— 不必在每次
@@ -132,14 +138,14 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 - **授权**:默认只监听 `127.0.0.1`,没配置 cookie 时按「仅本机」放行(与 X.Org 的主机访问控制行为一致,
   SSH X11 转发过来的连接在本机看来就是 127.0.0.1);配置了 cookie 时要求 `MIT-MAGIC-COOKIE-1` 且常数时间比较。
 - **字体**:核心字体来自内置 BDF(`fixed` / `6x13` / `9x15` / `10x20` 等及其 XLFD 名);以后宿主可以经字体提供者
-  接口追加(比如把 Cascadia Mono 栅格化成位图字体)。`cursor` 字体是虚拟的:只有度量,光标形状按字形号
-  交给宿主映射成系统光标。现代工具包不用核心字体(走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
+  接口追加(比如把 Cascadia Mono 栅格化成位图字体)。`cursor` 字体是虚拟的:只有度量,光标按字形号
+  推出语义形状(`XCursorShape`)交给宿主,由宿主选系统光标。现代工具包不用核心字体(走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
 - **RENDER 通用路径按浮点逐像素合成,占绝大多数的两种情形走整数内核**:预乘 alpha,通用路径每通道 0–1;
   纯色源 + 单字节遮罩 + Over(Xft 画字、cairo 的抗锯齿图形)与 8888 图像 Src / Over(贴图、窗口间拷贝)
   写成 8 位整数运算。只有 alpha 的字形按每像素一字节存;一个 CompositeGlyphs 请求只算一次目标、只记一次损伤。
   梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率,只算目标上可写的那一块。
   源 picture 的裁剪、alpha-map、poly-edge / poly-mode / dither 接受但不生效。
-- **RANDR 对客户端只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`XServerOptions.Monitors` 或运行中的
+- **RANDR 对客户端只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`X11ServerOptions.Monitors` 或运行中的
   `SetScreenLayout`),布局变了按 SelectInput 发变更事件;XINERAMA 报同一份布局。客户端改配置的请求回 Failed 或 BadAccess ——
   rootless 模式下窗口摆在哪、显示器怎么排由宿主决定。
 - **服务端兼任 XSETTINGS 管理器**:占有 `_XSETTINGS_S0`、发布 `Xft/DPI`、`Gdk/WindowScalingFactor` 等几项,
@@ -150,7 +156,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   `XWindowManagerRequest` 交给宿主,由宿主决定照不照办、办完用 `SetTopLevelStates` 写回。
   GTK3 的 HeaderBar、Qt 的无边框窗口都依赖这些属性存在。
 - **XKB 由核心键位表推出**:不单独维护一份 XKB 键位表,四个规范类型(外加 AltGr 层用的两个四级类型)、修饰键动作、SymInterpret、指示灯、键名都从
-  核心表算出来;核心表一变(xmodmap、宿主 `SetKeyboardMapping`),XKB 跟着变并发 MapNotify。
+  核心表算出来;核心表一变(xmodmap、宿主 `SetKeymap`),XKB 跟着变并发 MapNotify。
   XKB 的 SetMap 把上传的键值(按 §17 的列序)与修饰键映射写回核心表,再照常推出;SetCompatMap、SetNames 等其余改表请求不支持。
 - **XInput2 的设备拓扑可改,但不是完整的多指针**:初始是主指针 2 / 主键盘 3 各挂一个从设备(4、5);XIChangeHierarchy
   可以增删主设备、把从设备挂到别的主设备或让它浮动(浮动时只报从设备的 XI2 事件、不产生核心事件)。
@@ -197,7 +203,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   把焦点给对应的顶层(revert-to PointerRoot),与窗口管理器的常见做法一致。
 - **Expose 偏多、不偏少**:子窗口移动 / 堆叠变化时直接重画并 Expose 新旧两块区域,不做「搬运原内容」的优化 ——
   客户端本来就要处理 Expose,多发一次只是多画一次,少发一次就是一块脏图。
-- **合成字体**:`cursor`(只有度量,光标形状按字形号交给宿主)与 `nil2`(xterm 的隐形指针用,全空字形)不来自 BDF。
+- **合成字体**:`cursor`(只有度量,光标形状按字形号推出)与 `nil2`(xterm 的隐形指针用,全空字形)不来自 BDF。
 - **M1 验收(2026-09-23)**:单元测试 40 条;真实客户端 `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` 零协议错误、
   画出内容;键盘注入经 xterm 到容器里的 sh 往返成功。
 - **扩展的编号**:主操作码按实现顺序从 128 起分配 —— BIG-REQUESTS 128、XC-MISC 129、SHAPE 130、XFIXES 131、RANDR 132、
@@ -304,3 +310,23 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   ④ RENDER FillRectangles 整个请求只算一次目标区域(原先每个矩形都克隆一次可见区域)。⑤ 读请求时不再先把缓冲清零。
   基准(`scripts/xserver/bench/bench.cs` 新增整窗 800×600 PutImage、50 个矩形的 FillRectangles、满载时宿主读像素三个场景):整窗 PutImage 吞吐 +6–13%、
   CPU −12–26%;进程内基准的瓶颈在测试客户端与管道,服务端省下的主要体现在 CPU 与持锁时间上,其余场景在噪声范围内。宿主那一半(只取损伤、按帧、分块上传)不在这个基准里。
+- **宿主 API 整理(2026-09-25)**:按一次 API 评审把公开面理了一遍,行为不变的地方只改形状。
+  ① **公开面收拢**:公开类型全部移到根命名空间 `VelaShell.XServer`(原来散在 `.Host`、`.Server`、`.Drawing` 三处),`X11Server` 的公开成员全部集中在 `X11Server.cs`;
+  `PixelLock`(没人用、直接锁它还拿不到让行)与 `XErrorCode` 收回 internal。`XServerOptions` / `IXServerHost` 改名 `X11ServerOptions` / `IX11ServerHost`,
+  与 `X11Server` 同一前缀,也不再与宿主应用自己的 `XServerOptions` 重名;选项改成 sealed class,构造时统一校验(不合法抛 `ArgumentException`)。
+  ② **命名成体系**:宿主方法分三类 —— `Inject*`(合成输入)、`*TopLevel`(窗口管理器的动作)、`Set*`(换配置);回调一律「主语 + 过去分词」
+  (`Bell` → `BellRequested`,`WindowManagerRequest` → `WindowManagerRequested`)。窗口用 `XTopLevelWindow` 句柄指名,不再传 XID。
+  ③ **窗口属性是不可变快照**:原来 `XTopLevelWindow` 的二十几个属性由执行线程逐个写、宿主在 UI 线程上直接读,可能读到新宽度配旧高度,
+  16 字节的 `ClientFrameExtents` 元组还会被撕裂。现在执行线程每次造一份 `XTopLevelSnapshot` 整份替换,`TopLevelChanged` 附带变了哪几组;
+  值没变不报(同样的标题再设一遍不再惊动宿主),形状没变沿用同一个列表实例。
+  ④ **光标**:原来是一个带魔数的 int(字形号,−1 同时表示默认与位图光标,−2 隐藏),宿主得自己维护字形号对照表,位图 / ARGB 光标
+  (装了光标主题时 libXcursor 走 RENDER CreateCursor)一律显示成箭头。现在是 `XCursor`:形状在库里从字形号或 XFIXES SetCursorName 起的名字推出,
+  位图与 ARGB 光标在创建时烙好图像一起交给宿主,Avalonia 宿主直接显示图像。
+  ⑤ **键位表一次换**:原来一次换布局要调三次 `SetKeyboardMapping` 加一次 `SetModifierMapping`,每次都给所有客户端发一轮通知;布局名是最后一个可选参数,
+  宿主从来没传过,于是用户选了 `de`,`_XKB_RULES_NAMES` 仍是 `us`。现在 `SetKeymap(XKeymap)` 带着布局名一次提交;右 Alt 当 AltGr 的键值与修饰位由库给出,
+  宿主不再手写修饰键表;跟随系统时宿主取随程序带的表里最像的布局名。
+  ⑥ **扩展注册表**:主操作码与事件 / 错误编号收进一张表,注册时检查不重叠;扩展登记断开与窗口销毁的清理钩子,连接收尾与窗口销毁不再各维护一份清单。
+  GLX 拆成独立的 `GlxExtension` 类;各扩展的资源类型移到 `Resources/`;`Queries` 拆成 Xinerama / XRes,`CompositeDbe` 拆成 Composite / Dbe,
+  DPMS 从 ScreenSaver 里拆出,`SyncGrabs` 改名 `GrabFreeze`(与 SYNC 扩展区分),顶层窗口桥从 Exposure 挪到 TopLevels。
+  ⑦ 其余:`Display` 按实际监听的传输给出(`:N` / `localhost:N.0` / 没监听为 null),另有 `DisplayNumber`;`ServeAsync` 的 `isLocal` 不再有默认值、
+  写明不释放流;诊断只走 `Log`(原来一部分走 `Trace`,宿主注入的工作项出错时宿主看不到);响铃按协议从基准音量换算。
