@@ -129,8 +129,8 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备常只给这个 |
-| `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启** |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ 尚未实现 | 〔互操作〕老设备常只给这个。规格见 03 §3.5；实现之前放进清单会在连接前被拒绝（03 §2.2） |
+| `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启**（§6.6） |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | 不是真算法，是**指示符**，见 03 |
 
 ### 6.2 主机密钥
@@ -140,9 +140,13 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `ssh-ed25519` | RFC 8709 | ✅ |
 | `ecdsa-sha2-nistp256/384/521` | RFC 5656 | ✅ |
 | `rsa-sha2-512` / `rsa-sha2-256` | RFC 8332 | ✅ |
-| 上述各算法的 `-cert-v01@openssh.com` 变体 | OpenSSH `PROTOCOL.certkeys` | ✅ |
-| `ssh-rsa`（SHA-1 签名） | RFC 4253 | ❌ 默认关 |
+| 上面三行的 `-cert-v01@openssh.com` 变体（主机证书） | OpenSSH `PROTOCOL.certkeys` | ✅ 排在全部普通算法之后 |
+| `ssh-rsa`（SHA-1 签名） | RFC 4253 | ❌ 默认关（§6.6） |
+| `ssh-rsa-cert-v01@openssh.com`（SHA-1 签名的证书） | OpenSSH `PROTOCOL.certkeys` | ❌ 不在默认清单，§6.6 的开关也不加它 |
 | `ssh-dss` | RFC 4253 | ❌ **不实现**。1024 位定长，已不可接受 |
+
+默认清单的顺序是：`ssh-ed25519`、`ecdsa-sha2-nistp256/384/521`、`rsa-sha2-512`、`rsa-sha2-256`，
+然后是同样顺序的六个证书变体。证书变体为什么排在后面、什么时候会被提到前面，见 03 §5.5。
 
 ### 6.3 加密
 
@@ -151,8 +155,14 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `chacha20-poly1305@openssh.com` | AEAD，长度字段**单独加密** | ✅ 最高优先 |
 | `aes256-gcm@openssh.com` / `aes128-gcm@openssh.com` | AEAD，长度字段为明文 AAD | ✅ |
 | `aes256-ctr` / `aes192-ctr` / `aes128-ctr` | 流式 + 独立 MAC | ✅ |
-| `aes256-cbc` / `aes128-cbc` | 块式 + 独立 MAC | ❌ 默认关。〔互操作〕老设备 |
+| `aes256-cbc` / `aes128-cbc` | 块式 + 独立 MAC | ❌ **不实现**。§6.6 的开关也不含它 |
 | `3des-cbc` / `arcfour*` | — | ❌ **不实现** |
+
+〔决策〕**CBC 不实现，老算法开关也不把它报给对端。**
+没实现的名字一旦出现在我们的 KEXINIT 里，只会在一台只剩 CBC 的设备上被「谈成」，
+然后在派生密钥时才失败 —— 报出来的是一句「尚未实现」，比「没有共同的加密算法」难懂得多，
+而且只在连某一台设备时出现。不报它，这类设备在协商当场失败，异常里带着双方的完整名单（03 §2.2）。
+`aes256-cbc` / `aes128-cbc` 的名字常量仍然保留并标明未实现，只用于辨认对端清单里的名字，不能放进我们的清单。
 
 ### 6.4 MAC（只在非 AEAD 加密下使用）
 
@@ -174,11 +184,22 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 〔决策〕**只实现 `zlib@openssh.com`，不实现裸 `zlib`。** 裸 `zlib` 从首次 NEWKEYS 起就压，
 认证报文（口令、公钥签名）也在压缩流里 —— 密文长度会泄漏明文的可压缩性，未认证的连接方就能做
 CRIME 类的压缩旁路。OpenSSH 服务端早已只在认证后压缩，不提供裸 `zlib` 不影响实际互通。
-使用者即使手动把 `zlib` 加进清单，谈成时也会在协商当场报错，而不是悄悄按不压缩处理（见 01 §六）。
+使用者即使手动把 `zlib` 加进清单，连接前的清单校验就会拒绝它（§6.6），而不是悄悄按不压缩处理（见 01 §六）。
 
 〔决策〕**默认不开压缩**，与 OpenSSH 一致。
 理由：现代链路上压缩通常不划算（CPU 换带宽），且压缩 + 加密的组合有
-CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）显式打开。
+CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）用 `WithCompression()` 显式打开。
+
+### 6.6 老算法开关与清单校验
+
+默认清单之外的老算法由 `SshAlgorithmSet.WithLegacyInterop()` 一次放开：在各类清单**末尾追加**
+`diffie-hellman-group14-sha1`、`ssh-rsa`（SHA-1 签名的主机密钥）、`hmac-sha1-etm@openssh.com` 与 `hmac-sha1`。
+追加而不是前置 —— 对端只要还支持一个现代算法，协商结果就与不开时相同。
+它**不含** CBC（§6.3）。
+
+使用者也可以自己组清单，但每一类都不能为空，且密钥交换、加密、MAC、压缩这四类里的每个名字
+都必须是本库实现了的。**连接开始时、拨号之前**就校验，不合格直接抛 `ArgumentException`，
+不去拨号。规则与理由见 03 §2.2。
 
 ## 七 算法优先级的排法
 
@@ -190,8 +211,9 @@ CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）显式�
 3. 同等安全性下，选有硬件加速的：AES-GCM 在有 AES-NI 的机器上优于 ChaCha20；
    **但默认第一位仍是 ChaCha20-Poly1305** —— 它在所有平台上都快，
    而 AES 在无 AES-NI 的设备上会掉到很难看的数字。
-   〔决策〕运行期按 `System.Runtime.Intrinsics.X86.Aes.IsSupported` /
-   `AdvSimd.Arm64` 动态调整这两者的相对顺序。
+   〔决策〕运行期按 `System.Runtime.Intrinsics.X86.Aes.IsSupported`（且 `Pclmulqdq.IsSupported`）/
+   `System.Runtime.Intrinsics.Arm.Aes.IsSupported` 动态调整这两者的相对顺序：
+   有 AES 硬件加速时 AES-GCM 排在 ChaCha20-Poly1305 之前。
 4. 默认关闭的（老算法）不进默认列表，只在用户显式配置时加入。
 
 ## 八 术语表

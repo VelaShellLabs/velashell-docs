@@ -24,29 +24,99 @@
 
 `Message` 是给人看的，**不是** API。
 
+〔决策〕**对端给的文本进 `Message` 之前先清一遍**：控制字符（`ESC`、`CR`、`BEL`…）、`DEL`、C1 控制码与双向文本控制符
+一律换成 `?`，并截到固定长度。版本标识串、`DISCONNECT` 的描述、拒绝开通道的理由、SFTP 的状态消息、
+代理的应答都来自对端，很多时候来自一个还没被认证的对端 —— 而 `Message` 最后会被打到终端或界面上，
+原样拼进去就是一个转义序列注入面（改剪贴板、清屏伪造提示、盖掉前半行）。
+**原话照样放在专门的属性里**（`PeerDescription`、`ServerMessage`），那些属性按不可信文本对待。
+
 ---
 
 ## 二 异常层级
 
 ```
-SshException                         抽象基类；带 Reason / Phase / IsRetryable
-├── SshConnectException               建连阶段（TCP/代理/版本/协商/主机密钥）
-│   ├── SshNegotiationException       算法协商失败 —— 带双方名单
-│   └── SshHostKeyException           主机密钥被拒/变更 —— 带指纹与策略原因
+SshException                          抽象基类；带 Reason / Phase / IsRetryable
+├── SshConnectException               建连阶段（拨号、版本、协商、主机密钥）—— 带 Hops
+│   └── SshNegotiationException       算法协商失败 —— 带双方名单
+├── SshKeyExchangeException           密钥交换的计算失败（对端公开值不合法）
 ├── SshAuthenticationException        认证失败 —— 带逐方法尝试记录
 ├── SshProtocolException              对端违反协议
-├── SshConnectionClosedException      连接已断（对端关闭 / 保活超时 / 本端中止）
-├── SshChannelException               通道级失败
-│   └── SshChannelClosedException     通道已关
-├── SshForwardException               转发建立失败
-└── SftpException                     SFTP 操作失败 —— 带 SftpErrorCode 与服务端原文
-    └── SftpTransferInterruptedException  传输中断 —— **带 DurableLength**
+├── SshConnectionClosedException      连接已断（对端关闭 / 保活判死 / 收到 DISCONNECT / 本端中止 / 重协商时换了主机密钥）
+├── SshChannelException               通道打不开 —— 带原因码与对端原文
+├── SshCommandFailedException         远端命令没有成功结束（EnsureSuccess）—— 带完整输出
+├── SshForwardException               转发器起不来
+├── SshPublicKeyException             公钥 blob 解析失败 / 类型不支持
+├── SshPrivateKeyException            私钥文件读不出来 —— 带 NeedsPassphrase
+├── SshCertificateException           证书读不出来
+├── SshAgentException                 连不上 agent，或 agent 拒绝了
+├── SftpException                     SFTP 操作失败 —— 带 StatusCode 与服务端原文 ServerMessage
+├── SftpTransferInterruptedException  传输中断 —— **带 DurableLength**
+└── SftpUnavailableException          SFTP 子系统起不来
 ```
+
+下面这些类型的 `Reason` 与 `Phase` 是固定的；其余的随具体失败而定。
+
+| 类型 | `Reason` | `Phase` |
+| --- | --- | --- |
+| `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
+| `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
+| `SshPublicKeyException` | `Unsupported` | `KeyExchange` |
+| `SshPrivateKeyException`、`SshCertificateException`、`SshAgentException` | `Unsupported` | `Authenticating` |
+| `SshForwardException`、`SftpUnavailableException` | `Unsupported` | `Open` |
+| `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
+| `SshCommandFailedException` | `Unknown` | `Open` |
+
+主机密钥被拒没有专门的类型：它是 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`，策略给的原因就是它的 `Message`（§3）。
 
 〔决策〕**通道级失败不派生自连接级失败。** 一条通道打不开
 （服务端 `MaxSessions` 满了）与整条连接断了是两件事，
 上层的重连策略只该对后者生效。把它们放进同一条继承链，
-调用方 `catch (SshConnectionException)` 就会把前者也吞进去。
+调用方 `catch (SshConnectionClosedException)` 就会把前者也吞进去。
+
+〔决策〕**`SshPublicKeyException` 与 `SshKeyExchangeException` 都派生自 `SshException`。**
+两者都曾经直接派生自 `Exception`：调用方用 `catch (SshException)` 兜库的失败时漏掉它们，宿主的异常翻译也认不出；
+`SshKeyExchangeException` 在建连时还会原样漏给调用方。
+`SshPublicKeyException` 的 `Phase` 记 `KeyExchange`，因为它最常见于解析对端出示的主机密钥（读本地 `.pub` 时这个阶段只是个大概）。
+`SshKeyExchangeException` 的 `Reason` 记 `ProtocolError`：它报的几乎总是对端给的公开值不合法（长度不对、不在曲线上、弱值）；
+「算法没实现」那一类在连接之前就被 `SshAlgorithmSet.Validate()` 挡住了。
+
+### 2.1 连接中途断掉：原因先归成公开类型
+
+一条**已经建好**的连接被什么终结了 —— 接收循环、发送泵、保活、重协商里出的任何错 ——
+那个原因会被原样交给这条连接上的每一个调用者，以及每一条通道的读者（读会抛出它，而不是像对端发了 EOF 那样读完，
+见 `05-connection.md` §4.4）。〔决策〕**交出去之前先归成本库的公开类型：**
+
+| 终结连接的原因 | 调用方拿到的 | `Reason` |
+| --- | --- | --- |
+| 本来就是 `SshException` | 原样 | 原样 |
+| `OperationCanceledException`、`ObjectDisposedException` | 原样 —— 那是本端在收工（取消、释放），不是故障 | — |
+| 对端在一个报文的中途关闭了连接 | `SshConnectionClosedException` | `ClosedByPeer` |
+| `IOException`、`SocketException`（套接字断了、被重置） | `SshConnectionClosedException` | `ClosedByPeer` |
+| 帧格式或完整性校验失败、报文解析失败 | `SshProtocolException` | `ProtocolError` |
+| 其它任何意外 | `SshConnectionClosedException`，原异常在 `InnerException` 里 | `Unknown` |
+
+新包出来的这几种 `Phase` 一律记为 `Open`，即使故障发生在重协商期间（已知局限）；原样交出的保留自己的 `Phase`（比如重协商超时是 `Rekeying`）。
+
+理由：这个原因会落到使用者的 `catch` 与重连策略上，而那两者都按 `SshException` 与它的 `Reason` 分流
+（§3：自动重连只该对「断了」生效）。曾经原样抛出：内部的解析异常类型，使用者按类型 `catch` 不到；
+裸的套接字异常绕开了 `Reason`，重连策略分不出它是「断了」；宿主的异常翻译也认不出它们。
+
+**建连期间**（拨通之后，到认证结束）用的是同一套口径，只是 `Phase` 记失败发生的那一步：
+
+| 建连期间出了什么事 | 调用方拿到的 | `Reason` |
+| --- | --- | --- |
+| 版本交换、密钥交换、认证期间流上的 `IOException` / `SocketException` | `SshConnectionClosedException`，原异常在 `InnerException` 里 | `ClosedByPeer` |
+| 对端在一个报文的中途关闭（密钥交换、认证期间） | `SshConnectionClosedException` | `ClosedByPeer` |
+| 对端在版本交换期间关闭 | `SshConnectException` | `ClosedByPeer` |
+| 帧格式或完整性校验失败（密钥交换、认证期间） | `SshProtocolException` | `ProtocolError` |
+| 密钥交换的计算失败（对端公开值不合法） | `SshKeyExchangeException` | `ProtocolError` |
+
+同一个「断了」按在哪一步、由谁察觉，可能是 `SshConnectException` 也可能是 `SshConnectionClosedException`，
+`Reason` 却总是 `ClosedByPeer` —— 判断「是不是断了」看 `Reason`，不看类型。
+〔决策〕曾经密钥交换期间的报文中途断开报成 `ProtocolError`，调用方会以为不值得重连；拨通之后的套接字异常原样漏出。现在与会话期间一致。
+
+拨号阶段不在此列：各个拨号器自己把失败归成带原因的 `SshConnectException`（§3 的 `DnsFailure`、`TcpRefused`、`ProxyRefused`……，见 `09-dialing.md`）。
+建连期间的超时、协商失败与主机密钥被拒也由各步自己报（§3）。
 
 ---
 
@@ -63,8 +133,8 @@ SshException                         抽象基类；带 Reason / Phase / IsRetry
 | `NotAnSshServer` | 对端不说 SSH | ✘ | 端口连错了 |
 | `VersionMismatch` | 协议版本不是 2.0 | ✘ | |
 | `NegotiationFailed` | 算法无交集 | ✘ | **见 §5.1** |
-| `HostKeyRejected` | 主机密钥被策略拒绝 | ✘ | 见 `SshHostKeyException.PolicyReason` |
-| `HostKeyChanged` | 主机密钥与已记录的不符 | ✘ | 展示新旧指纹，让用户裁决 |
+| `HostKeyRejected` | 主机密钥被拒（`SshConnectException`，`Phase` 为 `KeyExchange`）：策略拒绝 —— **首次连接时密钥变了、被 `@revoked`、或只记着别的类型都属于这一类**；`K_S` 解析不了、签名验不过、RSA 太短、与协商出的算法对不上（含协商出证书算法而 `K_S` 不是证书，或反过来）；有 CA 担保的主机证书不合格（`03-key-exchange.md` §5.5） | ✘ | 看 `Message`：策略给的原因（`SshHostKeyVerdict.Reason`）原样放在里面；`KnownHostsPolicy` 写明是变了、作废了还是只记着别的类型，附指纹与 `known_hosts` 行号 |
+| `HostKeyChanged` | **只在重协商时出现**：对端出示的主机密钥与首次交换时钉住的不同（`03-key-exchange.md` §8.4）。连接以 `SshConnectionClosedException`（`Phase` 为 `Rekeying`）断开，消息里有新旧指纹 | ✘ | 连接中途换主机密钥没有正当场景：不要自动重连，按可能的中间人处理 |
 | `AuthenticationFailed` | 某次认证尝试失败 | ✔ | |
 | `AuthenticationMethodExhausted` | 所有方法试完 | ✘ | **见 §5.3** |
 | `TwoFactorRequired` | 服务端要 keyboard-interactive 而我们没配 | ✘ | 提示「这台机器需要动态码」 |
@@ -72,11 +142,12 @@ SshException                         抽象基类；带 Reason / Phase / IsRetry
 | `Timeout` | 某阶段超时 | ✔ | |
 | `KeepAliveTimeout` | 保活判死 | ✔ | **自动重连只该对这一类生效** |
 | `ClosedByPeer` | 对端主动关闭 | ✔ | |
-| `Disconnected` | 收到 `SSH_MSG_DISCONNECT` | 看 `DisconnectCode` | |
+| `Disconnected` | 收到 `SSH_MSG_DISCONNECT` | ✘ 〔未实现：本想按 `DisconnectReason` 细分，目前一律不可重试〕 | 原因码在 `SshConnectionClosedException.DisconnectReason`，对端原话在 `PeerDescription` |
 | `ProtocolError` | 对端违反协议 | ✘ | |
-| `ChannelOpenFailed` | 通道打不开 | 看原因码 | |
+| `ChannelOpenFailed` | 通道打不开 | ✘ 〔未实现：本想按原因码细分，目前一律不可重试〕 | |
 | `Aborted` | 本端中止（Dispose / 取消） | ✘ | |
 | `Unsupported` | 请求的能力对端不支持 | ✘ | |
+| `Unknown` | 未分类：连接因意外错误中断（§2.1）；远端命令没有成功结束（`SshCommandFailedException`） | ✘ | 看 `InnerException`；命令失败看 `Output` |
 
 〔决策〕**`IsRetryable` 是库给的建议，不是承诺。** 它表达的是
 「这个失败是否可能因为重试而消失」，不表达「应该重试」——

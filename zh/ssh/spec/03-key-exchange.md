@@ -96,13 +96,26 @@ sequenceDiagram
 3. **任何一类无交集 → 协商失败**，抛 `SshNegotiationException`，
    **并把双方的完整名单与对端版本串装进异常**（见 [`08-failures.md`](08-failures.md)）。
    这是本库相对现有库最直接的一处改进：用户拿到的不是
-   「No common encryption algorithm.」，而是「对端只给了 aes128-cbc，
-   我们默认不启用它；要连这台设备请显式打开 CBC」。
+   「No common encryption algorithm.」，而是「对端只给了 aes128-cbc；
+   本端支持 chacha20-poly1305@openssh.com、aes256-gcm@openssh.com……」——
+   一眼就能看出问题在对端只剩 CBC，而本库不实现 CBC（00 §6.3）。
 
 **AEAD 的特例**：当协商出的加密算法是 AEAD（`*-gcm@openssh.com`、
 `chacha20-poly1305@openssh.com`）时，**该方向的 MAC 列表协商结果被忽略**，
 完整性由 AEAD 自身提供。我们仍然**必须**发送非空的 MAC 列表 ——
 不发会导致只支持非 AEAD 的对端无法与我们协商。
+
+〔决策〕**我们自己的清单在拨号之前就校验**（`SshAlgorithmSet.Validate()`，连接开始时调用）：
+
+- 八类清单都不能为空 —— 空清单与任何对端都谈不成；
+- 密钥交换清单里的每个名字，要么是本库实现（或经 `SshKeyExchangeFactory.Register` 注册）了的方法，要么是 §2.3 的指示符；
+- 加密、MAC、压缩清单里的每个名字都必须是本库实现了的（压缩只有 `none` 与 `zlib@openssh.com`）。
+
+不满足就当场抛 `ArgumentException`，**根本不去拨号**。
+理由：清单里混进一个没实现的名字，只有对端恰好也只剩它时才会被谈成 ——
+那时失败发生在密钥派生里，报出来的是一句看不出缘由的「尚未实现」，而且只在连某一台设备时出现。
+提前在这里报，错误指向的是配置本身。
+主机密钥算法名**不在这里查**：它们由主机密钥的解析与验签把关（§5.3），未知类型在那里有明确的错误。
 
 ### 2.3 藏在 `kex_algorithms` 里的三个指示符
 
@@ -217,6 +230,9 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
   完整位宽没有额外安全收益，只是让模幂慢一大截。
 
 ### 3.5 `diffie-hellman-group-exchange-sha256`（RFC 4419）
+
+> **实现状态（2026-09-25）**：**尚未实现**。它不在默认清单里，密钥交换工厂也没有注册它，
+> 放进清单会被连接前的校验拒绝（§2.2）。下面是实现它时要照的规格。
 
 **比其它方法多两个报文**，因为群是服务端按客户端要求现给的：
 
@@ -400,12 +416,75 @@ ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct
 | `Host` / `Port` | 被连的**逻辑**主机（跳板链上是这一跳的目标，不是 TCP 对端） |
 | `KeyBlob` / `KeyType` / `KeyBits` | 原始材料 |
 | `Sha256Fingerprint` / `Md5Fingerprint` | 展示用。SHA-256 是 base64 无填充，与 OpenSSH 一致 |
-| `IsCertificate` / `CertificateInfo` | CA 签发的主机证书 |
+| `Key.IsCertificate` / `Key.Certificate` | CA 签发的主机证书（§5.5）。证书的指纹是**证书里那把钥**的指纹，与 `ssh-keygen -l` 一致 |
 | `RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图。它对人眼比对确实有效 |
 
 `HostKeyVerdict` 是 `Accept` / `AcceptAndPersist` / `Reject(reason)`。
-**`Reject` 必须带原因文本**，它会原样进 `SshHostKeyException.Message` ——
+**`Reject` 必须带原因文本**，它会原样进 `SshConnectException.Message`（原因码 `HostKeyRejected`）——
 这是直接冲着「用户只看到一句 UntrustedPeer、不知道该去哪删记录」去的。
+
+〔决策〕**换一种密钥类型不能绕过「变了」。**中间人只要出示一种记录里没有的类型，按「没见过」处理的话，
+「密钥变了」的检查就被绕过去，接受新主机的策略还会把它悄悄记下来。两条一起做：
+
+1. 策略可以（可选的 `IHostKeyTypePreference`）说出这台主机已经记着哪些类型；连接时把这些类型的主机密钥算法
+   **排到最前面** —— 协商以客户端的顺序为准，正常的服务端因此谈成已记下的那一种。重协商用同一份清单。
+2. 仍然谈成了一种没记过的类型（记录里只有别的类型）时，是一个单独的状态 `OtherKeyTypesKnown`，
+   与「变了」同样处理：拒绝，并在原因里列出记着的类型与行号。**不能**当成「没见过」去问、去记。
+
+`KnownHostsPolicy` 的另外两条：取反模式（`!pattern`）对上时**整行**都不算这台主机
+（`*.corp,!untrusted.corp` 不能经 `*.corp` 把密钥信给 `untrusted.corp`）；
+追加记录前先看文件末尾有没有换行，没有就补一个 —— 否则新记录接在最后一行后面，两条一起坏掉。
+
+### 5.5 主机证书（`*-cert-v01@openssh.com`）
+
+依据：OpenSSH `PROTOCOL.certkeys`（证书结构与签名范围）、sshd(8) 的 SSH_KNOWN_HOSTS 一节（`@cert-authority` / `@revoked`）。
+
+**算法清单。**默认清单在普通主机密钥算法**之后**追加证书变体：
+`ssh-ed25519-cert-v01@openssh.com`、`ecdsa-sha2-nistp256/384/521-cert-v01@openssh.com`、
+`rsa-sha2-512-cert-v01@openssh.com`、`rsa-sha2-256-cert-v01@openssh.com`。
+不含 `ssh-rsa-cert-v01@openssh.com`（SHA-1）。
+
+〔决策〕**证书变体排在后面。**没有为这台主机配 CA 时，谈成证书得不到任何额外的保证（见下面第 4 条），
+排在后面就保证这类连接的行为与以前完全一样。`known_hosts` 里有对上这台主机的 `@cert-authority` 行时，
+`IHostKeyTypePreference` 报出证书类型，证书算法因此被排到前面（§5.4 第 1 条）；
+这台主机的普通密钥也记着时，清单里普通算法仍在前 —— 那把钥已经被明确信任，用哪条路径验结果一样。
+
+**握手。**`K_S` 是整张证书的 blob，交换哈希里放的就是它；KEX 应答里的签名由**证书里那把钥**签，
+签名 blob 里写的是**普通**算法名（`rsa-sha2-512-cert-v01@openssh.com` 对应 `rsa-sha2-512`）。
+§5.3 的验证顺序另加两条：
+
+- 协商出证书算法时 `K_S` 必须是证书，协商出普通算法时 `K_S` 必须不是 —— 不符即 `HostKeyRejected`；
+- RSA 长度下限看的是**证书里那把钥**（它的类型串是 `ssh-rsa-cert-v01@openssh.com`，按类型串比 `ssh-rsa` 会让检查落空）。
+
+**`KnownHostsPolicy` 的裁决**（按顺序，前一条成立就不看后面）：
+
+1. 对上这台主机的 `@revoked` 行里，钥等于证书里那把钥、整张证书或签发它的 CA 公钥之一 → `Revoked`。
+2. 证书里那把钥作为普通密钥记在这台主机名下 → `Known`。明确记下的钥优先，不再看证书。
+3. 有对上这台主机的 `@cert-authority` 行，且它的钥就是证书的签发 CA → 验证证书，**全部**满足才 `Known`：
+   - 证书类型是主机（2）；
+   - CA 签名验得过：签名覆盖从类型串到签发 CA 公钥（含）的全部字段；
+     签名算法限 `ssh-ed25519`、`ecdsa-sha2-nistp256/384/521`、`rsa-sha2-256`、`rsa-sha2-512` ——
+     〔决策〕SHA-1 的 `ssh-rsa` 签名不认；CA 公钥本身不能是证书；RSA 的 CA 至少 2048 位；
+   - 当前时刻在 `[valid_after, valid_before)` 里；
+   - `valid principals` 非空且含被连的主机名（逐字比较，不区分大小写，不做通配）；
+   - 没有 critical option（主机证书没有定义任何一个，不认识的 critical option 必须拒绝）。
+
+   任何一条不满足 → `CertificateInvalid`，拒绝并说明是哪一条。〔决策〕**不退回到「没见过」去问、去记**：
+   这台主机已经配了 CA，证书不合格说明配置出了错或者路上有人，悄悄改走 TOFU 会把这件事藏起来，
+   直到哪天那把钥不在记录里。
+   〔决策〕**`valid principals` 为空的主机证书不认。**`PROTOCOL.certkeys` 把空列表定义为「对任何主体有效」；
+   对主机证书这意味着 CA 签出的一张证书能冒充 `@cert-authority` 那一行范围里的任何一台主机。
+4. 没有 CA 为它担保 → 把证书里那把钥当作普通密钥，按 §5.4 的规则得出 `Changed` / `OtherKeyTypesKnown` / `Unknown`。
+   接受新主机时**记下的是那把普通钥**，不是证书：证书每次重签 blob 都会变，记证书等于下次必报「变了」。
+
+   〔决策〕**对上这台主机的 `@cert-authority` 行也算「记着别的类型」。**这台主机由 CA 管，却出示一把没有这个 CA 担保的钥
+   （普通钥，或者别的 CA 签的证书），而那把钥又没有单独记着 → `OtherKeyTypesKnown`，拒绝，不去问、不去记。
+   理由与 §5.4 的第 2 条相同：不这样的话，中间人只要出示一把普通钥，`accept-new` 就会把它悄悄记下 ——
+   而给主机配 CA，要的正是「不再靠第一次盲信」。确实没有证书的主机，核对指纹之后把它的钥单独加进 `known_hosts`。
+
+**重协商**钉住的是首次交换时的整个 `K_S`（§8.4），证书换了也按主机密钥换了处理。
+所以重协商时的主机密钥算法清单只留下与钉住的钥**同类型、且同为证书（或同为普通钥）**的那些：
+钉住的是证书时，普通算法去掉后缀看起来也「支持」，谈成它的话服务端出示的是那把钥而不是证书，比对失败，连接被当成换了主机密钥断开。
 
 ---
 
@@ -424,10 +503,18 @@ Terrapin 攻击的原理是：握手期间中间人可以**插入或删除**报�
 
 1. **双方都宣告支持时启用**（我们发 `kex-strict-c-v00@openssh.com`，
    对端的 KEXINIT 里有 `kex-strict-s-v00@openssh.com`）。
+   **只看首次 KEXINIT**：标记只在那里有效，之后重协商的 KEXINIT 里有没有标记一律不看 ——
+   启用与否是**整条连接**的属性，首次交换定下来就不再变。
 2. 启用后：
    - **首次 KEX 期间收到任何非 KEX 相关的报文（含 `SSH_MSG_IGNORE`、
      `SSH_MSG_DEBUG`、`SSH_MSG_UNIMPLEMENTED`）一律断开。**
-   - **每次 `SSH_MSG_NEWKEYS` 之后，双向序号归零。**
+     只管首次 KEX —— 重协商期间这几种报文是合法的普通报文。
+   - **每次 `SSH_MSG_NEWKEYS` 之后，双向序号归零** —— 包括每一次重协商。
+
+〔注意〕按「这一次 KEXINIT 里有没有标记」逐次重算是错的：对端重协商时不再带标记，
+本端就不再归零而对端照旧归零，重协商之后的第一个报文校验失败，长连接当场断开。
+chacha20-poly1305（nonce 就是序号）与 HMAC 套件（MAC 覆盖序号）立刻暴露；
+AES-GCM 的 nonce 不看序号，会把这个错误掩盖掉。
 
 〔决策〕**对端不支持严格 KEX 时，记录一条警告级日志并继续。**
 不拒绝连接 —— 老服务端很多，拒绝会把大量合法场景打死；
@@ -519,6 +606,17 @@ RFC 4253 §7.1 的原话是：一旦发出 `KEXINIT`，
    闸门只作用于 `SendPump`。这一条是与「用信号量让两个循环互相等待」
    最本质的区别：**没有任何两条路径互相持有对方的同步原语，因此不可能死锁**。
 
+〔决策〕**同一时刻只谈一次。**「在谈」从我们发出 `KEXINIT`（或收到对端的 `KEXINIT`）起，
+一直到这次交换结束、开闸为止。这期间再发起（使用者调用、阈值监视循环到点）一律是空操作 ——
+交换中途再发一个 `KEXINIT` 是协议违规，对端会断连。
+阈值要等交换完成才归零，所以「只看我们发过、对端还没回」是不够的：交换一开始那个标记就没了，
+监视循环下一拍看到的仍是过线的计数。关闸与我们的 `KEXINIT` 在同一把锁里入队，
+免得对端同时发起的那次交换把它的第一帧排到我们的 `KEXINIT` 前面。
+
+〔决策〕**重协商有超时**（默认 2 分钟）：我们的 `KEXINIT` 一直等不到对端的，或者交换卡在半路，
+都以 `Timeout`（`Phase = Rekeying`）断开。闸门关着的时候通道数据一律暂存、保活探测也发不出去 ——
+没有超时，连接就无声地停在那里。
+
 ### 8.3 接收侧
 
 ```mermaid
@@ -550,6 +648,7 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 
 | 情况 | 失败原因 | 是否可重试 |
 | --- | --- | :-: |
+| 我们的清单为空或含本库未实现的名字 | 不是连接失败：拨号前抛 `ArgumentException`（§2.2） | 否（改配置） |
 | 任一类算法无交集 | `NegotiationFailed`（带双方名单） | 否（除非改配置） |
 | `Q_C`/`Q_S` 长度不对 | `ProtocolError` | 否 |
 | X25519 结果全零 | `ProtocolError` | 否 |
@@ -560,8 +659,10 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | 签名算法名与协商结果不符 | `ProtocolError` | 否 |
 | 签名验证失败 | `HostKeyRejected` | 否 |
 | RSA 模数小于下限 | `HostKeyRejected` | 否（可配置放宽） |
+| 协商出证书算法而 `K_S` 不是证书（或反过来） | `HostKeyRejected` | 否 |
+| 有 CA 担保的主机证书不合格（§5.5 第 3 条） | `HostKeyRejected` | 是（重签证书后） |
 | 策略拒绝 | `HostKeyRejected` / `HostKeyChanged` | 是（用户改信任后） |
-| 严格 KEX 下收到 IGNORE/DEBUG | `ProtocolError` | 否 |
+| 严格 KEX 下、首次 KEX 期间收到 IGNORE/DEBUG | `ProtocolError` | 否 |
 | 重协商时 `K_S` 变了 | `HostKeyChanged` | 否 |
 | KEX 超时 | `Timeout` | 是 |
 

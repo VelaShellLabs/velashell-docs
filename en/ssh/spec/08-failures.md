@@ -26,29 +26,99 @@ Code like that silently breaks when a library upgrade changes a single word of t
 
 `Message` is for humans; it is **not** an API.
 
+〔Decision〕**Text from the peer is sanitized before it goes into `Message`**: control characters (`ESC`, `CR`, `BEL`, …), `DEL`, C1 control codes and bidirectional text controls
+are replaced with `?`, and the text is truncated to a fixed length. The identification string, the `DISCONNECT` description, the reason for refusing a channel open, SFTP status messages
+and proxy replies all come from the peer, often from a peer that has not been authenticated yet — and `Message` ends up printed to a terminal or a UI,
+so embedding it verbatim is an escape-sequence injection surface (rewriting the clipboard, clearing the screen to fake a prompt, overwriting the start of a line).
+**The verbatim text is still kept in dedicated properties** (`PeerDescription`, `ServerMessage`), which are treated as untrusted text.
+
 ---
 
 ## 2. Exception hierarchy
 
 ```
-SshException                         Abstract base; carries Reason / Phase / IsRetryable
-├── SshConnectException               Connection setup (TCP/proxy/version/negotiation/host key)
-│   ├── SshNegotiationException       Algorithm negotiation failed — carries both sides' lists
-│   └── SshHostKeyException           Host key rejected/changed — carries fingerprint and policy reason
+SshException                          Abstract base; carries Reason / Phase / IsRetryable
+├── SshConnectException               Connection setup (dialing, version, negotiation, host key) — carries Hops
+│   └── SshNegotiationException       Algorithm negotiation failed — carries both sides' lists
+├── SshKeyExchangeException           Key exchange computation failed (invalid public value from the peer)
 ├── SshAuthenticationException        Authentication failed — carries per-method attempt records
 ├── SshProtocolException              Peer violated the protocol
-├── SshConnectionClosedException      Connection gone (closed by peer / keep-alive timeout / aborted locally)
-├── SshChannelException               Channel-level failure
-│   └── SshChannelClosedException     Channel closed
-├── SshForwardException               Forwarding setup failed
-└── SftpException                     SFTP operation failed — carries SftpErrorCode and the server's original text
-    └── SftpTransferInterruptedException  Transfer interrupted — **carries DurableLength**
+├── SshConnectionClosedException      Connection gone (closed by peer / keep-alive timeout / DISCONNECT received / aborted locally / host key changed on rekey)
+├── SshChannelException               Channel could not be opened — carries the reason code and the peer's text
+├── SshCommandFailedException         Remote command did not succeed (EnsureSuccess) — carries the full output
+├── SshForwardException               Forwarder could not start
+├── SshPublicKeyException             Public key blob malformed / type unsupported
+├── SshPrivateKeyException            Private key file cannot be read — carries NeedsPassphrase
+├── SshCertificateException           Certificate cannot be read
+├── SshAgentException                 Cannot reach the agent, or the agent refused
+├── SftpException                     SFTP operation failed — carries StatusCode and the server's original text ServerMessage
+├── SftpTransferInterruptedException  Transfer interrupted — **carries DurableLength**
+└── SftpUnavailableException          SFTP subsystem could not start
 ```
+
+The types below have a fixed `Reason` and `Phase`; for the others they depend on the specific failure.
+
+| Type | `Reason` | `Phase` |
+| --- | --- | --- |
+| `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
+| `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
+| `SshPublicKeyException` | `Unsupported` | `KeyExchange` |
+| `SshPrivateKeyException`, `SshCertificateException`, `SshAgentException` | `Unsupported` | `Authenticating` |
+| `SshForwardException`, `SftpUnavailableException` | `Unsupported` | `Open` |
+| `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
+| `SshCommandFailedException` | `Unknown` | `Open` |
+
+A rejected host key has no dedicated type: it is an `SshConnectException` with `Reason` `HostKeyRejected`, and the policy's reason is its `Message` (§3).
 
 〔Decision〕**Channel-level failures do not derive from connection-level failures.** A channel failing to open
 (the server's `MaxSessions` is full) and the whole connection dropping are two different things,
 and the upper layer's reconnect policy should apply only to the latter. Put them in the same inheritance chain,
-and a caller's `catch (SshConnectionException)` would swallow the former too.
+and a caller's `catch (SshConnectionClosedException)` would swallow the former too.
+
+〔Decision〕**`SshPublicKeyException` and `SshKeyExchangeException` both derive from `SshException`.**
+Both used to derive directly from `Exception`: callers using `catch (SshException)` as the catch-all for library failures missed them, and the host's exception translation did not recognize them;
+`SshKeyExchangeException` also leaked to callers as-is during connection setup.
+`SshPublicKeyException` has `Phase` `KeyExchange` because it most often comes from parsing the host key the peer presents (when reading a local `.pub` the phase is only approximate).
+`SshKeyExchangeException` has `Reason` `ProtocolError`: what it reports is almost always an invalid public value from the peer (wrong length, not on the curve, a weak value);
+the "algorithm not implemented" kind is already stopped before connecting by `SshAlgorithmSet.Validate()`.
+
+### 2.1 A connection that dies mid-way: the cause is normalized to public types first
+
+Whatever ends an **established** connection — any error in the receive loop, the send pump, keep-alive or rekeying —
+is handed as-is to every caller on that connection and to every channel reader (the read throws it instead of completing as if the peer had sent EOF;
+see `05-connection.md` §4.4). 〔Decision〕**Before it is handed out, it is normalized to the library's public types:**
+
+| What ended the connection | What callers get | `Reason` |
+| --- | --- | --- |
+| Already an `SshException` | As-is | As-is |
+| `OperationCanceledException`, `ObjectDisposedException` | As-is — that is the local side shutting down (cancellation, disposal), not a fault | — |
+| The peer closed the connection in the middle of a packet | `SshConnectionClosedException` | `ClosedByPeer` |
+| `IOException`, `SocketException` (socket dropped or reset) | `SshConnectionClosedException` | `ClosedByPeer` |
+| Frame format or integrity check failure, message parse failure | `SshProtocolException` | `ProtocolError` |
+| Anything else unexpected | `SshConnectionClosedException`, with the original exception in `InnerException` | `Unknown` |
+
+The newly wrapped ones always carry `Phase` `Open`, even when the fault happened during a rekey (a known limitation); exceptions passed through keep their own `Phase` (a rekey timeout, for example, is `Rekeying`).
+
+Reason: this cause lands in the users' `catch` blocks and reconnect policies, and both of those branch on `SshException` and its `Reason`
+(§3: automatic reconnect should apply only to "the connection dropped"). It used to be thrown as-is: internal parse exception types could not be caught by type;
+raw socket exceptions bypassed `Reason`, so a reconnect policy could not tell it was a dropped connection; and the host's exception translation did not recognize them.
+
+**During connection setup** (from the moment dialing succeeds until authentication finishes) the same rules apply, except that `Phase` records the step where the failure happened:
+
+| What happened during setup | What callers get | `Reason` |
+| --- | --- | --- |
+| `IOException` / `SocketException` on the stream during version exchange, key exchange or authentication | `SshConnectionClosedException`, with the original exception in `InnerException` | `ClosedByPeer` |
+| The peer closed the connection in the middle of a packet (during key exchange or authentication) | `SshConnectionClosedException` | `ClosedByPeer` |
+| The peer closed the connection during the version exchange | `SshConnectException` | `ClosedByPeer` |
+| Frame format or integrity check failure (during key exchange or authentication) | `SshProtocolException` | `ProtocolError` |
+| Key exchange computation failed (invalid public value from the peer) | `SshKeyExchangeException` | `ProtocolError` |
+
+Depending on the step and on who notices it, the same "the connection dropped" can be an `SshConnectException` or an `SshConnectionClosedException`,
+but `Reason` is always `ClosedByPeer` — to tell whether the connection dropped, look at `Reason`, not the type.
+〔Decision〕A mid-packet close during key exchange used to be reported as `ProtocolError`, which made callers think reconnecting was pointless, and socket exceptions after dialing leaked out as-is. Both now match the rules for an established connection.
+
+The dialing phase is not covered here: each dialer maps its own failures to an `SshConnectException` with a reason (`DnsFailure`, `TcpRefused`, `ProxyRefused`… in §3; see `09-dialing.md`).
+Timeouts, negotiation failures and rejected host keys during setup are likewise reported by each step itself (§3).
 
 ---
 
@@ -65,8 +135,8 @@ and a caller's `catch (SshConnectionException)` would swallow the former too.
 | `NotAnSshServer` | Peer does not speak SSH | ✘ | Wrong port |
 | `VersionMismatch` | Protocol version is not 2.0 | ✘ | |
 | `NegotiationFailed` | No algorithm in common | ✘ | **See §5.1** |
-| `HostKeyRejected` | Host key rejected by policy | ✘ | See `SshHostKeyException.PolicyReason` |
-| `HostKeyChanged` | Host key does not match the recorded one | ✘ | Show old and new fingerprints and let the user decide |
+| `HostKeyRejected` | Host key rejected (`SshConnectException`, `Phase` `KeyExchange`): by policy — **at first connect a changed key, a `@revoked` key, or a host known only under other key types all land here**; `K_S` unparsable, signature does not verify, RSA too short, or not matching the negotiated algorithm (including a certificate algorithm negotiated while `K_S` is not a certificate, or vice versa); a CA-vouched host certificate that is invalid (`03-key-exchange.md` §5.5) | ✘ | Read `Message`: the policy's reason (`SshHostKeyVerdict.Reason`) is placed there as-is; `KnownHostsPolicy` states whether the key changed, was revoked or only other types are known, with fingerprints and `known_hosts` line numbers |
+| `HostKeyChanged` | **Only raised on rekey**: the host key the peer presents differs from the one pinned at the initial exchange (`03-key-exchange.md` §8.4). The connection drops with `SshConnectionClosedException` (`Phase` `Rekeying`), and the message carries the old and new fingerprints | ✘ | There is no legitimate reason for a host key to change mid-connection: do not reconnect automatically; treat it as a possible man-in-the-middle |
 | `AuthenticationFailed` | An authentication attempt failed | ✔ | |
 | `AuthenticationMethodExhausted` | All methods tried | ✘ | **See §5.3** |
 | `TwoFactorRequired` | Server wants keyboard-interactive but we have none configured | ✘ | Prompt "this machine requires a one-time code" |
@@ -74,11 +144,12 @@ and a caller's `catch (SshConnectionException)` would swallow the former too.
 | `Timeout` | A phase timed out | ✔ | |
 | `KeepAliveTimeout` | Declared dead by keep-alive | ✔ | **Automatic reconnect should apply only to this category** |
 | `ClosedByPeer` | Peer closed actively | ✔ | |
-| `Disconnected` | `SSH_MSG_DISCONNECT` received | Depends on `DisconnectCode` | |
+| `Disconnected` | `SSH_MSG_DISCONNECT` received | ✘ 〔Not implemented yet: meant to depend on `DisconnectReason`; today never retryable〕 | The reason code is in `SshConnectionClosedException.DisconnectReason`, the peer's own words in `PeerDescription` |
 | `ProtocolError` | Peer violated the protocol | ✘ | |
-| `ChannelOpenFailed` | Channel could not be opened | Depends on reason code | |
+| `ChannelOpenFailed` | Channel could not be opened | ✘ 〔Not implemented yet: meant to depend on the reason code; today never retryable〕 | |
 | `Aborted` | Aborted locally (Dispose / cancellation) | ✘ | |
 | `Unsupported` | The requested capability is not supported by the peer | ✘ | |
+| `Unknown` | Unclassified: the connection ended because of an unexpected error (§2.1); a remote command did not succeed (`SshCommandFailedException`) | ✘ | Look at `InnerException`; for a failed command, look at `Output` |
 
 〔Decision〕**`IsRetryable` is the library's advice, not a promise.** It expresses
 "whether this failure might go away on retry", not "you should retry" —

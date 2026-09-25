@@ -97,13 +97,26 @@ Note three things:
 3. **No intersection in any category → negotiation fails**, throwing `SshNegotiationException`,
    **with both sides' complete lists and the peer's version string included in the exception** (see [`08-failures.md`](08-failures.md)).
    This is this library's most direct improvement over existing libraries: what the user gets is not
-   "No common encryption algorithm.", but "the peer offered only aes128-cbc,
-   which we do not enable by default; to connect to this device, enable CBC explicitly".
+   "No common encryption algorithm.", but "the peer offered only aes128-cbc;
+   we support chacha20-poly1305@openssh.com, aes256-gcm@openssh.com, …" ——
+   from which it is obvious at a glance that the peer has nothing but CBC left, and this library does not implement CBC (General Provisions §6.3).
 
 **The AEAD special case**: when the negotiated encryption algorithm is AEAD (`*-gcm@openssh.com`,
 `chacha20-poly1305@openssh.com`), **the result of the MAC list negotiation for that direction is ignored**;
 integrity is provided by the AEAD itself. We still **MUST** send a non-empty MAC list ——
 not sending one would make it impossible for peers that support only non-AEAD to negotiate with us.
+
+〔Decision〕**Our own lists are validated before dialing** (`SshAlgorithmSet.Validate()`, called when connecting starts):
+
+- none of the eight lists may be empty —— an empty list cannot be negotiated with any peer;
+- every name in the key exchange list is either a method this library implements (or one registered through `SshKeyExchangeFactory.Register`) or one of the indicators of §2.3;
+- every name in the encryption, MAC and compression lists must be one this library implements (for compression that is only `none` and `zlib@openssh.com`).
+
+Otherwise `ArgumentException` is thrown on the spot and **no dialing happens at all**.
+Rationale: a name we do not implement that slips into the list only gets negotiated when the peer happens to have nothing else left ——
+the failure then happens during key derivation, surfaces as an unexplained "not implemented", and shows up only when connecting to that one device.
+Reporting it here points the error at the configuration itself.
+Host key algorithm names are **not checked here**: they are guarded by host key parsing and signature verification (§5.3), where an unknown type gets an explicit error.
 
 ### 2.3 The three indicators hidden in `kex_algorithms`
 
@@ -218,6 +231,9 @@ Both names are sent, and they share one implementation.
   the full width brings no additional security, it only makes modular exponentiation much slower.
 
 ### 3.5 `diffie-hellman-group-exchange-sha256` (RFC 4419)
+
+> **Implementation status (2026-09-25)**: **not implemented yet**. It is not in the default list and not registered with the key exchange factory,
+> so putting it in the list is rejected by the pre-connect check (§2.2). What follows is the specification to implement it against.
 
 **Two more messages than the other methods**, because the group is supplied by the server on the fly according to the client's request:
 
@@ -401,12 +417,75 @@ ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct
 | `Host` / `Port` | The **logical** host being connected to (on a jump chain, the target of this hop, not the TCP peer) |
 | `KeyBlob` / `KeyType` / `KeyBits` | Raw material |
 | `Sha256Fingerprint` / `Md5Fingerprint` | For display. SHA-256 is base64 without padding, consistent with OpenSSH |
-| `IsCertificate` / `CertificateInfo` | Host certificate issued by a CA |
+| `Key.IsCertificate` / `Key.Certificate` | Host certificate issued by a CA (§5.5). A certificate's fingerprint is the fingerprint of **the key inside it**, consistent with `ssh-keygen -l` |
 | `RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture. It genuinely helps with visual comparison |
 
 `HostKeyVerdict` is `Accept` / `AcceptAndPersist` / `Reject(reason)`.
-**`Reject` MUST carry a reason text**, which goes verbatim into `SshHostKeyException.Message` ——
+**`Reject` MUST carry a reason text**, which goes verbatim into `SshConnectException.Message` (reason `HostKeyRejected`) ——
 this directly targets "the user only sees a bare UntrustedPeer and doesn't know where to delete the record".
+
+〔Decision〕**Switching to another key type must not bypass "changed".** If a man-in-the-middle presents a key type not in the records and it is treated as "never seen",
+the "host key changed" check is bypassed, and a policy that accepts new hosts will quietly record it. Both of the following are done:
+
+1. A policy can (via the optional `IHostKeyTypePreference`) report which key types are already recorded for this host; at connect time the host key algorithms of those types
+   are **moved to the front** — negotiation follows the client's order, so a legitimate server ends up with the recorded type. Rekeying uses the same list.
+2. If a type that isn't recorded is still negotiated (the records only hold other types), that is a separate status, `OtherKeyTypesKnown`,
+   handled exactly like "changed": reject, listing the recorded types and line numbers in the reason. It must **not** be treated as "never seen" and asked about or recorded.
+
+Two more rules for `KnownHostsPolicy`: when a negated pattern (`!pattern`) matches, the **whole line** does not apply to this host
+(`*.corp,!untrusted.corp` must not trust the key for `untrusted.corp` via `*.corp`);
+before appending a record, check whether the file ends with a newline and add one if not — otherwise the new record is glued onto the last line and both break.
+
+### 5.5 Host certificates (`*-cert-v01@openssh.com`)
+
+Sources: OpenSSH `PROTOCOL.certkeys` (certificate layout and what the signature covers), and the SSH_KNOWN_HOSTS section of sshd(8) (`@cert-authority` / `@revoked`).
+
+**Algorithm list.** The default list appends the certificate variants **after** the plain host key algorithms:
+`ssh-ed25519-cert-v01@openssh.com`, `ecdsa-sha2-nistp256/384/521-cert-v01@openssh.com`,
+`rsa-sha2-512-cert-v01@openssh.com`, `rsa-sha2-256-cert-v01@openssh.com`.
+`ssh-rsa-cert-v01@openssh.com` (SHA-1) is not included.
+
+〔Decision〕**The certificate variants go last.** When no CA is configured for the host, negotiating a certificate buys no extra assurance (see item 4 below),
+and putting them last guarantees such connections behave exactly as before. When `known_hosts` has an `@cert-authority` line matching the host,
+`IHostKeyTypePreference` reports the certificate types, which moves the certificate algorithms forward (§5.4 item 1);
+if the host's plain key is recorded too, the plain algorithms still come first in the list — that key is already explicitly trusted, and either path gives the same result.
+
+**Handshake.** `K_S` is the whole certificate blob, and that is what goes into the exchange hash. The signature in the KEX reply is made by **the key inside the certificate**,
+and the signature blob carries the **plain** algorithm name (`rsa-sha2-512-cert-v01@openssh.com` corresponds to `rsa-sha2-512`).
+The verification order in §5.3 gains two rules:
+
+- When a certificate algorithm is negotiated, `K_S` must be a certificate; when a plain algorithm is negotiated, it must not be — a mismatch is `HostKeyRejected`;
+- the RSA minimum length applies to **the key inside the certificate** (its type string is `ssh-rsa-cert-v01@openssh.com`, so comparing the type string to `ssh-rsa` would skip the check).
+
+**How `KnownHostsPolicy` decides** (in order; once a rule applies, later ones are not consulted):
+
+1. An `@revoked` line matching the host whose key is the key inside the certificate, the whole certificate, or the CA that signed it → `Revoked`.
+2. The key inside the certificate is recorded as a plain key for this host → `Known`. An explicitly recorded key takes precedence and the certificate is not examined.
+3. An `@cert-authority` line matches the host and its key is the certificate's signing CA → validate the certificate; it is `Known` only if **all** of these hold:
+   - the certificate type is host (2);
+   - the CA signature verifies: it covers every field from the type string up to and including the signing CA's public key;
+     the signature algorithm is limited to `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-256`, `rsa-sha2-512` —
+     〔Decision〕SHA-1 `ssh-rsa` signatures are not accepted; the CA key must not itself be a certificate; an RSA CA must be at least 2048 bits;
+   - the current time is within `[valid_after, valid_before)`;
+   - `valid principals` is non-empty and contains the host name being connected to (exact comparison, case-insensitive, no wildcards);
+   - there are no critical options (none are defined for host certificates, and an unrecognized critical option must be rejected).
+
+   If any of these fails → `CertificateInvalid`: reject and say which one. 〔Decision〕**Do not fall back to "never seen" and ask or record**:
+   the host has a CA configured, so an invalid certificate means a misconfiguration or someone on the path; quietly switching to TOFU would hide that
+   until the day the key is no longer on record.
+   〔Decision〕**Host certificates with an empty `valid principals` are rejected.** `PROTOCOL.certkeys` defines an empty list as "valid for any principal";
+   for a host certificate that means one certificate signed by the CA can impersonate any host within the scope of the `@cert-authority` line.
+4. No CA vouches for it → treat the key inside the certificate as a plain key and apply the §5.4 rules to get `Changed` / `OtherKeyTypesKnown` / `Unknown`.
+   When a new host is accepted, **the plain key is what gets recorded**, not the certificate: the blob changes every time the certificate is re-issued, so recording it would guarantee a "changed" report next time.
+
+   〔Decision〕**An `@cert-authority` line matching the host also counts as "other types recorded".** If the host is managed by a CA but presents a key that CA doesn't vouch for
+   (a plain key, or a certificate signed by another CA), and that key isn't recorded on its own → `OtherKeyTypesKnown`: reject, without asking or recording.
+   The reason is the same as §5.4 item 2: otherwise a man-in-the-middle only has to present a plain key and `accept-new` records it quietly —
+   and configuring a CA for a host is precisely about no longer relying on blind trust the first time. For a host that really has no certificate, verify the fingerprint and add its key to `known_hosts` on its own.
+
+**Rekeying** pins the whole `K_S` from the first exchange (§8.4); a changed certificate is treated as a changed host key.
+So on rekey the host key algorithm list keeps only algorithms of the pinned key's **type and certificate-ness** (certificate stays certificate, plain stays plain):
+when a certificate is pinned, the plain algorithm also looks "supported" once the suffix is stripped, and negotiating it would make the server present its plain key instead of the certificate — the pin fails and the connection is dropped as a changed host key.
 
 ---
 
@@ -425,10 +504,18 @@ The mitigation has two parts, both required:
 
 1. **Enabled when both sides announce support** (we send `kex-strict-c-v00@openssh.com`,
    and the peer's KEXINIT contains `kex-strict-s-v00@openssh.com`).
+   **Only the first KEXINIT counts**: the markers are valid only there, and whether a later rekey KEXINIT carries them is ignored ——
+   strict KEX is a property of the **whole connection**, fixed by the initial exchange.
 2. Once enabled:
    - **Receiving any non-KEX-related packet during the first KEX (including `SSH_MSG_IGNORE`,
      `SSH_MSG_DEBUG`, `SSH_MSG_UNIMPLEMENTED`) always disconnects.**
-   - **After every `SSH_MSG_NEWKEYS`, both sequence numbers are reset to zero.**
+     This applies to the first KEX only —— during a rekey these are ordinary, legal packets.
+   - **After every `SSH_MSG_NEWKEYS`, both sequence numbers are reset to zero** —— including every rekey.
+
+〔Note〕Recomputing it from "does this KEXINIT carry the marker" each time is wrong: when the peer omits the marker on rekey,
+the local side stops resetting while the peer keeps resetting, the first packet after the rekey fails integrity checking, and the long-lived connection drops.
+chacha20-poly1305 (the nonce is the sequence number) and HMAC suites (the MAC covers the sequence number) expose it immediately;
+AES-GCM's nonce ignores the sequence number and masks the error.
 
 〔Decision〕**When the peer does not support strict KEX, log a warning-level entry and continue.**
 The connection is not refused —— there are many old servers, and refusing would kill a large number of legitimate scenarios;
@@ -520,6 +607,17 @@ While in state Rekeying:
    the gate acts only on `SendPump`. This is the most essential difference from "using semaphores to make two loops wait on each other":
    **no two paths hold each other's synchronization primitives, so deadlock is impossible**.
 
+〔Decision〕**Only one exchange at a time.** "In progress" runs from the moment we send `KEXINIT` (or receive the peer's `KEXINIT`)
+until that exchange finishes and the gate reopens. Any attempt to start another during that time (a caller, or the threshold monitor firing) is a no-op —
+sending another `KEXINIT` mid-exchange is a protocol violation and the peer will disconnect.
+The thresholds are reset only when the exchange completes, so checking only "we sent one and the peer hasn't answered yet" is not enough: that marker is gone as soon as the exchange starts,
+while the monitor's next tick still sees counters past the threshold. Closing the gate and our `KEXINIT` are enqueued under the same lock,
+so an exchange the peer starts at the same moment cannot put its first frame ahead of our `KEXINIT`.
+
+〔Decision〕**Rekeying has a timeout** (2 minutes by default): if our `KEXINIT` never gets the peer's, or the exchange stalls midway,
+the connection is dropped with `Timeout` (`Phase = Rekeying`). While the gate is closed, all channel data is stashed and keepalive probes cannot go out —
+without a timeout the connection would simply stop, silently.
+
 ### 8.3 Receiving side
 
 ```mermaid
@@ -551,6 +649,7 @@ Blocking the receiving side as well would lose data.
 
 | Situation | Failure reason | Retryable |
 | --- | --- | :-: |
+| Our list is empty or contains a name this library does not implement | Not a connection failure: `ArgumentException` before dialing (§2.2) | No (fix the configuration) |
 | No intersection in any algorithm category | `NegotiationFailed` (with both sides' lists) | No (unless configuration is changed) |
 | Wrong `Q_C`/`Q_S` length | `ProtocolError` | No |
 | X25519 result is all zeros | `ProtocolError` | No |
@@ -561,8 +660,10 @@ Blocking the receiving side as well would lose data.
 | Signature algorithm name does not match the negotiation result | `ProtocolError` | No |
 | Signature verification fails | `HostKeyRejected` | No |
 | RSA modulus below the minimum | `HostKeyRejected` | No (can be relaxed by configuration) |
+| A certificate algorithm is negotiated but `K_S` is not a certificate (or vice versa) | `HostKeyRejected` | No |
+| A host certificate vouched for by a CA is invalid (§5.5 item 3) | `HostKeyRejected` | Yes (after the certificate is re-issued) |
 | Rejected by policy | `HostKeyRejected` / `HostKeyChanged` | Yes (after the user changes trust) |
-| IGNORE/DEBUG received under strict KEX | `ProtocolError` | No |
+| IGNORE/DEBUG received during the first KEX under strict KEX | `ProtocolError` | No |
 | `K_S` changed during rekeying | `HostKeyChanged` | No |
 | KEX timeout | `Timeout` | Yes |
 
