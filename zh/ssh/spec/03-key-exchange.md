@@ -108,7 +108,7 @@ sequenceDiagram
 〔决策〕**我们自己的清单在拨号之前就校验**（`SshAlgorithmSet.Validate()`，连接开始时调用）：
 
 - 八类清单都不能为空 —— 空清单与任何对端都谈不成；
-- 密钥交换清单里的每个名字，要么是本库实现（或经 `SshKeyExchangeFactory.Register` 注册）了的方法，要么是 §2.3 的指示符；
+- 密钥交换清单里的每个名字，要么是本库实现了的方法（`SshKeyExchangeFactory` 那张固定的表，运行期不能注册），要么是 §2.3 的指示符；
 - 加密、MAC、压缩清单里的每个名字都必须是本库实现了的（压缩只有 `none` 与 `zlib@openssh.com`）。
 
 不满足就当场抛 `ArgumentException`，**根本不去拨号**。
@@ -406,10 +406,10 @@ flowchart TD
 ### 5.4 `IHostKeyPolicy` 的契约
 
 ```
-ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct)
+ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, CancellationToken cancellationToken)
 ```
 
-`HostKeyContext` **必须**提供：
+`SshHostKeyContext` **必须**提供（密钥本身的材料都在 `Key`，一个 `SshPublicKey` 上）：
 
 | 字段 | 用途 |
 | --- | --- |
@@ -419,9 +419,15 @@ ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct
 | `Key.IsCertificate` / `Key.Certificate` | CA 签发的主机证书（§5.5）。证书的指纹是**证书里那把钥**的指纹，与 `ssh-keygen -l` 一致 |
 | `RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图。它对人眼比对确实有效 |
 
-`HostKeyVerdict` 是 `Accept` / `AcceptAndPersist` / `Reject(reason)`。
-**`Reject` 必须带原因文本**，它会原样进 `SshConnectException.Message`（原因码 `HostKeyRejected`）——
+`SshHostKeyVerdict` 只能由四个工厂成员得到：`Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`。
+**拒绝必须带原因文本**，它会原样进 `SshConnectException.Message` ——
 这是直接冲着「用户只看到一句 UntrustedPeer、不知道该去哪删记录」去的。
+原因码由拒绝的种类定（`SshHostKeyVerdict.Reason`）：`Reject` 是 `HostKeyRejected`；
+`RejectChanged` 是 `HostKeyChanged` —— 记着的密钥变了，或者只记着别的类型（下一条决策），可能是中间人。
+调用方据此把「不信任」与「变了」分开处理：后者不该被一个「信任并记住」的按钮随手放过。
+
+〔决策〕**`default(SshHostKeyVerdict)` 是拒绝。**裁决的枚举零值是 `Reject`，一个忘了赋值的裁决不会变成放行；
+没有说明的拒绝报「主机密钥被策略拒绝」。
 
 〔决策〕**换一种密钥类型不能绕过「变了」。**中间人只要出示一种记录里没有的类型，按「没见过」处理的话，
 「密钥变了」的检查就被绕过去，接受新主机的策略还会把它悄悄记下来。两条一起做：

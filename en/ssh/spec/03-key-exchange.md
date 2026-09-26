@@ -109,7 +109,7 @@ not sending one would make it impossible for peers that support only non-AEAD to
 〔Decision〕**Our own lists are validated before dialing** (`SshAlgorithmSet.Validate()`, called when connecting starts):
 
 - none of the eight lists may be empty —— an empty list cannot be negotiated with any peer;
-- every name in the key exchange list is either a method this library implements (or one registered through `SshKeyExchangeFactory.Register`) or one of the indicators of §2.3;
+- every name in the key exchange list is either a method this library implements (the fixed table in `SshKeyExchangeFactory`; nothing can be registered at runtime) or one of the indicators of §2.3;
 - every name in the encryption, MAC and compression lists must be one this library implements (for compression that is only `none` and `zlib@openssh.com`).
 
 Otherwise `ArgumentException` is thrown on the spot and **no dialing happens at all**.
@@ -407,10 +407,10 @@ flowchart TD
 ### 5.4 The contract of `IHostKeyPolicy`
 
 ```
-ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct)
+ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, CancellationToken cancellationToken)
 ```
 
-`HostKeyContext` **MUST** provide:
+`SshHostKeyContext` **MUST** provide (all the material of the key itself is on `Key`, an `SshPublicKey`):
 
 | Field | Purpose |
 | --- | --- |
@@ -420,9 +420,15 @@ ValueTask<HostKeyVerdict> EvaluateAsync(HostKeyContext ctx, CancellationToken ct
 | `Key.IsCertificate` / `Key.Certificate` | Host certificate issued by a CA (§5.5). A certificate's fingerprint is the fingerprint of **the key inside it**, consistent with `ssh-keygen -l` |
 | `RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture. It genuinely helps with visual comparison |
 
-`HostKeyVerdict` is `Accept` / `AcceptAndPersist` / `Reject(reason)`.
-**`Reject` MUST carry a reason text**, which goes verbatim into `SshConnectException.Message` (reason `HostKeyRejected`) ——
+An `SshHostKeyVerdict` can only be obtained from four factory members: `Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`.
+**A rejection MUST carry a reason text**, which goes verbatim into `SshConnectException.Message` ——
 this directly targets "the user only sees a bare UntrustedPeer and doesn't know where to delete the record".
+The reason code is determined by the kind of rejection (`SshHostKeyVerdict.Reason`): `Reject` is `HostKeyRejected`;
+`RejectChanged` is `HostKeyChanged` —— the recorded key has changed, or only other types are recorded (the next decision), possibly a man-in-the-middle.
+Callers use this to handle "not trusted" and "changed" separately: the latter should not be casually waved through by a "trust and remember" button.
+
+〔Decision〕**`default(SshHostKeyVerdict)` is a rejection.** The zero value of the verdict enum is `Reject`, so a verdict someone forgot to assign does not turn into a pass;
+a rejection without an explanation reports "host key rejected by policy".
 
 〔Decision〕**Switching to another key type must not bypass "changed".** If a man-in-the-middle presents a key type not in the records and it is treated as "never seen",
 the "host key changed" check is bypassed, and a policy that accepts new hosts will quietly record it. Both of the following are done:

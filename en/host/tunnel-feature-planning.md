@@ -32,6 +32,16 @@ EOF onward: `SshDataStream.WriteEof` on the SSH side, `Shutdown(Send)` on the so
 that, protocols that "send the request, shut down the write side, then wait for the response" would
 read nothing back.
 
+> 〔Follow-up〕After the switch to the SSH library VelaShell.Ssh, the host-owned data path above **has
+> been deleted**: metering is built into the library, the three kinds of forwarding are handled by the
+> library's `LocalPortForwarder` (`Start` / `StartDynamic`, including the SOCKS5 server) and
+> `RemotePortForwarder` (`StartAsync`), and remote forwarding no longer relays through a local
+> ephemeral listener. All that is left in the host is the thin adapter
+> `Infrastructure/Ssh/LibraryPortForwardHandle`, which wires the library's connection counts, byte
+> counts (sent plus received) and error events onto `IPortForwardHandle`.
+> For the current state see "Port-forwarding tunnels" in [`architecture.md`](architecture.md) and
+> [`ssh/spec/07-forwarding.md`](../ssh/spec/07-forwarding.md).
+
 ### Traffic statistics (2026-08-30)
 
 - Each tunnel row shows `3 conns · 1.4 MB` inline; when connections are actively transferring, the

@@ -471,12 +471,12 @@ Split into three layers, each independently unit-testable:
 and exposes not a single counter.** VelaShell had to write the 376-line `MeteredPortForwardHandle` to redo forwarding itself
 (local/dynamic listen on their own; remote forwarding even has the library forward to a temporary local listener and then relays once more — an extra loopback copy).
 
-We make `PortForwarder` carry its own:
+We make `PortForwarder` (the common base class of `LocalPortForwarder` and `RemotePortForwarder`) carry its own:
 
 ```
 int  ActiveConnections { get; }
 long TotalConnections  { get; }
-long BytesUp { get; }  long BytesDown { get; }
+long BytesSent { get; }  long BytesReceived { get; }   // sent from this machine into the tunnel / received back from the tunnel
 event EventHandler<ForwardConnectionEventArgs> ConnectionOpened, ConnectionClosed;
 event EventHandler<ForwardErrorEventArgs>      Error;
 ```
@@ -494,7 +494,7 @@ so the host can either subscribe to the events or hook up OpenTelemetry — both
 ```
 class SshNegotiationException : SshException
 {
-    NegotiationCategory   Category      { get; }  // KeyExchange / HostKey / Cipher / Mac / Compression
+    SshNegotiationCategory Category     { get; }  // KeyExchange / HostKey / Encryption* / Mac* / Compression* (one per direction)
     IReadOnlyList<string> OfferedByPeer { get; }  // the peer's KEXINIT verbatim
     IReadOnlyList<string> OfferedByUs   { get; }
     string                PeerVersion   { get; }  // "SSH-2.0-OpenSSH_9.5"
@@ -509,14 +509,22 @@ class SshNegotiationException : SshException
 
 ```
 enum SshFailureReason {
-    DnsFailure, TcpRefused, TcpTimeout, ProxyRefused, ProxyAuthRequired,
-    VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
-    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired,
-    Timeout, ClosedByPeer, KeepAliveTimeout, ProtocolError, Aborted
+    Unknown,
+    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired,
+    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
+    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
+    KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
+    AgentUnavailable, AgentRefused,
+    Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
+    ChannelOpenFailed, ChannelRequestRejected,
+    ForwardRejected, ForwardBindFailed, ForwardSetupFailed, LimitExceeded,
+    CommandFailed, InvalidConfiguration, Aborted, Unsupported
 }
 ```
 
 Every failure carries `Reason` + `Phase` (at which step) + `Attempts` (which authentication methods were tried and how each fared).
+**`Reason` must tell the truth**: the same exception gives different values in different situations, rather than borrowing a similar one to make do ——
+the host branches on it (whether to reconnect automatically) and picks its UI copy by it. What each value means is in [`spec/08-failures.md`](../spec/08-failures.md) §3.
 
 > **VelaShell gain**: the part of `TmdsSshInterop.ExtractConnectFailedReason` that
 > "slices strings by the `"The connection could not be established - "` prefix" is deleted.
@@ -532,23 +540,26 @@ Used for: the connection diagnostics panel, protocol-level troubleshooting, reco
 ---
 ## 6 Public API shape
 
+> This section originally described the API envisioned at the design stage (`new SshConnection(options)` + `OpenAsync`, `TofuHostKeyPolicy`, `conn.StreamAsync`…),
+> which did not match what was later implemented. After the 2026-09-25 API review it was rewritten to follow the code (the story is in §11.2.24);
+> the rules for the public surface — what should be public, how things are named, one entry point per feature — are in section 4 of
+> [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) in the host repository.
+
 ### 6.1 Name mapping (which is also how rule 3 of §2.2 is honored)
 
 | Tmds.Ssh | VelaShell.Ssh | Why the change |
 | --- | --- | --- |
-| `SshClient` | **`SshConnection`** | A different metaphor: the ADO.NET `SqlConnection` / SignalR `HubConnection` family — with `State`, `StateChanged`, `OpenAsync`/`CloseAsync`. **A "client" is an object; a "connection" is a thing with a lifecycle**, and the latter is what VelaShell actually has to manage |
+| `SshClient` | **`SshConnection`** | A different metaphor: a "client" is an object; a "connection" is a thing with a lifecycle, and the latter is what VelaShell actually has to manage. It can only be obtained through the static `SshConnection.ConnectAsync(options, ct)`, and by the time it is handed back the handshake and authentication are done — there is no public constructor, and no "new it first, then Open" intermediate state |
 | `SshClientSettings` | `SshConnectionOptions` | The .NET `*Options` convention |
-| `Credential` | `SshCredential` | — |
-| `RemoteProcess` | **`SshCommand` / `SshShell`** | **Split in two.** A one-shot command and an interactive shell differ in lifecycle, read/write shape and exit semantics; today they are crammed into one 1,198-line class, and properties like `HasTerminal` are what that cramming squeezes out |
+| `Credential` | `SshCredential` | The concrete credentials are `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `RemoteProcess` | **`SshCommand` / `SshShell`** | **Split in two.** A one-shot command and an interactive shell differ in lifecycle, read/write shape and exit semantics; crammed into one class, properties like `HasTerminal` are what that cramming squeezes out. Running to completion and getting all the output is `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | It is not a "client"; it is a view of a file system |
 | `SftpFile` | `SftpFileStream` | It is a subclass of `Stream`, and the name should say so |
-| `SftpDirectory` / `ISftpDirectory` | `SftpDirectoryHandle` | — |
-| `SshDataStream` | `SshTunnelStream` | — |
-| `LocalForward`/`RemoteForward`/`SocksForward` | `PortForwarder` + `ForwardKind` | The three classes have nearly identical public surfaces; they differ only in "who listens" |
-| `HostAuthentication` (delegate) | `IHostKeyPolicy` (interface) | A policy needs to carry state (a known_hosts handle, a CA trust chain, temporary trust for this run); a delegate can't |
-| `SftpProgressHandler` (abstract class) | `IProgress<SftpTransferProgress>` | An existing BCL convention; don't invent another |
-| `SshChannel` (internal) | `SshChannelCore` + `SshChannelPipe` | Different internal model, see §5.5 |
-| `SshSession` (internal) | `SessionMachine` + `SendPump` + `ReceivePump` | Same, see §5.4 |
+| `SshDataStream` | `SshChannelStream` | Obtained through `SshChannel.AsStream()`; async reads and writes only |
+| `LocalForward` / `SocksForward` / `RemoteForward` | `LocalPortForwarder` (`Start` / `StartDynamic`), `RemotePortForwarder` (`StartAsync`), common base class `PortForwarder` | Metering, events and disposal live on the base class; "who listens" differs, so the entry points are separate |
+| `HostAuthentication` (delegate) | `IHostKeyPolicy` (interface) | A policy needs to carry state (a known_hosts handle, CA trust, temporary trust for this run); a delegate can't |
+| `SshChannel` (internal) | `SshChannel` (public, only handed out by the connection) | Channels are handed to callers to read and write directly (tunnels, subsystems, custom requests); the flow-control window and the stdin pump live inside it |
+| `SshSession` (internal) | Inside `SshConnection` (send gate, send/receive pumps, rekeying) | See §5.4 |
 | `Sequence` / `SequencePool` / `Packet` | **(does not exist)** | Uses Pipelines, see §5.2 |
 
 ### 6.2 Mainline usage (mapped against VelaShell's existing call sites)
@@ -557,42 +568,41 @@ Used for: the connection diagnostics panel, protocol-level troubleshooting, reco
 var options = new SshConnectionOptions("root@10.0.0.1:22")
 {
     ConnectTimeout = TimeSpan.FromSeconds(15),
-    KeepAlive      = new KeepAlivePolicy(TimeSpan.FromSeconds(30), maxMissed: 3),
-    Credentials    = [ new PrivateKeyCredential(path, passphrase),
+    KeepAlive      = new SshKeepAlivePolicy(TimeSpan.FromSeconds(30), maxMissed: 3),
+    Credentials    = [ new PublicKeyCredential(key),
                        new KeyboardInteractiveCredential(PromptAsync) ],
-    HostKeyPolicy  = new TofuHostKeyPolicy(store, onDecision: AskUserAsync),
-    Dialer         = DialerChain.Socks5("127.0.0.1", 10808),   // the proxy itself is dialed directly by default; nest with .Via(...)
-    Algorithms     = SshAlgorithmSet.Default.WithCompression(Compression.ZlibOpenSsh),
-    AutoConnect    = false,   // explicit connect (this is how VelaShell is configured today, and it's right)
-    AutoReconnect  = false,
+    HostKeyPolicy  = new KnownHostsPolicy(askUnknownHost: AskUserAsync),
+    Dialer         = DialerChain.Socks5("127.0.0.1", 10808),   // the proxy itself is dialed directly by default; nest by passing via:
+    Algorithms     = SshAlgorithmSet.Default.WithCompression(),
 };
 
-await using var conn = new SshConnection(options, loggerFactory);
-await conn.OpenAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);   // ready when handed back
 
 // Interactive shell — pixel dimensions are first-class
-await using SshShell shell = await conn.OpenShellAsync(new ShellOptions {
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions {
     TerminalType = "xterm-256color",
-    Size  = new TerminalSize(cols, rows, widthPx, heightPx),
-    Modes = modes,            // encoded terminal modes for pty-req
+    Size  = new SshTerminalSize(cols, rows, widthPx, heightPx),
+    Modes = modes,            // SshTerminalModes, immutable; encoded terminal modes for pty-req
 }, ct);
-shell.Resize(new TerminalSize(cols, rows, widthPx, heightPx));
+await shell.ResizeAsync(new SshTerminalSize(cols, rows, widthPx, heightPx), ct);
 
 // One-shot command — get all three things in one go
-SshCommandResult r = await conn.RunAsync("uname -a", ct);  // StdOut · StdErr · ExitCode · ExitSignal
+SshCommandResult r = await conn.RunAsync("uname -a", cancellationToken: ct);  // StandardOutput · StandardError · ExitStatus
 
-// Long-running command — line by line, TERM first on cancellation
-await foreach (var line in conn.StreamAsync("tail -F /var/log/x", StreamOptions.IncludeStderr, ct)) { }
+// Long-running command — read StandardOutput yourself, TERM first on cancellation
+await using SshCommand cmd = await conn.ExecuteAsync("tail -F /var/log/x", cancellationToken: ct);
 
 // SFTP
-await using SftpFileSystem fs = await conn.OpenSftpAsync(ct);
-if (fs.Capabilities.HasPosixRename) await fs.PosixRenameAsync(a, b, ct);
+await using SftpFileSystem fs = await SftpFileSystem.ConnectAsync(conn, cancellationToken: ct);
+if (fs.Capabilities.HasPosixRename) await fs.RenameAsync(a, b, overwrite: true, ct);
 
 // Forwarding — metering lives in the library
-await using PortForwarder fwd = await conn.ForwardAsync(
-    ForwardKind.Local, bind: "127.0.0.1:8080", target: "10.0.0.9:80", ct);
-Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown} B");
+await using LocalPortForwarder fwd = LocalPortForwarder.Start(
+    conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
+Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesReceived} B");
 ```
+
+See [`getting-started.md`](../getting-started.md) for complete usage.
 
 ### 6.3 Compatibility layer `VelaShell.Ssh.Compat.Tmds` (optional)
 
@@ -608,6 +618,9 @@ A **thin shim**: the type names and method signatures of `Tmds.Ssh`, forwarding 
 
 > **Decision point**: whether a compat layer "saves effort" or "drags you down" is debatable. Recommendation: **build it, but only the surface VelaShell uses,
 > and mark it Obsolete from day one** — its value is splitting "swap the engine" and "swap the API" into two changes that can each be rolled back independently.
+>
+> 〔Result〕**Not built.** The host's library-neutral abstraction (§11.3 item 1) already confines the blast radius to a single directory, `Infrastructure/Ssh/`;
+> rewriting to the new API directly there is less work than first writing a layer of same-named shims, and leaves one less piece of code to delete.
 
 ---
 
@@ -632,24 +645,29 @@ with `tc netem` injecting three tiers: 5 ms / 50 ms / 200 ms RTT and 0.1% packet
 
 ## 8 Extension points (this is what decides whether things are easy to add five years from now)
 
-| # | Extension point | What it's for |
-| :-: | --- | --- |
-| 1 | `ISshTransportDialer` | Proxies, jump hosts, TUN, in-memory transport (tests), heterogeneous carriers |
-| 2 | `ISshCipherSuite` + `CipherRegistry` | New ciphers. **Including Chinese national standards SM4-GCM / SM3** (a real requirement for Chinese government and enterprise customers) |
-| 3 | `IKeyExchange` + `KexRegistry` | New KEX. Post-quantum (ML-KEM, sntrup761) built in; future hybrid schemes get added the same way |
-| 4 | `IHostKeyAlgorithm` | New host key types, including **CA-signed host certificates** (`*-cert-v01@openssh.com`) |
-| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain |
-| 6 | `IAuthMethod` | New authentication methods, including bastion hosts' private extensions |
-| 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist |
-| 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` |
-| 9 | `IGlobalRequestHandler` | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) |
-| 10 | `ISftpExtension` | Vendor SFTP extensions |
-| 11 | `IPacketTap` / Metrics / ActivitySource | Diagnostics, recording, APM |
-| 12 | `ISshConfigSource` | Configuration sources: `~/.ssh/config`, enterprise-pushed, UI |
+The design stage listed twelve extension points. As implemented, **only the few that callers genuinely need to implement themselves are open to the outside**;
+the rest are seams inside the library — adding something means changing the library itself, but only in one place, without touching the state machine.
+This is not a step back: the library has exactly one caller (the host) and is not shipped as a separate package, so "anyone can register" extension points buy nothing,
+while handing timing constraints over to callers (the rules are in §4.1 of `src/VelaShell.Ssh/AGENTS.md` in the host repository).
 
-> This table is the whole answer to "extensibility later on". The test is simple:
+| # | Extension point | What it's for | Status |
+| :-: | --- | --- | --- |
+| 1 | `ISshTransportDialer` | Proxies, jump hosts, TUN, in-memory transport (tests), heterogeneous carriers | ✅ Public. The built-in ones come from `DialerChain` (`Tcp` / `Socks5` / `HttpConnect` / `Jump` / `Jumps` / `Command`, nestable with `via:`); the concrete types are not public |
+| 2 | `ISshCipherSuite` | New ciphers. **Including Chinese national standards SM4-GCM / SM3** (a real requirement for Chinese government and enterprise customers) | 🔒 Seam inside the library: adding one = implement the interface + register a name in the algorithm list |
+| 3 | `ISshKeyExchange` | New KEX. Post-quantum (ML-KEM, sntrup761) built in; future hybrid schemes get added the same way | 🔒 Seam inside the library: `SshKeyExchangeFactory` is a fixed table, and adding one means adding a row; **no runtime registration** (the design-stage `KexRegistry` has been removed, §11.2.24) |
+| 4 | Host key types | New host key types, including **CA-signed host certificates** (`*-cert-v01@openssh.com`) | 🔒 Added in `SshPublicKey`; host certificates are already supported (§11.2.22). `IHostKeyTypePreference` is public, and only governs "which types to negotiate first when connecting" |
+| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain | ✅ Public. Built in: `InMemorySshSigner` (private key files), agent identities, `SshCertificateSigner` (certificates) |
+| 6 | Authentication methods | New authentication methods, including bastion hosts' private extensions | 🔒 Credentials are the public `SshCredential` family; a new method means adding a credential type and an authenticator branch inside the library. The design-stage `IAuthMethod` was not built |
+| 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist | ✅ Public. Built in: `KnownHostsPolicy`, `PinnedFingerprintHostKeyPolicy`, `DangerousAcceptAnyHostKeyPolicy` |
+| 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` | 🔒 Seam inside the library. All three are built in (`AgentForwarder`, `X11Forwarder`, `RemotePortForwarder`, which implement this interface explicitly) |
+| 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ❌ Not built. Sending global requests is an internal method of the library |
+| 10 | SFTP extensions | Vendor SFTP extensions | 🔒 Inside the library: `posix-rename`, `limits`, `statvfs` and others are used directly by `SftpFileSystem` according to the capability query |
+| 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Forwarding metrics go through `System.Diagnostics.Metrics` (`ForwardMetrics.MeterName`); `ActivitySource` and the packet tap (`IPacketTap`) are not built yet |
+| 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`, with no separate interface |
+
+> This table was originally the whole answer to "extensibility later on", and the test was:
 > **each of the nine host-side patches in §1 maps to some row of this table.**
-> In other words — had these twelve extension points existed from the start, not one of those nine patches would have had to be written.
+> The test still holds; only the way they map has changed: most of them rely on "the library simply has it", not on "the host can plug something in".
 
 ---
 
@@ -659,7 +677,7 @@ with `tc netem` injecting three tiers: 5 ms / 50 ms / 200 ms RTT and 0.1% packet
 
 | File | Lines | Outcome |
 | --- | :-: | --- |
-| `Infrastructure/Net/LoopbackProxyRelay.cs` | ~200 | **Delete** → `Socks5Dialer` / `HttpConnectDialer` |
+| `Infrastructure/Net/LoopbackProxyRelay.cs` | ~200 | **Delete** → `DialerChain.Socks5` / `DialerChain.HttpConnect` |
 | `Infrastructure/Ssh/SshAlgorithmProbe.cs` | 199 | **Delete** → the negotiation exception carries the lists itself |
 | `Infrastructure/Ssh/SshAlgorithmDiagnostics.cs` | 105 | Shrinks to one formatting function (~30 lines) |
 | `Infrastructure/Ssh/MeteredPortForwardHandle.cs` | 376 | Shrinks to a thin adapter (~60 lines) |
@@ -678,7 +696,7 @@ with `tc netem` injecting three tiers: 5 ms / 50 ms / 200 ms RTT and 0.1% packet
 | Capability | Today | After |
 | --- | --- | --- |
 | **2FA / OTP (keyboard-interactive)** | Can't connect; the UI copy says "this version cannot connect" | Native support; the tripwire in `KeyboardInteractiveSupportTests` can be removed |
-| **PTY pixel dimensions** | Always 0, blocked on upstream PR #519 | First-class, the four fields of `TerminalSize` |
+| **PTY pixel dimensions** | Always 0, blocked on upstream PR #519 | First-class, the four fields of `SshTerminalSize` |
 | **Compression zlib@openssh.com** | Blocked on upstream PR #513 | Built in |
 | **SSH agent forwarding** | None (the most glaring cell in the comparison matrix) | `IIncomingChannelHandler` + `auth-agent-req@openssh.com` |
 | **Configurable algorithm negotiation** | Halfway (can diagnose, can't configure) | `SshAlgorithmSet` fully configurable, and listable directly from the UI |
@@ -2521,6 +2539,50 @@ strict mode reports the specific reason; `localhost:N` is handed to `xauth` unch
 | `ForwardX11Timeout` in `ssh_config` was not recognised | Parsed in the ssh_config time format (`1h30m`, a bare number is seconds); `0` means valid for the whole connection; an invalid value falls back to the default (`spec/09` §7) |
 
 Intentional difference kept: the validity period also applies to trusted mode (OpenSSH's `ForwardX11Timeout` only governs untrusted mode) — trusted mode is by far the more dangerous one, and it makes no sense for it alone to have no time limit.
+
+### 11.2.24 Whole-library API review: setting the rules for the public surface, and the fixes (2026-09-25)
+
+Why: the library had no written API rules until now, and the same thing had grown several ways of being written — of 191 public types, about 125 were never referenced by the host;
+**protocol plumbing** such as the framing layer, the cipher suites, KEX and the SFTP request pipeline was all public; connecting and running commands each had two or three public entry points;
+exceptions hard-coded their `Reason` (forwarding, private keys, certificates and the agent all reported `Unsupported`, and a jump-host cycle was reported as a retryable `ProxyRefused`),
+so the host had no choice but to show the Chinese exception messages directly to users. A few defaults also sat on the unsafe side: `SshHostKeyDecision.Accept` was the enum's zero value,
+`ISshSigner.IsLocalAndCheap` defaulted to `true`, and `SshShellOptions.Default.Modes` was a globally shared mutable object.
+
+The rules are written into section 4 of [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) in the host repository
+(the public surface defaults to `internal`, each suffix and verb means one thing, record members are immutable, enum zero values are safe, `Reason` tells the truth, one type per file…);
+only the conclusions relevant to this document are recorded here:
+
+- **Public surface: 191 → 130 public types.** There are only three criteria for being public: a feature entry point described in `getting-started.md`, something the host uses, and read-only observable information (principle 4).
+  §6 and §8 were rewritten to follow the code; things envisioned at the design stage but not built (`KexRegistry`, `IAuthMethod`, `IPacketTap`…) have their status marked in §8.
+- **KEX can no longer be registered at runtime.** `SshKeyExchangeFactory.Register` hung off an internal type and could be reached by nothing but a single test,
+  yet it made a lock-free dictionary writable at runtime; it was removed and the table made fixed. Adding a KEX means adding a row to the table (§8 item 3).
+- **One entry point per feature.** Connecting is now only `SshConnection.ConnectAsync(options, ct)`; running to completion and getting all the output is only `RunAsync`;
+  channel streams only come through `SshChannel.AsStream()`; nested proxies use the `via:` parameter of `DialerChain.*` (the concrete dialer types are no longer public, and `.Via(...)` went with them).
+- **Failure reasons tell the truth.** `SshFailureReason` gained 14 new values, and each site reports what actually happened (see [`spec/08`](../spec/08-failures.md) §2 and §3);
+  the forwarding error event and SFTP operation names changed from strings to enums (`ForwardErrorReason`, `SftpOperation`).
+- **Completing `StandardInput` is EOF.** Previously only `CompleteStandardInputAsync` sent `CHANNEL_EOF`;
+  when a caller used the `PipeWriter` idiom `Complete()` to say "I'm done writing", the remote `cat` would wait forever ([`spec/05`](../spec/05-connection.md) §4.3).
+
+§11.2.1–§11.2.23 are the records of their time, and the type names in them are left as they were. The renames are:
+
+| Before | Now |
+| --- | --- |
+| `SshConnectionFactory.ConnectAsync(options)`, `options.ConnectAsync()` | `SshConnection.ConnectAsync(options, ct)` |
+| `SshCommandOutput` (full result) / `SshCommandResult` (exit status only) | `SshCommandResult` / `SshExitStatus` |
+| `SshExecutionOptions` | `SshCommandOptions` (shares the base class `SshSessionRequestOptions` with `SshShellOptions`) |
+| `SshShellOptions.X11` | `SshShellOptions.X11Forwarding` |
+| `AgentForwardPolicy` · `MaxConcurrentChannels` | `AgentForwardOptions` · `MaxConnections` |
+| `KeepAlivePolicy` | `SshKeepAlivePolicy` |
+| `SshStderrPolicy` · `StderrPolicy` | `SshStderrMode` · `StderrMode` |
+| `TerminalSize` · `TerminalModes` (mutable, `Set`) · `TerminalModeOpcode` | `SshTerminalSize` · `SshTerminalModes` (immutable, `With`) · `SshTerminalModeOpcode` |
+| `PortForwarder.StartLocal` / `StartDynamic` · `PortForwardOptions` | `LocalPortForwarder.Start` / `StartDynamic` · `LocalPortForwardOptions` |
+| `RemoteForwarder` · `RemoteForwardOptions` | `RemotePortForwarder` · `RemotePortForwardOptions` |
+| `BytesUp` / `BytesDown` | `BytesSent` / `BytesReceived` |
+| `SshConfigConnectSettings` | `SshConfigConnectOptions` |
+| `SftpOpenMode` | `SftpOpenModes` |
+| `KnownHostsPolicy(askUser: …)` | `KnownHostsPolicy(askUnknownHost: …)` |
+| `SshConnection.SendGlobalRequestWithReplyAsync` | Merged with `SendGlobalRequestAsync` and made an internal library method |
+| `SshPrivateKeyFile.LoadAsync` → `ISshSigner` | → `InMemorySshSigner` (disposable; zeroes the private key on disposal) |
 
 ### 11.3 Switch-over strategy with VelaShell
 

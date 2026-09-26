@@ -44,29 +44,46 @@ SshException                          Abstract base; carries Reason / Phase / Is
 ├── SshAuthenticationException        Authentication failed — carries per-method attempt records
 ├── SshProtocolException              Peer violated the protocol
 ├── SshConnectionClosedException      Connection gone (closed by peer / keep-alive timeout / DISCONNECT received / aborted locally / host key changed on rekey)
-├── SshChannelException               Channel could not be opened — carries the reason code and the peer's text
-├── SshCommandFailedException         Remote command did not succeed (EnsureSuccess) — carries the full output
+├── SshChannelException               Channel could not be opened, or a request on the channel was refused — carries the reason code and the peer's text
+├── SshCommandFailedException         Remote command did not succeed (EnsureSuccess) — carries the full result
 ├── SshForwardException               Forwarder could not start
-├── SshPublicKeyException             Public key blob malformed / type unsupported
-├── SshPrivateKeyException            Private key file cannot be read — carries NeedsPassphrase
-├── SshCertificateException           Certificate cannot be read
+├── SshPublicKeyException             Public key blob / text malformed, type unsupported
+├── SshPrivateKeyException            Private key file cannot be read or decrypted — carries NeedsPassphrase
+├── SshCertificateException           Certificate cannot be read, or does not pair with the private key
 ├── SshAgentException                 Cannot reach the agent, or the agent refused
 ├── SftpException                     SFTP operation failed — carries StatusCode and the server's original text ServerMessage
 ├── SftpTransferInterruptedException  Transfer interrupted — **carries DurableLength**
 └── SftpUnavailableException          SFTP subsystem could not start
 ```
 
-The types below have a fixed `Reason` and `Phase`; for the others they depend on the specific failure.
+The types below each correspond to a single kind of failure, and their `Reason` and `Phase` are fixed:
 
 | Type | `Reason` | `Phase` |
 | --- | --- | --- |
 | `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
 | `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
-| `SshPublicKeyException` | `Unsupported` | `KeyExchange` |
-| `SshPrivateKeyException`, `SshCertificateException`, `SshAgentException` | `Unsupported` | `Authenticating` |
-| `SshForwardException`, `SftpUnavailableException` | `Unsupported` | `Open` |
+| `SftpUnavailableException` | `Unsupported` | `Open` |
 | `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
-| `SshCommandFailedException` | `Unknown` | `Open` |
+| `SshCommandFailedException` | `CommandFailed` | `Open` |
+
+The types below have a fixed `Phase`, and their `Reason` is **reported as it actually is**:
+
+| Type | `Reason` | `Phase` |
+| --- | --- | --- |
+| `SshPublicKeyException` | `KeyFormatInvalid`, `Unsupported` (type not supported) | `None` |
+| `SshPrivateKeyException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyPassphraseRequired`, `KeyPassphraseIncorrect`, `Unsupported` | `None` |
+| `SshCertificateException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyMismatch`, `Unsupported` | `None` |
+| `SshAgentException` | `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
+| `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected` | `Open` |
+| `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError` | `Open` |
+
+Reading a private key, reading a certificate and parsing a public key happen outside any connection (there may be no connection at all), so `Phase` is `None`.
+When parsing the peer's host key fails during key exchange, the key exchange wraps it into an `SshConnectException` with `Reason` `HostKeyRejected`.
+
+〔Decision〕**`Reason` must tell the truth, not be hard-coded.** Private key, certificate, agent and forwarding exceptions used to report `Unsupported` across the board,
+a refused exec / pty-req / shell was reported as `ChannelOpenFailed` (the channel had in fact opened), and a jump-host cycle was reported as a retryable `ProxyRefused`.
+Callers could then only parse the message sentence —— and the message is diagnostic text for developers, not UI copy, with no promise of stable wording.
+If no suitable value exists, add one instead of borrowing a similar one; only when the exception type itself corresponds to a single kind of failure is the reason fixed in the type (the first table above).
 
 A rejected host key has no dedicated type: it is an `SshConnectException` with `Reason` `HostKeyRejected`, and the policy's reason is its `Message` (§3).
 
@@ -78,9 +95,10 @@ and a caller's `catch (SshConnectionClosedException)` would swallow the former t
 〔Decision〕**`SshPublicKeyException` and `SshKeyExchangeException` both derive from `SshException`.**
 Both used to derive directly from `Exception`: callers using `catch (SshException)` as the catch-all for library failures missed them, and the host's exception translation did not recognize them;
 `SshKeyExchangeException` also leaked to callers as-is during connection setup.
-`SshPublicKeyException` has `Phase` `KeyExchange` because it most often comes from parsing the host key the peer presents (when reading a local `.pub` the phase is only approximate).
+`SshPublicKeyException` has `Phase` `None` (see above); it used to have `KeyExchange`, a phase that does not hold when reading a local `.pub`.
 `SshKeyExchangeException` has `Reason` `ProtocolError`: what it reports is almost always an invalid public value from the peer (wrong length, not on the curve, a weak value);
-the "algorithm not implemented" kind is already stopped before connecting by `SshAlgorithmSet.Validate()`.
+the "algorithm not implemented" kind is already stopped before connecting (`SshConnection.ConnectAsync` checks the algorithm lists first).
+Should the lists and the implementation table ever disagree, that is the library's own programming error: it is reported as `InvalidOperationException`, not under the name of `SshException`.
 
 ### 2.1 A connection that dies mid-way: the cause is normalized to public types first
 
@@ -131,25 +149,39 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `TcpTimeout` | Connection timed out | ✔ | Check firewall/network |
 | `TcpUnreachable` | Network unreachable | ✔ | |
 | `ProxyRefused` | Proxy refused to forward | ✔ | **See §5.2** |
-| `ProxyAuthRequired` | Proxy requires authentication | ✘ | Configure proxy credentials |
+| `ProxyAuthRequired` | Proxy requires authentication: no credentials configured, or the credentials were rejected | ✘ | Configure (or correct) proxy credentials |
 | `NotAnSshServer` | Peer does not speak SSH | ✘ | Wrong port |
 | `VersionMismatch` | Protocol version is not 2.0 | ✘ | |
 | `NegotiationFailed` | No algorithm in common | ✘ | **See §5.1** |
-| `HostKeyRejected` | Host key rejected (`SshConnectException`, `Phase` `KeyExchange`): by policy — **at first connect a changed key, a `@revoked` key, or a host known only under other key types all land here**; `K_S` unparsable, signature does not verify, RSA too short, or not matching the negotiated algorithm (including a certificate algorithm negotiated while `K_S` is not a certificate, or vice versa); a CA-vouched host certificate that is invalid (`03-key-exchange.md` §5.5) | ✘ | Read `Message`: the policy's reason (`SshHostKeyVerdict.Reason`) is placed there as-is; `KnownHostsPolicy` states whether the key changed, was revoked or only other types are known, with fingerprints and `known_hosts` line numbers |
-| `HostKeyChanged` | **Only raised on rekey**: the host key the peer presents differs from the one pinned at the initial exchange (`03-key-exchange.md` §8.4). The connection drops with `SshConnectionClosedException` (`Phase` `Rekeying`), and the message carries the old and new fingerprints | ✘ | There is no legitimate reason for a host key to change mid-connection: do not reconnect automatically; treat it as a possible man-in-the-middle |
+| `HostKeyRejected` | Host key rejected (`SshConnectException`, `Phase` `KeyExchange`): by policy (`SshHostKeyVerdict.Reject`) — unseen and not allowed to ask, declined by the user, `@revoked`, fingerprint not on the allow-list; `K_S` unparsable, signature does not verify, RSA too short, or not matching the negotiated algorithm (including a certificate algorithm negotiated while `K_S` is not a certificate, or vice versa); a CA-vouched host certificate that is invalid (`03-key-exchange.md` §5.5) | ✘ | Read `Message`: the policy's reason (`SshHostKeyVerdict.Message`) is placed there as-is, with fingerprints and `known_hosts` line numbers |
+| `HostKeyChanged` | The host key **has changed**, in two situations: ① at the initial exchange the policy rejects with `SshHostKeyVerdict.RejectChanged` —— `KnownHostsPolicy` reports this when the recorded key has changed, or only other types are recorded (`SshConnectException`, `Phase` `KeyExchange`; the message carries the old and new fingerprints and line numbers); ② on rekey the host key the peer presents differs from the one pinned at the initial exchange (`03-key-exchange.md` §8.4), and the connection drops with `SshConnectionClosedException` (`Phase` `Rekeying`) | ✘ | Possibly a man-in-the-middle: do not reconnect automatically, and do not offer a "trust and remember" shortcut —— if the server really was reinstalled, have a person delete the old line from `known_hosts` |
 | `AuthenticationFailed` | An authentication attempt failed | ✔ | |
 | `AuthenticationMethodExhausted` | All methods tried | ✘ | **See §5.3** |
 | `TwoFactorRequired` | Server wants keyboard-interactive but we have none configured | ✘ | Prompt "this machine requires a one-time code" |
 | `PasswordExpired` | Server requires a password change | ✘ | |
+| `KeyFileUnreadable` | A private key / certificate / public key file cannot be read (does not exist, no permission, I/O error) | ✘ | The message contains the path |
+| `KeyFormatInvalid` | The content of a private key / certificate / public key is malformed (corrupt, truncated, invalid parameters) | ✘ | |
+| `KeyPassphraseRequired` | An encrypted private key needs a passphrase, and none was given | ✘ | Show a passphrase prompt (`SshPrivateKeyException.NeedsPassphrase`) |
+| `KeyPassphraseIncorrect` | A passphrase was given, but it does not decrypt this private key | ✘ | Ask for the passphrase again |
+| `KeyMismatch` | The credential material does not match: the public key in the certificate does not pair with the private key, or a host certificate was used to log in | ✘ | A certificate must be used together with the private key it was issued for |
+| `AgentUnavailable` | ssh-agent cannot be found or reached, or its endpoint is not trusted | ✘ | Check whether the agent is running |
+| `AgentRefused` | ssh-agent refused the request (the `ssh-add -c` confirmation was declined, the agent is locked, the key is no longer there) | ✘ | |
 | `Timeout` | A phase timed out | ✔ | |
 | `KeepAliveTimeout` | Declared dead by keep-alive | ✔ | **Automatic reconnect should apply only to this category** |
 | `ClosedByPeer` | Peer closed actively | ✔ | |
 | `Disconnected` | `SSH_MSG_DISCONNECT` received | ✘ 〔Not implemented yet: meant to depend on `DisconnectReason`; today never retryable〕 | The reason code is in `SshConnectionClosedException.DisconnectReason`, the peer's own words in `PeerDescription` |
 | `ProtocolError` | Peer violated the protocol | ✘ | |
-| `ChannelOpenFailed` | Channel could not be opened | ✘ 〔Not implemented yet: meant to depend on the reason code; today never retryable〕 | |
+| `ChannelOpenFailed` | Channel could not be opened (`CHANNEL_OPEN_FAILURE`; the reason code is in `OpenFailureReason`) | ✘ 〔Not implemented yet: meant to depend on the reason code; today never retryable〕 | |
+| `ChannelRequestRejected` | The channel opened, but an `exec` / `pty-req` / `shell` / `subsystem` on it was refused | ✘ | Check the server's `ForceCommand`, `PermitTTY` and `Subsystem` configuration |
+| `ForwardRejected` | The server does not accept the forwarding request (`AllowTcpForwarding no`, `AllowAgentForwarding no` and the like), or this side refused an inbound channel that matches no forward | ✘ | |
+| `ForwardBindFailed` | The local listening port cannot be opened (in use, no permission) | ✘ | Use another port |
+| `ForwardSetupFailed` | Preparing the forward on the local side failed: no X display available, `xauth` could not run or failed | ✘ | |
+| `LimitExceeded` | One of this side's concurrency limits was reached (forwarded connections, agent / X11 channels) | ✘ | |
+| `CommandFailed` | A remote command did not end with exit code 0 (the `SshCommandFailedException` thrown by `SshCommandResult.EnsureSuccess`) | ✘ | Look at `Result`: stderr, exit code or signal |
+| `InvalidConfiguration` | The configuration itself does not hold: a `ProxyJump` cycle, too many hops, an invalid `ProxyCommand` template | ✘ | Fix the configuration —— otherwise the next attempt will fail the same way |
 | `Aborted` | Aborted locally (Dispose / cancellation) | ✘ | |
-| `Unsupported` | The requested capability is not supported by the peer | ✘ | |
-| `Unknown` | Unclassified: the connection ended because of an unexpected error (§2.1); a remote command did not succeed (`SshCommandFailedException`) | ✘ | Look at `InnerException`; for a failed command, look at `Output` |
+| `Unsupported` | The requested capability (algorithm, key type, format version) is not supported by the peer or by this library | ✘ | |
+| `Unknown` | Unclassified: the connection ended because of an unexpected error (§2.1) | ✘ | Look at `InnerException` |
 
 〔Decision〕**`IsRetryable` is the library's advice, not a promise.** It expresses
 "whether this failure might go away on retry", not "you should retry" —

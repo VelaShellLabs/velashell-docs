@@ -190,20 +190,22 @@ flowchart TD
 
 ### Port-forwarding tunnels
 
-Local `-L`, remote `-R` and dynamic SOCKS5 `-D`. **The host relays the data itself**: Tmds.Ssh does the
-relaying internally and exposes no counters at all, which is why `TunnelInfo.BytesTransferred` used
-to be permanently 0.
+Local `-L`, remote `-R` and dynamic SOCKS5 `-D`. **Both the data plane and the metering live in the SSH
+library (`src/VelaShell.Ssh`)**: the host's `Infrastructure/Ssh/LibraryPortForwardHandle.cs` is only a
+thin adapter that wires the connection counts, byte counts and error events of the library's forwarders
+(common base class `PortForwarder`) onto `IPortForwardHandle`. Before the library switch, Tmds.Ssh
+exposed no counters at all, so the host had to listen and relay by itself; that code has been deleted.
 
 | Direction | Implementation |
 | --- | --- |
-| Local `-L` | Own `TcpListener` + `SshClient.OpenTcpConnectionAsync` (direct-tcpip, structurally identical to the library's own path, no extra hop) |
-| Dynamic `-D` | Own listener + SOCKS5 server handshake (`Socks5Negotiation`, RFC 1928, CONNECT with no auth) |
-| Remote `-R` | Only the library can open the listening end → forward to a local metering listener → the host relays on to the real target (one extra loopback copy buys the same statistics) |
+| Local `-L` | `LocalPortForwarder.Start`: the library listens locally and opens one `direct-tcpip` channel per connection |
+| Dynamic `-D` | `LocalPortForwarder.StartDynamic`: the SOCKS5 server in the library (RFC 1928, `CONNECT` with no auth only), with a handshake time limit |
+| Remote `-R` | `RemotePortForwarder.StartAsync`: `tcpip-forward` has the server listen, and the library connects the forwarded channels straight to the local target — no more relaying through a temporary local listener |
 
-> ⚠️ The relay preserves **half-close semantics** (`SshDataStream.WriteEof` on the SSH side,
-> `Shutdown(Send)` on the socket side). Tearing the whole link down instead would break every
-> protocol that "sends a request, shuts down, then waits for the response" — pinned by the
-> regression test `MeteredPortForwardTests.Relay_ForwardsHalfClose`.
+> ⚠️ The relay preserves **half-close semantics**: when one side has been read to the end, EOF /
+> `Shutdown(Send)` is sent to the other side, instead of tearing the whole link down; when the link
+> breaks, both ends are aborted (the local socket sends RST), so truncated data is never handed over as
+> if it were complete. See [`ssh/spec/07-forwarding.md`](../ssh/spec/07-forwarding.md) §2.2 and §6 for the spec.
 
 Details in [tunnel-feature-planning.md](tunnel-feature-planning.md).
 

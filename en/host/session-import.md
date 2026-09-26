@@ -65,10 +65,10 @@ Host *
     Port 2200          # both get it
 ```
 
-`SshConfigParser` therefore keeps the **whole block structure** (pattern list + ordered
-options), walks every block matching an alias in file order, and keeps only the first value
-seen for each keyword. Harvesting keywords while discarding which block they came from inverts
-this rule.
+Parsing uses the SSH library's `SshConfigFile` (the host does not keep a copy of its own): it keeps
+the **whole block structure** (pattern list + ordered options), and `Resolve` walks every block
+matching an alias in file order, keeping only the first value seen for each keyword. Harvesting
+keywords while discarding which block they came from inverts this rule.
 
 ### 3.2 `Include` expands in place
 
@@ -79,7 +79,8 @@ moves to the end. So expansion happens during parsing, not as "collect every fil
 - Relative paths resolve against **`~/.ssh`** (OpenSSH's rule for the user config), not against
   the directory holding the config file — when the user browses to a config kept elsewhere, an
   `Include conf.d/*` inside it should still mean `~/.ssh/conf.d`
-- Mutual includes are contained by a visited-file set plus a depth limit of 8
+- Mutual includes are contained by a visited-file set plus a depth limit of 16 (the library's
+  `SshConfigFile.MaxIncludeDepth`)
 - Wildcard matches are **sorted** after expansion; otherwise the same config imports in a
   different order on a different file system
 
@@ -92,10 +93,16 @@ which is precisely OpenSSH's semantics — no separate session should be, or nee
 produced for them. A negation (`!`) vetoes a match, so an excluded alias does not take that
 block's options.
 
-**`Match` blocks are skipped wholesale**: their conditions (`exec`, `originalhost`,
-`canonical`) only have answers at connection time. Skipped rather than treated as `Host *` —
-the latter would apply conditionally-scoped options to every session unconditionally, and an
-internal jump host inside a `Match exec "on-vpn"` would grow onto everything.
+**`Match` blocks are evaluated by the library's rules, and do not apply when they cannot be
+decided**: `all`, `host` and `originalhost` are evaluated as usual; `user` and `localuser` need to
+know "as whom, and from which machine, we connect", `exec` needs to run a command, and
+`canonical` / `final` we do not support — none of these can be decided during a static import, so
+that block's options do not reach the sessions (negation is no different: `!exec` that cannot be
+decided is still undecidable). They must not be treated as `Host *` — that would apply
+conditionally-scoped options to every session unconditionally, and an internal jump host inside a
+`Match exec "on-vpn"` would grow onto everything. A `Match` block never produces a session itself.
+(Before 2026-09-25 the host used its own parser, which skipped every `Match` block wholesale, so
+`Match all` / `Match host` did not apply either.)
 
 When `HostName` is absent, **the alias is the host name** (with `Host build01` and no HostName,
 ssh simply connects to `build01`). Without this, a config built on aliases plus a global `User`

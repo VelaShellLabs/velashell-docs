@@ -16,13 +16,14 @@ var options = new SshConnectionOptions("joe@10.0.0.1:22")
 {
     Credentials   = [ new PasswordCredential("hunter2") ],
     HostKeyPolicy = new KnownHostsPolicy(),   // 默认读 ~/.ssh/known_hosts
-    KeepAlive     = new KeepAlivePolicy(TimeSpan.FromSeconds(30)),
+    KeepAlive     = new SshKeepAlivePolicy(TimeSpan.FromSeconds(30)),
 };
 
-await using SshConnection conn = await options.ConnectAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);
 ```
 
-`ConnectAsync` 一口气做完拨号 → 版本交换 → 密钥交换 → **主机密钥裁决** → 认证。
+`SshConnection.ConnectAsync` 一口气做完拨号 → 版本交换 → 密钥交换 → **主机密钥裁决** → 认证，
+交回来的连接已经可用 —— `SshConnection` 没有公开的构造函数，也没有要另外调的 `Start`，建连只有这一个入口。
 
 **三把计时器是分开的**，这不是小事：
 
@@ -52,8 +53,8 @@ Dialer = DialerChain.Socks5("127.0.0.1", 1080, new SshProxyCredentials("alice", 
 // HTTP 代理的 CONNECT（Basic 认证，第一次请求就带上）
 Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 
-// 嵌套：经 HTTP 代理到达 SOCKS5 代理，再由它连目标
-Dialer = DialerChain.Socks5("socks.internal", 1080).Via(DialerChain.HttpConnect("proxy.corp", 3128)),
+// 嵌套：经 HTTP 代理到达 SOCKS5 代理，再由它连目标（via = 怎么到达代理本身）
+Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
 // 跳板（ssh -J）：跳板本身是一条完整连接，有自己的凭据与主机密钥策略
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
@@ -84,7 +85,7 @@ Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 交互式客户端要换成带询问回调的那一种：
 
 ```csharp
-HostKeyPolicy = new KnownHostsPolicy(askUser: async (ctx, ct) =>
+HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
 {
     // ctx.Key.Sha256Fingerprint 就是 ssh 命令行显示的那一串
     return await ui.ConfirmAsync(
@@ -116,19 +117,24 @@ HostKeyPolicy = new PinnedFingerprintHostKeyPolicy(["SHA256:abc..."])
 ```csharp
 using VelaShell.Ssh.Keys;
 
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: null, ct);
+// 路径原样交给文件系统，不展开 ~
+string keyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "id_ed25519");
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, passphrase: null, ct);
 
 await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
 IReadOnlyList<SshCredential> fromAgent = await agent.GetCredentialsAsync(ct);
 
 Credentials =
 [
-    new PublicKeyCredential(key, "~/.ssh/id_ed25519"),
+    new PublicKeyCredential(key, "~/.ssh/id_ed25519"),   // 第二个参数只是进尝试记录的标签
     .. fromAgent,
     new KeyboardInteractiveCredential(PromptAsync),   // 2FA / 动态码
     new PasswordCredential(AskPasswordAsync),
 ];
 ```
+
+`LoadAsync` 交回的是 `InMemorySshSigner`：它在内存里持有私钥，**释放时清零**，所以用 `using` 接住。
+连接只在认证期间用它，连上之后就可以释放。
 
 顺序就是尝试顺序。服务端不接受的方法会被跳过并如实记进尝试记录 ——
 失败时 `SshAuthenticationException.DescribeAttempts()` 会告诉你每一条发生了什么：
@@ -150,7 +156,7 @@ OpenSSH 格式（`BEGIN OPENSSH PRIVATE KEY` + `cipher != none`，也就是
 `ssh-keygen` 带口令时的默认产物）、以及 `.ppk` v2/v3。
 
 ```csharp
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", "口令", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, "口令", ct);
 ```
 
 OpenSSH 加密私钥支持的算法：`aes{128,192,256}-{ctr,cbc}`、
@@ -172,8 +178,8 @@ OpenSSH 加密私钥支持的算法：`aes{128,192,256}-{ctr,cbc}`、
 ```csharp
 using VelaShell.Ssh.Keys;
 
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", null, ct);
-OpenSshCertificate cert = await OpenSshCertificate.LoadAsync("~/.ssh/id_ed25519-cert.pub", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, null, ct);
+OpenSshCertificate cert = await OpenSshCertificate.LoadAsync(keyPath + "-cert.pub", ct);
 
 Credentials = [ new PublicKeyCredential(SshCertificateSigner.Create(cert, key)) ];
 ```
@@ -201,7 +207,7 @@ if (!cert.IsTimeValid(DateTimeOffset.UtcNow))
 `.ppk` v2 与 v3 都能读，**包括加密的**：
 
 ```csharp
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "口令", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "口令", ct);
 ```
 
 > `.ppk` 的 KDF（v2 是 SHA-1 的拼接、v3 是 Argon2id）BouncyCastle 直接给，
@@ -213,7 +219,7 @@ ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "口�
 加密私钥解开一次、交给 agent 保管，之后认证与转发都经 agent 签名：
 
 ```csharp
-var key = (InMemorySshSigner)await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: "口令", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, passphrase: "口令", ct);
 
 await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
@@ -233,11 +239,12 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
 ## 四 跑命令
 
 ```csharp
-SshCommandOutput r = await conn.RunAsync("uname -a", cancellationToken: ct);
+SshCommandResult r = await conn.RunAsync("uname -a", cancellationToken: ct);
 Console.WriteLine(r.StandardOutput);
-r.EnsureSuccess("uname -a");   // 失败时异常里带着 stderr
+r.EnsureSuccess("uname -a");   // 失败时抛 SshCommandFailedException（Reason = CommandFailed），异常里带着 stderr
 ```
 
+`SshCommandResult` 是一次跑完的**全部**结果：`StandardOutput`、`StandardError` 与退出状态 `ExitStatus`（`SshExitStatus`）。
 `ExitCode` 是 **`int?`**，不是 `int`：
 
 | 情况 | `ExitCode` | `ExitSignalName` |
@@ -255,7 +262,12 @@ r.EnsureSuccess("uname -a");   // 失败时异常里带着 stderr
 await using SshCommand cmd = await conn.ExecuteAsync("tail -F /var/log/x", cancellationToken: ct);
 await foreach (var line in ReadLinesAsync(cmd.StandardOutput, ct)) { }
 await cmd.SendSignalAsync("TERM", ct);    // 注意：不带 SIG 前缀
+SshExitStatus status = await cmd.WaitAsync(ct);
 ```
+
+往 `cmd.StandardInput` 写完之后，**完成它就是 EOF**：`await cmd.StandardInput.CompleteAsync()` 与
+`await cmd.CompleteStandardInputAsync(ct)` 效果一样 —— 都会先把已写的内容冲干净，再发 `CHANNEL_EOF`，
+远端等着读完的程序（`cat`、`sort`）才会结束。EOF 不是关通道，之后照样收得到输出。
 
 ---
 
@@ -265,12 +277,14 @@ await cmd.SendSignalAsync("TERM", ct);    // 注意：不带 SIG 前缀
 await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 {
     TerminalType = "xterm-256color",
-    Size  = new TerminalSize(cols, rows, pixelWidth, pixelHeight),
-    Modes = TerminalModes.Empty.Set(TerminalModeOpcode.Utf8Input, 1),
+    Size  = new SshTerminalSize(cols, rows, pixelWidth, pixelHeight),
+    Modes = SshTerminalModes.Empty.With(SshTerminalModeOpcode.Utf8Input, 1),
 }, ct);
 
-await shell.ResizeAsync(new TerminalSize(cols, rows, pixelWidth, pixelHeight), ct);
+await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight), ct);
 ```
+
+`SshTerminalModes` 是不可变的：`With` 交回一份新的，`SshTerminalModes.Empty` 可以放心地到处共用。
 
 **像素尺寸是一等公民**，不恒为 0 —— sixel、kitty 图形协议这类东西要靠它排版。
 不知道就给 0，那也是一个有意义的回答。
@@ -284,13 +298,13 @@ await shell.ResizeAsync(new TerminalSize(cols, rows, pixelWidth, pixelHeight), c
 ```csharp
 await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 {
-    X11             = new X11ForwardOptions(),        // ssh -X
-    AgentForwarding = AgentForwardPolicy.Default,     // ssh -A
+    X11Forwarding   = new X11ForwardOptions(),        // ssh -X
+    AgentForwarding = AgentForwardOptions.Default,    // ssh -A
     BeforeStart     = (channel, ct) => SendMyCustomRequestAsync(channel, ct),   // 库没内置的请求
 }, ct);
 ```
 
-`SshExecutionOptions`（一次性命令）有同样的三项。
+`SshCommandOptions`（一次性命令）有同样的三项 —— 它们定义在两者共同的基类 `SshSessionRequestOptions` 上。
 
 ---
 
@@ -374,7 +388,7 @@ var options = new SshConnectionOptions("root@example.com")
 **不会报错**：
 
 ```csharp
-Console.WriteLine(conn.Algorithms?.CompressionServerToClient);   // zlib@openssh.com 或 none
+Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.com 或 none
 ```
 
 `Algorithms` 交出的是这条会话实际协商出来的全部算法（密钥交换、主机密钥、
@@ -390,22 +404,24 @@ Console.WriteLine(conn.Algorithms?.CompressionServerToClient);   // zlib@openssh
 using VelaShell.Ssh.Forwarding;
 
 // -L：本机 127.0.0.1:8080 → 远端 10.0.0.9:80
-await using PortForwarder local = PortForwarder.StartLocal(
-    conn, "10.0.0.9", 80, new PortForwardOptions { BindPort = 8080 });
+await using LocalPortForwarder local = LocalPortForwarder.Start(
+    conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
 // -D：本机 SOCKS5
-await using PortForwarder socks = PortForwarder.StartDynamic(conn);
+await using LocalPortForwarder socks = LocalPortForwarder.StartDynamic(conn);
 
 // -R：服务端监听 → 回连到本机
-await using RemoteForwarder remote = await RemoteForwarder.StartAsync(
+await using RemotePortForwarder remote = await RemotePortForwarder.StartAsync(
     conn, "127.0.0.1", 3000,
-    new RemoteForwardOptions { BindAddress = "localhost", BindPort = 0 }, ct);
+    new RemotePortForwardOptions { BindAddress = "localhost", BindPort = 0 }, ct);
 Console.WriteLine(remote.BoundPort);   // 请求 0 时，服务端分配的实际端口在这里
 
-// 计量在库里
-Console.WriteLine($"{local.ActiveConnections} 条 · 上行 {local.BytesUp} B · 下行 {local.BytesDown} B");
-local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesUp + e.BytesDown} 字节");
+// 计量在库里（三种转发器共同的基类 PortForwarder 上）
+Console.WriteLine($"{local.ActiveConnections} 条 · 发出 {local.BytesSent} B · 收回 {local.BytesReceived} B");
+local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesSent + e.BytesReceived} 字节");
 ```
+
+本地转发的 `Start` 是同步的 —— 它只在本机绑一个端口；远程转发要等服务端应答 `tcpip-forward`，所以是 `StartAsync`。
 
 **默认绑环回。**要对外开放必须显式写 `BindAddress = IPAddress.Any` ——
 一条隧道的另一端往往是内网数据库，默认绑 `0.0.0.0` 等于把它暴露给同网段所有人。
@@ -413,7 +429,7 @@ local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesUp + e.
 ### 反方向的 Unix 套接字（`ssh -R /远端:/本机`）
 
 ```csharp
-await using RemoteForwarder sock = await RemoteForwarder.StartUnixSocketAsync(
+await using RemotePortForwarder sock = await RemotePortForwarder.StartUnixSocketAsync(
     conn,
     targetSocketPath: "/var/run/docker.sock",   // 本机的
     remoteSocketPath: "/tmp/docker.sock",       // 服务端要建的
@@ -479,7 +495,7 @@ Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} �
 接 `/var/run/docker.sock` 或内网 API 时，**本机不需要一个监听端口**：
 
 ```csharp
-await using SshChannel tunnel = await conn.OpenUnixSocketTunnelAsync("/var/run/docker.sock", ct);
+await using SshChannel tunnel = await conn.OpenUnixSocketTunnelAsync("/var/run/docker.sock", cancellationToken: ct);
 // tunnel.StandardInput / tunnel.StandardOutput 就是那条流
 ```
 
@@ -495,11 +511,11 @@ await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
 
 await using AgentForwarder fwd = await AgentForwarder.RequestAsync(
     conn, session,
-    new AgentForwardPolicy
+    new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // 只转发这一把，其余的对远端不可见
         ConfirmEachSignature = AskUserAsync,    // 每次签名都问一下人
-        MaxConcurrentChannels = 4,
+        MaxConnections = 4,
     },
     cancellationToken: ct);
 ```
@@ -544,14 +560,14 @@ Console.WriteLine(cfg.IdentityFiles);  // 可能有多条
 ```csharp
 SshConnectionOptions options = await SshConfigFile.CreateConnectionOptionsAsync(
     blocks, "prod-web-1",
-    new SshConfigConnectSettings
+    new SshConfigConnectOptions
     {
         Credentials        = [new KeyboardInteractiveCredential(PromptAsync)],   // 排在 IdentityFile 之后
         PassphraseProvider = (path, ct) => AskPassphraseAsync(path, ct),         // 加密的 IdentityFile
         AskUnknownHost     = ConfirmFingerprintAsync,
     }, ct);
 
-await using SshConnection conn = await options.ConnectAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);
 
 // ForwardAgent / ForwardX11 是会话项，不是连接项：
 await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blocks, "prod-web-1").ApplyToShell(), ct);
@@ -626,12 +642,19 @@ Console.WriteLine(conn.LastRekeyReason);   // 上次是哪条阈值触发的
 
 | 异常 | 什么时候 | 关键字段 |
 | --- | --- | --- |
-| `SshConnectException` | 拨号 / 握手阶段 | `Reason`：`DnsFailure` / `TcpRefused` / `TcpTimeout` / … |
+| `SshConnectException` | 拨号 / 握手阶段 | `Reason`：`DnsFailure` / `TcpRefused` / `TcpTimeout` / …；配置本身不成立（`ProxyJump` 成环、`ProxyCommand` 模板非法）是 `InvalidConfiguration` |
 | `SshAuthenticationException` | 认证失败 | `Attempts`、`ServerOffered`、`PartialSuccessAchieved` |
-| `SshChannelException` | 通道打不开 | `OpenFailureReason` + 可操作的提示 |
-| `SftpException` | SFTP 操作失败 | **`ServerMessage`（服务端原话）** |
+| `SshPrivateKeyException` | 私钥读不出、解不开 | `Reason`：`KeyFileUnreadable` / `KeyFormatInvalid` / `KeyPassphraseRequired` / `KeyPassphraseIncorrect`；`NeedsPassphrase` |
+| `SshCertificateException` | 证书不对 | `Reason`：`KeyFormatInvalid` / `KeyMismatch`（与私钥不是一对、拿主机证书去登录） |
+| `SshAgentException` | ssh-agent 出错 | `Reason`：`AgentUnavailable` / `AgentRefused` |
+| `SshChannelException` | 通道打不开，或通道上的请求被拒 | 打不开：`ChannelOpenFailed` + `OpenFailureReason` + 可操作的提示；exec / pty-req / shell / subsystem 被拒：`ChannelRequestRejected` |
+| `SftpException` | SFTP 操作失败 | **`ServerMessage`（服务端原话）**、`Operation`（`SftpOperation`）、`Path` |
 | `SftpTransferInterruptedException` | 传输中断 | `DurableLength` |
-| `SshForwardException` | 转发器起不来 | — |
+| `SshForwardException` | 转发器起不来 | `Reason`：`ForwardRejected` / `ForwardBindFailed` / `ForwardSetupFailed` / `LimitExceeded` |
+| `SshCommandFailedException` | `EnsureSuccess` 发现命令没成功 | `Reason` = `CommandFailed`；`Result`（完整的 `SshCommandResult`） |
+
+`Reason` 说的是真话：同一种异常在不同处境下给不同的原因码，界面据此分流、据此翻译，不必去解析消息句子 ——
+**消息是写给开发者的诊断文本**，不是界面文案。
 
 `SftpException.ServerMessage` 要单独说一句：SFTP v3 只有 9 个状态码，
 而码 `4` 承载了绝大多数真实错误 ——「目录非空」「文件已存在」「磁盘满」「配额超限」

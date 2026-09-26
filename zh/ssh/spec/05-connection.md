@@ -243,7 +243,7 @@ stateDiagram-v2
 ```
 PipeReader StandardOutput;   // CHANNEL_DATA
 PipeReader StandardError;    // CHANNEL_EXTENDED_DATA(1)
-PipeWriter StandardInput;    // 写出的内容变成 CHANNEL_DATA
+PipeWriter StandardInput;    // 写出的内容变成 CHANNEL_DATA；完成它 = 冲干净后发 CHANNEL_EOF
 ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / ExitSignal / 请求
 ```
 
@@ -259,8 +259,16 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 两条管道各有缓冲，但窗口只有一个：一边不读，那边的数据堆满窗口之后，**另一边也会停住**。
 所以要么两边都读（`ReadToEndAsync` 就是并发读两边的），要么把不关心的 stderr 设成 `Discard`。
 
-〔决策〕**stderr 可以被显式丢弃**（`StderrPolicy.Discard`）。
+〔决策〕**stderr 可以被显式丢弃**（`SshChannelOptions.StderrMode = SshStderrMode.Discard`）。
 此时库内部照常收包并**立即回补窗口**，但不缓冲 —— 否则丢弃就变成了死锁。
+
+〔决策〕**完成 `StandardInput` 就是发 EOF。**调用方完成这个 `PipeWriter`（`Complete` / `CompleteAsync`）时，
+库照 `SendEofAsync` 的样子办：先把已写入的内容全部发完，再发 `CHANNEL_EOF`（§1 第 1 条：EOF 不是关通道）。
+`SendEofAsync` 与 `CompleteStandardInputAsync` 仍然在，区别只在于它们会**等** EOF 入队再返回。
+EOF 只发一次：谁先把通道推进到「本端 EOF」谁发；通道正在关或已关时两者都不发。
+
+理由：完成 writer 是 `PipeWriter` 表达「写完了」的惯用法。不把它当 EOF 的话，调用方写完、完成了 writer，
+远端等着读完输入的程序（`cat`、`sort`、`tar x`）会一直等下去 —— 而调用方那边看不出任何错。
 
 ### 4.4 读完与断线
 
@@ -361,7 +369,7 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 | 5–8 | `uint32` ×4 | 宽(列) ‖ 高(行) ‖ 宽(像素) ‖ 高(像素) |
 
 〔决策〕**像素尺寸是一等公民，不恒为 0。**
-`TerminalSize` 是一个带四个字段的只读结构体，从 `OpenShellAsync` 一路贯通到 `Resize`。
+`SshTerminalSize` 是一个带四个字段的只读结构体，从 `OpenShellAsync` 一路贯通到 `ResizeAsync`。
 
 理由：依赖像素尺寸的程序是真实存在的 —— sixel 图像、kitty 图形协议、
 以及任何要按像素排版的 TUI。把它写死成 0 就等于告诉远端「不知道」，
@@ -386,7 +394,7 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 ```
 
 - opcode 1–159 带 `uint32` 参数；160–255 保留（遇到未知的直接停止解析）。
-- 〔决策〕opcode 表放在 `Protocol/TerminalModeOpcode.cs`，
+- 〔决策〕opcode 表放在 `Channels/SshTerminalModeOpcode.cs`，
   常用的（`VINTR`=1、`VERASE`=3、`ECHO`=53、`ICRNL`=36、`ONLCR`=72、
   `IUTF8`=42、`ISPEED`=128、`OSPEED`=129）给具名成员，其余允许传裸数值。
 - **必须**以 `TTY_OP_END`（0）结尾。漏掉这个字节，OpenSSH 会拒绝整个 `pty-req`。
@@ -413,7 +421,7 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 
 - 进程被信号杀死 → 只有 `exit-signal`，没有 `exit-status`。
 - 连接中断 → 两个都没有。
-- 因此 `SshCommandResult.ExitCode` 必须是 `int?` 而不是 `int`。
+- 因此 `SshExitStatus.ExitCode` 必须是 `int?` 而不是 `int`。
   〔决策〕**不把信号编成 128+n 这样的伪退出码** —— 那是 shell 的约定，
   不是 SSH 的；伪造它会让「进程返回 137」和「进程被 KILL」无法区分。
 

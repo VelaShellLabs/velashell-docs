@@ -116,7 +116,7 @@ OpenSSH defaults to this as well (`GatewayPorts no`).
 
 Local and dynamic forwarding share the same listener (`PortForwarder`); the following holds for both.
 
-〔Decision〕**Back off when accepting fails.** When accepting an inbound connection fails, raise one `Error` (`accept`), then wait before accepting again:
+〔Decision〕**Back off when accepting fails.** When accepting an inbound connection fails, raise one `Error` (`ForwardErrorReason.Accept`), then wait before accepting again:
 50 ms the first time, doubling each time after that, capped at 1 second; one successful accept resets it.
 Failures such as file-descriptor exhaustion (EMFILE) come back immediately and repeatedly — without a wait this is a loop that pins a core and raises tens of thousands of error events per second,
 and it happens exactly when the machine is already under pressure.
@@ -179,8 +179,8 @@ A failure without a reason code (for example our own channel count or window bud
 
 ### 3.3 Handshake time limit
 
-〔Decision〕**The SOCKS handshake has a time limit** (`PortForwardOptions.SocksHandshakeTimeout`, 30 seconds by default):
-from accepting the connection until the `CONNECT` request has been read. On timeout that connection is closed and `Error` (`socks`) is raised; the forwarder keeps running.
+〔Decision〕**The SOCKS handshake has a time limit** (`LocalPortForwardOptions.SocksHandshakeTimeout`, 30 seconds by default):
+from accepting the connection until the `CONNECT` request has been read. On timeout that connection is closed and `Error` (`ForwardErrorReason.SocksHandshake`) is raised; the forwarder keeps running.
 Every client that connects and says nothing holds a concurrency slot for nothing; without a limit, once they fill the cap (§8) no legitimate connection gets in.
 Browsers and `curl` send the handshake as soon as they connect; 30 seconds is plenty.
 
@@ -192,7 +192,7 @@ Browsers and `curl` send the handshake as soon as they connect; 30 seconds is pl
 
 ```mermaid
 sequenceDiagram
-    participant F as RemoteForwarder
+    participant F as RemotePortForwarder
     participant S as SSH server
     participant R as Remote client
 
@@ -277,22 +277,25 @@ Once the SSH connection drops, the server's listener disappears with it, and the
 
 > This is the most direct benefit of this library over the existing implementation.
 
-`PortForwarder` exposes:
+`PortForwarder` (the common base class of `LocalPortForwarder` and `RemotePortForwarder`) exposes:
 
 ```
 ForwardKind Kind { get; }
-EndPoint?   BoundEndPoint { get; }      // with port 0, this holds the actual port
+EndPoint?   BoundEndPoint { get; }      // local forwarding: with port 0, this holds the actual port (remote forwarding uses BoundPort)
 bool        IsActive { get; }
 
 int  ActiveConnections { get; }
 long TotalConnections  { get; }
-long BytesUp   { get; }                 // local → remote
-long BytesDown { get; }                 // remote → local
+long BytesSent     { get; }             // local → remote
+long BytesReceived { get; }             // remote → local
 
 event EventHandler<ForwardConnectionEventArgs> ConnectionOpened;
 event EventHandler<ForwardConnectionEventArgs> ConnectionClosed;   // includes that connection's byte counts and duration
 event EventHandler<ForwardErrorEventArgs>      Error;              // a single connection failed; the forwarder keeps running
 ```
+
+`ForwardErrorEventArgs.Reason` is the enum `ForwardErrorReason` (`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
+`TargetConnect` / `Relay`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
 
 Also published through `System.Diagnostics.Metrics`:
 
@@ -378,9 +381,9 @@ The window is only a credit, not memory allocated up front; ordinary messages ar
 〔Decision〕Three hard constraints:
 
 1. **Off by default**; must be explicitly enabled per connection.
-2. **Must support "forward only the specified keys"** (`AgentForwardPolicy.AllowedKeys`)
+2. **Must support "forward only the specified keys"** (`AgentForwardOptions.AllowedKeys`)
    instead of exposing the entire agent.
-3. **An optional signature confirmation callback** (`AgentForwardPolicy.ConfirmEachSignature`):
+3. **An optional signature confirmation callback** (`AgentForwardOptions.ConfirmEachSignature`):
    ask the user each time the remote requests a signature. For jump-host scenarios this is the only approach that lets people rest easy.
 
 〔Decision〕**The allow-list compares the key inside a certificate.** A certificate and its key use the same private key: allowing the key allows its certificate,
@@ -689,14 +692,14 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | `tcpip-forward` rejected | Throw; the message points out "the server may have disabled AllowTcpForwarding / GatewayPorts" |
 | Channel open fails for a single connection | Raise the `Error` event, close that one inbound connection, **the forwarder keeps running** |
 | A single connection fails while relaying | Both sides aborted together (local RST, channel `CLOSE` without `EOF`), `Error` raised, the forwarder keeps running (§2.2) |
-| Accepting inbound connections fails repeatedly (e.g. EMFILE) | `Error` (`accept`) each time; back off starting at 50 ms, doubling, capped at 1 second, then accept again (§2.4) |
+| Accepting inbound connections fails repeatedly (e.g. EMFILE) | `Error` (`ForwardErrorReason.Accept`) each time; back off starting at 50 ms, doubling, capped at 1 second, then accept again (§2.4) |
 | SSH session disconnected | Local/dynamic forwards close the listener and release the port; every forwarder's `IsActive` becomes false; in-flight connections are aborted as errors. The forwarder raises no separate `Error` for the disconnect (§2.4, §4.5) |
 | Invalid SOCKS handshake | Close that one, count it in `errors`, the forwarder keeps running |
 | Zero-length domain name in a SOCKS request | Reply `0x08`, close that one (§3.1) |
-| SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`socks`), the forwarder keeps running (§3.3) |
+| SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`ForwardErrorReason.SocksHandshake`), the forwarder keeps running (§3.3) |
 | No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(1)`; `(3)` when the connection has no remote forward at all |
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
-| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`too-many-connections`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
+| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
 
 〔Decision〕**A single connection's failure must never affect the forwarder itself.**

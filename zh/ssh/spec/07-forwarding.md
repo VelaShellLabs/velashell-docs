@@ -114,7 +114,7 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 
 本地转发与动态转发共用同一个监听器（`PortForwarder`），下面几条对两者都成立。
 
-〔决策〕**接受失败要退避。** 接受入站连接失败时报一条 `Error`（`accept`），然后等一下再接：
+〔决策〕**接受失败要退避。** 接受入站连接失败时报一条 `Error`（`ForwardErrorReason.Accept`），然后等一下再接：
 第一次 50 ms，之后逐次翻倍，封顶 1 秒；接到一条就归零。
 文件句柄耗尽（EMFILE）这类失败会立刻、反复地再来 —— 不等的话就是一个满核空转、每秒上万条错误事件的循环，
 而它恰恰发生在机器已经吃紧的时候。
@@ -177,8 +177,8 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 
 ### 3.3 握手时限
 
-〔决策〕**SOCKS 握手有时限**（`PortForwardOptions.SocksHandshakeTimeout`，默认 30 秒）：
-从接下这条连接起，到读完 `CONNECT` 请求为止。超时就关掉这一条，报 `Error`（`socks`），转发器继续跑。
+〔决策〕**SOCKS 握手有时限**（`LocalPortForwardOptions.SocksHandshakeTimeout`，默认 30 秒）：
+从接下这条连接起，到读完 `CONNECT` 请求为止。超时就关掉这一条，报 `Error`（`ForwardErrorReason.SocksHandshake`），转发器继续跑。
 连上来一句不说的客户端，每个都白占一个并发名额；没有时限的话，占满上限（§8）之后正经的连接一条也进不来。
 浏览器与 `curl` 连上就发握手，30 秒绰绰有余。
 
@@ -190,7 +190,7 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 
 ```mermaid
 sequenceDiagram
-    participant F as RemoteForwarder
+    participant F as RemotePortForwarder
     participant S as SSH 服务端
     participant R as 远端客户
 
@@ -275,22 +275,25 @@ SSH 连接断了之后，服务端的监听随之消失，本机没有要放的�
 
 > 这是本库相对现有实现最直接的一处收益。
 
-`PortForwarder` 对外提供：
+`PortForwarder`（`LocalPortForwarder` 与 `RemotePortForwarder` 的共同基类）对外提供：
 
 ```
 ForwardKind Kind { get; }
-EndPoint?   BoundEndPoint { get; }      // 端口 0 时这里是实际端口
+EndPoint?   BoundEndPoint { get; }      // 本地转发：端口 0 时这里是实际端口（远程转发是 BoundPort）
 bool        IsActive { get; }
 
 int  ActiveConnections { get; }
 long TotalConnections  { get; }
-long BytesUp   { get; }                 // 本机 → 远端
-long BytesDown { get; }                 // 远端 → 本机
+long BytesSent     { get; }             // 本机 → 远端
+long BytesReceived { get; }             // 远端 → 本机
 
 event EventHandler<ForwardConnectionEventArgs> ConnectionOpened;
 event EventHandler<ForwardConnectionEventArgs> ConnectionClosed;   // 含该连接的字节数与时长
 event EventHandler<ForwardErrorEventArgs>      Error;              // 单条连接失败，转发器仍在跑
 ```
+
+`ForwardErrorEventArgs.Reason` 是枚举 `ForwardErrorReason`（`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
+`TargetConnect` / `Relay`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
 
 同时走 `System.Diagnostics.Metrics`：
 
@@ -376,9 +379,9 @@ Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者�
 〔决策〕三条硬约束：
 
 1. **默认关闭**，必须逐连接显式开启。
-2. **必须支持「只转发指定的密钥」**（`AgentForwardPolicy.AllowedKeys`），
+2. **必须支持「只转发指定的密钥」**（`AgentForwardOptions.AllowedKeys`），
    而不是把整个 agent 暴露出去。
-3. **可选的签名确认回调**（`AgentForwardPolicy.ConfirmEachSignature`）：
+3. **可选的签名确认回调**（`AgentForwardOptions.ConfirmEachSignature`）：
    每次远端请求签名时问一次使用者。对跳板场景这是唯一能让人安心的做法。
 
 〔决策〕**放行名单按证书里的那把钥比较。** 证书与它的钥用的是同一把私钥：放行了钥就等于放行了它的证书，
@@ -679,14 +682,14 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | `tcpip-forward` 被拒 | 抛，消息里点明「服务端可能禁用了 AllowTcpForwarding / GatewayPorts」 |
 | 单条连接的通道打开失败 | 触发 `Error` 事件，关掉这一条入站，**转发器继续跑** |
 | 单条连接搬运中出错 | 两侧一起中止（本机 RST，通道不带 `EOF` 的 `CLOSE`），触发 `Error`，转发器继续（§2.2） |
-| 接受入站连接反复失败（如 EMFILE） | 每次触发 `Error`（`accept`），退避 50 ms 起、翻倍、封顶 1 秒再接（§2.4） |
+| 接受入站连接反复失败（如 EMFILE） | 每次触发 `Error`（`ForwardErrorReason.Accept`），退避 50 ms 起、翻倍、封顶 1 秒再接（§2.4） |
 | SSH 会话断开 | 本地/动态转发关监听、放出端口；所有转发器 `IsActive` 变 false；在途连接按出错中止。转发器不因断线另发 `Error`（§2.4、§4.5） |
 | SOCKS 握手非法 | 关掉这一条，计入 `errors`，转发器继续 |
 | SOCKS 请求里的域名长度为 0 | 回 `0x08`，关掉这一条（§3.1） |
-| SOCKS 握手超时（默认 30 秒） | 关掉这一条，触发 `Error`（`socks`），转发器继续（§3.3） |
+| SOCKS 握手超时（默认 30 秒） | 关掉这一条，触发 `Error`（`ForwardErrorReason.SocksHandshake`），转发器继续（§3.3） |
 | `forwarded-tcpip` 找不到对应转发器 | 回 `CHANNEL_OPEN_FAILURE(1)`；这条连接上一个远程转发都没有时回 `(3)` |
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
-| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`too-many-connections`）。远程转发：回 `CHANNEL_OPEN_FAILURE(1)`；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
+| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(1)`；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |
 
 〔决策〕**单条连接的失败绝不影响转发器本身。**

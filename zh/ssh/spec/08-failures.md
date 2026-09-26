@@ -42,29 +42,46 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 ├── SshAuthenticationException        认证失败 —— 带逐方法尝试记录
 ├── SshProtocolException              对端违反协议
 ├── SshConnectionClosedException      连接已断（对端关闭 / 保活判死 / 收到 DISCONNECT / 本端中止 / 重协商时换了主机密钥）
-├── SshChannelException               通道打不开 —— 带原因码与对端原文
-├── SshCommandFailedException         远端命令没有成功结束（EnsureSuccess）—— 带完整输出
+├── SshChannelException               通道打不开，或通道上的请求被拒 —— 带原因码与对端原文
+├── SshCommandFailedException         远端命令没有成功结束（EnsureSuccess）—— 带完整结果
 ├── SshForwardException               转发器起不来
-├── SshPublicKeyException             公钥 blob 解析失败 / 类型不支持
-├── SshPrivateKeyException            私钥文件读不出来 —— 带 NeedsPassphrase
-├── SshCertificateException           证书读不出来
+├── SshPublicKeyException             公钥 blob / 文本解析失败、类型不支持
+├── SshPrivateKeyException            私钥文件读不出来、解不开 —— 带 NeedsPassphrase
+├── SshCertificateException           证书读不出来，或与私钥不是一对
 ├── SshAgentException                 连不上 agent，或 agent 拒绝了
 ├── SftpException                     SFTP 操作失败 —— 带 StatusCode 与服务端原文 ServerMessage
 ├── SftpTransferInterruptedException  传输中断 —— **带 DurableLength**
 └── SftpUnavailableException          SFTP 子系统起不来
 ```
 
-下面这些类型的 `Reason` 与 `Phase` 是固定的；其余的随具体失败而定。
+下面这些类型只对应一种失败，`Reason` 与 `Phase` 是固定的：
 
 | 类型 | `Reason` | `Phase` |
 | --- | --- | --- |
 | `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
 | `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
-| `SshPublicKeyException` | `Unsupported` | `KeyExchange` |
-| `SshPrivateKeyException`、`SshCertificateException`、`SshAgentException` | `Unsupported` | `Authenticating` |
-| `SshForwardException`、`SftpUnavailableException` | `Unsupported` | `Open` |
+| `SftpUnavailableException` | `Unsupported` | `Open` |
 | `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
-| `SshCommandFailedException` | `Unknown` | `Open` |
+| `SshCommandFailedException` | `CommandFailed` | `Open` |
+
+下面这些 `Phase` 固定，`Reason` **按实情报**：
+
+| 类型 | `Reason` | `Phase` |
+| --- | --- | --- |
+| `SshPublicKeyException` | `KeyFormatInvalid`、`Unsupported`（类型不支持） | `None` |
+| `SshPrivateKeyException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyPassphraseRequired`、`KeyPassphraseIncorrect`、`Unsupported` | `None` |
+| `SshCertificateException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyMismatch`、`Unsupported` | `None` |
+| `SshAgentException` | `AgentUnavailable`、`AgentRefused`、`LimitExceeded`（要加的钥超出报文上限）、`ProtocolError` | `Authenticating` |
+| `SshChannelException` | `ChannelOpenFailed`（带 `OpenFailureReason`）、`ChannelRequestRejected` | `Open` |
+| `SshForwardException` | `ForwardRejected`、`ForwardBindFailed`、`ForwardSetupFailed`、`LimitExceeded`、`ProtocolError` | `Open` |
+
+读私钥、读证书、解析公钥发生在连接之外（也可能根本没有连接），所以 `Phase` 是 `None`。
+密钥交换里解析对端的主机密钥失败时，由密钥交换把它包成 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`。
+
+〔决策〕**`Reason` 必须说真话，不许写死。**曾经私钥、证书、agent、转发的异常一律报 `Unsupported`，
+exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功了），跳板成环报成可重试的 `ProxyRefused`。
+调用方于是只能去解析消息句子 —— 而消息是写给开发者的诊断文本，不是界面文案，也不承诺措辞稳定。
+没有合适的值就加一个，不借一个相近的；只有异常类型本身只对应一种失败时才在类型里固定（上面第一张表）。
 
 主机密钥被拒没有专门的类型：它是 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`，策略给的原因就是它的 `Message`（§3）。
 
@@ -76,9 +93,10 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 〔决策〕**`SshPublicKeyException` 与 `SshKeyExchangeException` 都派生自 `SshException`。**
 两者都曾经直接派生自 `Exception`：调用方用 `catch (SshException)` 兜库的失败时漏掉它们，宿主的异常翻译也认不出；
 `SshKeyExchangeException` 在建连时还会原样漏给调用方。
-`SshPublicKeyException` 的 `Phase` 记 `KeyExchange`，因为它最常见于解析对端出示的主机密钥（读本地 `.pub` 时这个阶段只是个大概）。
+`SshPublicKeyException` 的 `Phase` 记 `None`（见上一段）；它曾经记 `KeyExchange`，读本地 `.pub` 时那个阶段并不成立。
 `SshKeyExchangeException` 的 `Reason` 记 `ProtocolError`：它报的几乎总是对端给的公开值不合法（长度不对、不在曲线上、弱值）；
-「算法没实现」那一类在连接之前就被 `SshAlgorithmSet.Validate()` 挡住了。
+「算法没实现」那一类在连接之前就被挡住了（`SshConnection.ConnectAsync` 先核对算法清单）。
+清单与实现表万一对不上，那是库自己的编程错误，报 `InvalidOperationException`，不借 `SshException` 的名义。
 
 ### 2.1 连接中途断掉：原因先归成公开类型
 
@@ -129,25 +147,39 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 | `TcpTimeout` | 连接超时 | ✔ | 检查防火墙/网络 |
 | `TcpUnreachable` | 网络不可达 | ✔ | |
 | `ProxyRefused` | 代理拒绝转发 | ✔ | **见 §5.2** |
-| `ProxyAuthRequired` | 代理要求认证 | ✘ | 配置代理凭据 |
+| `ProxyAuthRequired` | 代理要求认证：没配凭据，或凭据被拒 | ✘ | 配置（或改对）代理凭据 |
 | `NotAnSshServer` | 对端不说 SSH | ✘ | 端口连错了 |
 | `VersionMismatch` | 协议版本不是 2.0 | ✘ | |
 | `NegotiationFailed` | 算法无交集 | ✘ | **见 §5.1** |
-| `HostKeyRejected` | 主机密钥被拒（`SshConnectException`，`Phase` 为 `KeyExchange`）：策略拒绝 —— **首次连接时密钥变了、被 `@revoked`、或只记着别的类型都属于这一类**；`K_S` 解析不了、签名验不过、RSA 太短、与协商出的算法对不上（含协商出证书算法而 `K_S` 不是证书，或反过来）；有 CA 担保的主机证书不合格（`03-key-exchange.md` §5.5） | ✘ | 看 `Message`：策略给的原因（`SshHostKeyVerdict.Reason`）原样放在里面；`KnownHostsPolicy` 写明是变了、作废了还是只记着别的类型，附指纹与 `known_hosts` 行号 |
-| `HostKeyChanged` | **只在重协商时出现**：对端出示的主机密钥与首次交换时钉住的不同（`03-key-exchange.md` §8.4）。连接以 `SshConnectionClosedException`（`Phase` 为 `Rekeying`）断开，消息里有新旧指纹 | ✘ | 连接中途换主机密钥没有正当场景：不要自动重连，按可能的中间人处理 |
+| `HostKeyRejected` | 主机密钥被拒（`SshConnectException`，`Phase` 为 `KeyExchange`）：策略拒绝（`SshHostKeyVerdict.Reject`）—— 没见过而不许问、使用者拒绝、被 `@revoked`、指纹不在白名单；`K_S` 解析不了、签名验不过、RSA 太短、与协商出的算法对不上（含协商出证书算法而 `K_S` 不是证书，或反过来）；有 CA 担保的主机证书不合格（`03-key-exchange.md` §5.5） | ✘ | 看 `Message`：策略给的原因（`SshHostKeyVerdict.Message`）原样放在里面，附指纹与 `known_hosts` 行号 |
+| `HostKeyChanged` | 主机密钥**变了**，两种处境：① 首次交换时策略用 `SshHostKeyVerdict.RejectChanged` 拒绝 —— `KnownHostsPolicy` 在记着的密钥变了、或只记着别的类型时这么报（`SshConnectException`，`Phase` 为 `KeyExchange`，消息里有新旧指纹与行号）；② 重协商时对端出示的主机密钥与首次交换时钉住的不同（`03-key-exchange.md` §8.4），连接以 `SshConnectionClosedException`（`Phase` 为 `Rekeying`）断开 | ✘ | 可能是中间人：不要自动重连，也不要给「信任并记住」的捷径 —— 服务器确实重装了的话，让人去 `known_hosts` 删掉旧的那一行 |
 | `AuthenticationFailed` | 某次认证尝试失败 | ✔ | |
 | `AuthenticationMethodExhausted` | 所有方法试完 | ✘ | **见 §5.3** |
 | `TwoFactorRequired` | 服务端要 keyboard-interactive 而我们没配 | ✘ | 提示「这台机器需要动态码」 |
 | `PasswordExpired` | 服务端要求改密码 | ✘ | |
+| `KeyFileUnreadable` | 私钥 / 证书 / 公钥文件读不出来（不存在、没有权限、IO 错误） | ✘ | 消息里有路径 |
+| `KeyFormatInvalid` | 私钥 / 证书 / 公钥的内容格式不对（损坏、截断、参数不成立） | ✘ | |
+| `KeyPassphraseRequired` | 加密的私钥需要口令，而没有给 | ✘ | 弹口令输入框（`SshPrivateKeyException.NeedsPassphrase`） |
+| `KeyPassphraseIncorrect` | 给了口令，但解不开这把私钥 | ✘ | 再问一次口令 |
+| `KeyMismatch` | 凭据材料对不上：证书里的公钥与私钥不是一对、拿主机证书去登录 | ✘ | 证书要与签发时用的那把私钥一起用 |
+| `AgentUnavailable` | 找不到或连不上 ssh-agent，或它的端点不可信 | ✘ | 检查 agent 是否在跑 |
+| `AgentRefused` | ssh-agent 拒绝了请求（`ssh-add -c` 的确认被拒、agent 被锁、钥已不在） | ✘ | |
 | `Timeout` | 某阶段超时 | ✔ | |
 | `KeepAliveTimeout` | 保活判死 | ✔ | **自动重连只该对这一类生效** |
 | `ClosedByPeer` | 对端主动关闭 | ✔ | |
 | `Disconnected` | 收到 `SSH_MSG_DISCONNECT` | ✘ 〔未实现：本想按 `DisconnectReason` 细分，目前一律不可重试〕 | 原因码在 `SshConnectionClosedException.DisconnectReason`，对端原话在 `PeerDescription` |
 | `ProtocolError` | 对端违反协议 | ✘ | |
-| `ChannelOpenFailed` | 通道打不开 | ✘ 〔未实现：本想按原因码细分，目前一律不可重试〕 | |
+| `ChannelOpenFailed` | 通道打不开（`CHANNEL_OPEN_FAILURE`，原因码在 `OpenFailureReason`） | ✘ 〔未实现：本想按原因码细分，目前一律不可重试〕 | |
+| `ChannelRequestRejected` | 通道开成了，但通道上的 `exec` / `pty-req` / `shell` / `subsystem` 被拒 | ✘ | 看服务端的 `ForceCommand`、`PermitTTY`、`Subsystem` 配置 |
+| `ForwardRejected` | 服务端不接受转发请求（`AllowTcpForwarding no`、`AllowAgentForwarding no` 之类），或本端拒绝了对不上任何转发的入站通道 | ✘ | |
+| `ForwardBindFailed` | 本机的监听端口开不了（被占用、没有权限） | ✘ | 换一个端口 |
+| `ForwardSetupFailed` | 本机一侧准备转发失败：拿不到 X 显示、`xauth` 跑不起来或失败 | ✘ | |
+| `LimitExceeded` | 本端的某个并发上限到了（转发连接数、agent / X11 通道数） | ✘ | |
+| `CommandFailed` | 远端命令没有以退出码 0 结束（`SshCommandResult.EnsureSuccess` 抛的 `SshCommandFailedException`） | ✘ | 看 `Result`：stderr、退出码或信号 |
+| `InvalidConfiguration` | 配置本身不成立：`ProxyJump` 成环、跳数超限、`ProxyCommand` 模板非法 | ✘ | 改配置 —— 不改的话下一次还是一样 |
 | `Aborted` | 本端中止（Dispose / 取消） | ✘ | |
-| `Unsupported` | 请求的能力对端不支持 | ✘ | |
-| `Unknown` | 未分类：连接因意外错误中断（§2.1）；远端命令没有成功结束（`SshCommandFailedException`） | ✘ | 看 `InnerException`；命令失败看 `Output` |
+| `Unsupported` | 请求的能力（算法、密钥类型、格式版本）对端或本库不支持 | ✘ | |
+| `Unknown` | 未分类：连接因意外错误中断（§2.1） | ✘ | 看 `InnerException` |
 
 〔决策〕**`IsRetryable` 是库给的建议，不是承诺。** 它表达的是
 「这个失败是否可能因为重试而消失」，不表达「应该重试」——
