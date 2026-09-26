@@ -219,19 +219,82 @@ flowchart TD
 
 ### 窗口壳
 
-主窗是**自绘无边框窗口**（`WindowDecorations="None"`），**不是原生 chrome**。
+主窗在 Windows 与 Linux 上是**自绘无边框窗口**（`WindowDecorations="None"`），**不是原生 chrome**；
+macOS 上改用系统外框与原生红绿灯，见下文「各平台的外框」。
 
-> ⚠️ 这是踩出来的结论，不要试图改回去。Avalonia 12.x 的 `ExtendClientArea` /
+> ⚠️ 这是在 **Windows（Win32）** 上踩出来的结论，不要在 Windows 上试图改回去。Avalonia 12.x 的 `ExtendClientArea` /
 > `WindowDecorationsElementRole` 托管装饰在 Win32 上会拦截标题栏输入（按钮点不动、窗口拖不动），
-> `BorderOnly` 还丢 `WS_CAPTION`（HTCAPTION 拖动与最小 / 最大化动画失效）。整套机制不可用。
+> `BorderOnly` 还丢 `WS_CAPTION`（HTCAPTION 拖动与最小 / 最大化动画失效）。整套机制在 Win32 上不可用。
+> 这条只管 Win32：macOS 与 Linux 的外框走各自的原生机制（下一小节），与它不冲突。
 > 另一处坑：`VisualRoot as Window` **恒为 null**（视觉根是 TopLevelHost），
 > 取窗口必须走逻辑树 `FindLogicalAncestorOfType<Window>()` —— 这条曾让标题栏按钮「看似无输入」数小时。
 
-改以**自绘 + 原生行为补齐**：`Views/TitleBarView` 画 36px 标题栏（左 logo + 产品名，
+改以**自绘 + 原生行为补齐**：`Views/TitleBarView` 画 28px 标题栏（左 logo + 产品名，
 右 全局功能图标组 + 自绘最小化 / 最大化 / 关闭），
 空白区 `BeginMoveDrag`（原生移动循环，Win11 边缘贴靠有效）、双击切最大化、
 **Win11 Snap Layouts 经 `MainWindow` 的 WndProc 钩子处理 `HTMAXBUTTON`**、
-窗口四周 5px + 四角 10px 自绘缩放抓取区（最大化时关闭）。全部对话框同为自绘无边框。
+窗口四周 5px + 四角 10px 自绘缩放抓取区（最大化时关闭）。Windows 上全部对话框同为自绘无边框。
+
+#### 各平台的外框
+
+透明窗口 + 卡片 16px 边距 + 在边距里自绘 `VelaShadowWindow` 的写法只在 Windows 上成立：DWM 对无边框透明窗口什么都不加。
+Linux 的合成器只知道整个窗口矩形，会沿它描边、切圆角、做背景模糊，透明边距就成了卡片外面的一圈「空白」；
+不支持透明的 X11（WSLg 即是）干脆把那圈边距画成实色。macOS 的 `None` 没有系统阴影与圆角，
+而透明窗口在 macOS 上滚动掉帧，只能不透明 —— 结果是没有阴影的直角矩形。所以每个平台改用自己的原生机制：
+
+|            | Windows | macOS | Linux 原生 Wayland | Linux X11（含从 Wayland 回退） |
+|------------|---------|-------|--------------------|-------------------------------|
+| 主窗口     | 自绘无边框（同上） | `Full` + `ExtendClientAreaToDecorationsHint`：原生红绿灯、系统圆角与阴影；自绘的三个窗口按钮与缩放抓取区关闭，标题栏左侧给红绿灯让位（全屏时撤掉）、高度跟系统标题栏一致（当前 28pt），红绿灯与标题同一条中线 | 自绘无边框 | 自绘无边框 |
+| 模态对话框 | 透明窗口 + 卡片 16px 边距 + 自绘阴影 | `BorderOnly` + 扩展客户区：系统圆角与阴影、不显示红绿灯、窗口不透明 | `BorderOnly` + 装饰主题 `VelaWaylandWindowDecorations`：Avalonia 画 16px 阴影与 1px 描边，并经 `xdg_surface.set_window_geometry` 告诉合成器真正的窗口范围 | 不透明直角矩形 |
+| 非模态窗口 | 同对话框 | `Full` + 扩展客户区：原生红绿灯，自绘的窗口按钮隐去、标题栏左侧让位 | 同对话框 | 同对话框 |
+
+最大化 / 全屏时，卡片在各平台都铺满成直角。自绘的缩放抓取区只在普通态、且系统不提供边缘缩放时出现：
+macOS 的系统外框与 Wayland 的装饰层都自带（主窗口在 Wayland 上仍是 `None`，照用自绘的）。
+
+**实现**：窗口构造时调 `WindowChrome.Apply(window, kind[, 缩放抓取区])`（`Views/WindowChrome.cs`），
+按平台设装饰模式、透明度、背景（Wayland 还有装饰主题），跟着窗口状态走，并给窗口挂样式类：
+平台类 `chrome-windows` / `chrome-macos` / `chrome-wayland` / `chrome-x11`；`chrome-traffic-lights`（显示系统红绿灯）；
+`window-card-flat`（卡片是直角：macOS / X11 恒是，最大化 / 全屏时各平台都是）；`window-fullscreen`。
+XAML 这一侧的约定（样式在 `Themes/WindowChrome.axaml`）：
+
+- 卡片写 `Classes="window-card"`，边距、圆角、描边、阴影一律不写 —— 本地值优先级高于样式，写死了就不跟着平台切换；
+- 贴着卡片四角、有不透明背景的子元素（标题栏、状态栏、左侧导航……）不写 `CornerRadius`，改挂
+  `window-card-top` / `-bottom` / `-left` / `-right` / `-bottom-left`：卡片圆角时取内半径 7，直角时跟着直角；
+- 非模态窗口自绘的最小化 / 最大化 / 关闭挂 `window-caption`，标题栏最左边放一个
+  `<Panel Classes="traffic-light-spacer" />` 给红绿灯让位；
+- **全部窗口的标题栏一个高度**（主窗口、独立窗口、对话框，2026-09-26 起统一为 28）：标题栏挂 `window-titlebar`，
+  高度只在样式里定一处，XAML 里不写、标题行用 `Auto`；窗口按钮是 27×27 的方块（边长 = 标题栏 − 1px 底边）。
+  放不下的副标题与操作按钮挪到标题栏下面一行（资源监视、录制回放、远程编辑、连接诊断）。
+  macOS 上显示红绿灯的窗口改成系统标题栏的实际高度（`WindowDecorationMargin.Top`，当前也是 28），
+  红绿灯位置改不了，只能让标题栏去对齐它。
+  两处例外，头部没有窗口按钮、不算标题栏，保持 48：设置窗口左上角那条是左侧导航的抬头兼拖动区；
+  消息框（提示 / 确认 / 输入）没有关闭按钮，关闭一律走按钮栏或 Esc。
+
+窗口尺寸按 Windows 写（含 16px 边距），macOS / X11 上宽高各减 32，Wayland 上各减 34
+（Wayland 未扩展客户区时 `Width` / `Height` 只算内容，1px 描边画在外面），卡片的可见尺寸三个平台一致；
+代码里另有按 Windows 口径写的尺寸时（插件声明的面板窗口尺寸、新建连接窗口的高度上限），用 `WindowChrome.SizeReductionOf` 减掉。
+隔离插件的窗口在另一个进程里（`VelaShell.PluginHost` 的 `PluginHostShellWindow`），按依赖纪律不引用主程序，
+同一套规则在那里用代码另写了一份（Wayland 的装饰主题也是代码构建的）。
+`WindowChromeCoverageTests` 扫描全部窗体，防止写死的外框回来。
+
+**依据**（Avalonia 12.1.3 源码）：
+
+- **macOS**：`None` 关掉系统阴影、没有标题栏样式，也就没有系统圆角；`BorderOnly` 是 `Titled | FullSizeContentView`、有系统阴影；
+  红绿灯只在 `Full` 时显示，位置不能调（`ExtendClientAreaTitleBarHeightHint` 只改标题栏背景材质的高度）。
+  扩展客户区时按下左键，先对界面做命中测试：命中按钮就是普通点击，只有什么都没命中、或命中 `TitleBar` 角色的元素，
+  才交给系统拖动 / 双击缩放 —— 标题栏右上的功能按钮照常可点。
+- **Wayland**：非 `Full` 时永久切到客户端装饰；`BorderOnly` 画阴影、描边、缩放抓取区，不画标题栏；
+  阴影宽度经 `set_window_geometry` 交给合成器，合成器以描边为窗口边界（GTK4 程序同样这么做）。
+  不要在同一个窗口上来回切换外框模式。Avalonia 12.1.3 的 Wayland 后端要求合成器提供 `xdg_wm_base` 3 版以上，
+  WSLg 的 Weston 不满足，那里一律回退 X11。
+- **X11**：`BorderOnly` 同样会让 Avalonia 画装饰，但 X11 后端没有实现阴影范围，也不写 `_GTK_FRAME_EXTENTS`，
+  合成器拿到的仍是整个矩形，所以只能走不透明矩形。窗口句柄描述符是 `"XID"`，Wayland 后端不提供句柄，据此区分两者。
+
+**验收**：外框改造本身在 Windows 上与改造前逐像素一致（无头渲染对照，全部窗口的暗 / 亮两套主题；
+只有录制回放与远程编辑两扇窗的**最大化**态变了 —— 它们以前最大化时不铺满，现在与其它非模态窗口一致）。
+随后按用户要求把全部窗口的标题栏统一为 28，Windows 上的标题栏高度随之有意改变。
+macOS 上主窗口、设置窗口与消息框已实机验收（2026-09-26）；其余窗口按同一套机制接入，
+非模态窗口的红绿灯、统一 28 后的红绿灯对齐与 Linux 原生 Wayland 桌面待下一轮实机确认。
 
 文字菜单栏已整体移除，功能由命令面板（`Ctrl+P` / `Ctrl+K`）承担。
 
