@@ -71,18 +71,27 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
 ## 4. Layering
 
 ```
+Host/         Every public type, all in the root namespace VelaShell.XServer: IX11ServerHost, X11ServerOptions,
+              XTopLevelWindow with XTopLevelSnapshot / XTopLevelChanges / XFrameExtents, XCursor / XCursorShape / XCursorImage,
+              XKeymap, XMonitor, window-manager requests and enums, XKeycodes, XRect. Everything else is internal
 Protocol/     Constants (opcodes, event codes, error codes, masks, predefined atoms), byte-order-aware request
               reading and reply / event / error writing
-Server/       X11Server: listening (TCP 6000+N, Unix sockets) and ServeAsync (any duplex stream), connection setup and
-              authorization (MIT-MAGIC-COOKIE-1 / local only), single-threaded execution loop, connection backpressure,
-              deferred host callbacks (DeferredHost), client table and sequence numbers, GrabServer, BIG-REQUESTS lengths;
-              request handlers split into partial files by area (Windows / Exposure / Events / Properties / Graphics /
-              Text / Colors / Input / Extensions / Queries, plus one per extension: Shape / XFixes / RandR / Monitors /
-              Render / Damage / CompositeDbe / Sync / Present / Xkb / XkbSetMap / XInput / XiHierarchy / SyncGrabs /
-              XTest / ScreenSaver / Shm / Glx, the window-manager role in Ewmh, clipboard exchange in Clipboard, the
-              XSETTINGS manager in XSettings)
+Server/       X11Server: every public member lives in X11Server.cs (construction, lifecycle, host injection); the execution
+              loop (WorkLoop), listening and connections (Connection, UnixSocket: TCP 6000+N, Unix sockets and ServeAsync over
+              any duplex stream, connection setup and authorization MIT-MAGIC-COOKIE-1 / local only, backpressure, BIG-REQUESTS,
+              cleanup on disconnect), the resource table and XC-MISC (Resources), request dispatch (Dispatch), deferred host
+              callbacks (DeferredHost), the extension registry (Extensions: the numbering table, the check that event / error
+              numbers do not overlap, cleanup hooks for disconnects and destroyed windows, Generic Event);
+              request handlers split into partial files by area (Windows / Exposure / Events / Properties / Graphics / Text /
+              Colors / Cursors / Input / GrabFreeze, plus one or more per extension: Shape / XFixes / RandR / Monitors / Xinerama /
+              Render / Damage / Composite / Dbe / Sync / Present / Xkb / XkbSetMap / XInput / XiHierarchy / XTest / ScreenSaver /
+              Dpms / XRes / Shm), the top-level bridge to the host (TopLevels: handles, snapshots and their changes, damage
+              delivery, the host's window-manager actions), the window-manager role in Ewmh, clipboard exchange in Clipboard,
+              the XSETTINGS manager in XSettings; the self-contained GLX is a class of its own, GlxExtension
 Windowing/    Window model (tree, geometry, attributes, event selections, passive grabs, top-level buffer, the three SHAPE shapes)
-Resources/    GCs, pixmaps, colormaps, cursors, font handles, colour-name table, RENDER pictures and glyph sets
+Resources/    Resource types: GCs, pixmaps, colormaps, cursors, font handles, plus each extension's resources (RENDER pictures
+              and glyph sets, SYNC, DAMAGE, XFIXES regions, Present event contexts, MIT-SHM segments, GLX contexts and
+              drawables); the colour-name table
 Drawing/      32-bit software framebuffer, regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
               points / lines (thin Bresenham + wide-line polygons) / rectangles / scan-line polygon fill / arcs /
               image blocks / text; RENDER: pixel formats, compositing operators and blend modes, sources (image / solid /
@@ -91,11 +100,10 @@ Gl/           Software GL for GLX indirect rendering: render-command decoding, d
               clipping, triangle / line / point rasterization, textures, per-fragment operations, queries
 Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching, synthesized cursor and nil2 fonts
 Input/        Keycode ↔ keysym table (evdev-style keycodes), XKB evdev key names, modifier mapping, grab data structures (core and XI2)
-Host/         Host-facing API: IXServerHost, XTopLevelWindow, XServerOptions, XMonitor, window-manager requests and enums, XKeycodes
 ```
 
 Unix sockets: outside Windows the server listens on `/tmp/.X11-unix/X{N}` by default, and on Linux also on the same
-name in the abstract namespace (Xlib / XCB try that first for `:N`); `XServerOptions.UnixSocketPath` sets or disables it
+name in the abstract namespace (Xlib / XCB try that first for `:N`); `X11ServerOptions.UnixSocketPath` sets or disables it
 and `ListenTcp` can turn TCP off. A host font-provider interface does not exist yet: core fonts only serve older programs, modern toolkits use RENDER with client-side rasterization, and no program has needed it since the host integration.
 
 ## 5. Threading model
@@ -105,14 +113,14 @@ each request's effects are visible to everything after it. Therefore:
 
 - **One execution loop** (single thread, `Channel<work item>`) runs all requests, host input and timers. Protocol state
   takes no locks — all mutable state is touched only on that thread. The one thing shared across threads is top-level
-  pixels, guarded by `PixelLock`: the loop holds it for a batch within a **4 ms** time budget, then releases it so the
+  pixels, guarded by the pixel lock (not exposed publicly): the loop holds it for a batch within a **4 ms** time budget, then releases it so the
   host can copy pixels. A host reading pixels through `XTopLevelWindow.ReadPixels` / `CopyPixels` first registers that it is waiting:
   after every work item the loop checks, releases early if someone is waiting, and re-takes the lock only after the read finishes
   (bounded at 20 ms) — `lock` is unfair, the loop re-takes it within microseconds of releasing it, and a waiting UI thread could lose
   that race again and again, freezing the whole host UI.
 - **Host callbacks are never made while holding the lock**: notifications produced by the loop (map, geometry, damage,
   cursor, WM requests…) are queued in `DeferredHost` and invoked in order after the lock is released — so a host that
-  synchronously waits for its UI thread inside a callback, while that UI thread waits for the lock in `CopyPixels`,
+  synchronously waits for its UI thread inside a callback, while that UI thread waits for the lock in `ReadPixels`,
   cannot deadlock; a host callback that throws does not take the loop down either.
 - One **reader task** per connection (64 KB buffer) cuts complete requests by their length field and hands them to the
   loop; one **writer task** packs the messages the loop queued for that connection into one pooled buffer and writes it.
@@ -135,10 +143,10 @@ The library defines the interface and the host implements it; notifications flow
 
 | Direction | Content |
 | --- | --- |
-| Library → host | Top-level window mapped / unmapped / destroyed; geometry changes (client ConfigureWindow); title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent, override-redirect; non-rectangular outline (`XTopLevelWindow.Shape`, the SHAPE bounding shape, null when rectangular); window-manager hints (`WindowType`, `States`, `Decorated` — false for windows that draw their own title bar, min / max size and increments, icons, `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine / role, `HasAlpha`); clients' window-manager requests (`WindowManagerRequest`: interactive move / resize, state changes, activate, close, minimize — a default interface method, so existing hosts need no change); damage rectangles (the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); cursor shape (cursor-font glyph number, −1 default arrow, −2 hidden); bell; an X client copied text (`ClipboardChanged`) |
-| Host → library | The user moved / resized the native window (the library updates geometry and sends ConfigureNotify / Expose); close button (ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected); pointer motion / buttons / wheel (as buttons 4/5; 6 and up are horizontal wheel and side buttons); keys (X keycodes); focus in / out; the system clipboard has new text (`SetClipboardText`); window states and frame extents (`SetTopLevelStates` / `SetFrameExtents`, written back to `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`); monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and RESOURCE_MANAGER), keyboard layout (`SetKeyboardMapping`, sends MappingNotify and XKB notifications) |
+| Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle") | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction counts as unmapping); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: geometry, title, states, icons, shape, other hints). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` — geometry, title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent (`TransientFor`, another `XTopLevelWindow`), override-redirect, non-rectangular outline (`Shape`, the SHAPE bounding shape, null when rectangular), window-manager hints (`WindowType`, `States`, `Decorated` — false for windows that draw their own title bar, min / max size and increments, icons, `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine / role, `HasAlpha`); the server replaces it whole on every change, and the host reads it into a local before reading fields; clients' window-manager requests (`WindowManagerRequested`: interactive move / resize, state changes, activate, close, minimize — a default interface method); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB cursors); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies); an X client copied text (`ClipboardChanged`) |
+| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (the wheel as buttons 4/5; 6 and up are horizontal wheel and side buttons), pointer leaving, keys (X keycodes); window-manager actions, `*TopLevel`: focus (`FocusTopLevel`, null = no focus), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry and sends ConfigureNotify / Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected), window states and frame extents (`SetTopLevelStates` / `SetTopLevelFrameExtents`, written back to `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`); runtime configuration, `Set*`: the keymap (`SetKeymap`: one `XKeymap` carrying keysyms, the layout name and whether right Alt is AltGr, applied at once with a single round of MappingNotify and XKB notifications), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and RESOURCE_MANAGER), the system clipboard has new text (`SetClipboardText`) |
 
-Clipboard exchange is controlled by `XServerOptions.SyncClipboard` (CLIPBOARD, on by default) and `SyncPrimary`
+Clipboard exchange is controlled by `X11ServerOptions.SyncClipboard` (CLIPBOARD, on by default) and `SyncPrimary`
 (PRIMARY, off by default).
 
 **Every top-level window owns a pixel buffer** (effectively always-on backing store + Composite): child windows draw
@@ -162,7 +170,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   cookie it requires `MIT-MAGIC-COOKIE-1`, compared in constant time.
 - **Fonts**: core fonts come from the built-in BDFs (`fixed` / `6x13` / `9x15` / `10x20` and their XLFD names); later the
   host may add more through a font-provider interface (e.g. rasterizing Cascadia Mono into bitmap fonts). The `cursor`
-  font is virtual: metrics only, and the host maps glyph numbers to system cursors. Modern toolkits do not use core
+  font is virtual: metrics only; the library derives a semantic shape (`XCursorShape`) from the glyph number and the host picks a system cursor for it. Modern toolkits do not use core
   fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
 - **RENDER's general path composites per pixel in floating point; the two dominant cases use integer kernels**:
   premultiplied alpha, 0–1 per channel on the general path; solid source + one-byte mask + Over (Xft text, cairo's
@@ -172,7 +180,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   computed only over the writable part of the target. Source-picture clipping, alpha maps, poly-edge / poly-mode /
   dither are accepted but have no effect.
 - **RANDR is read-only for clients; the host supplies the layout**: one CRTC / output / mode per monitor
-  (`XServerOptions.Monitors` or `SetScreenLayout` at runtime), with change events sent per SelectInput when the layout
+  (`X11ServerOptions.Monitors` or `SetScreenLayout` at runtime), with change events sent per SelectInput when the layout
   changes; XINERAMA reports the same layout. Clients' configuration requests get Failed or BadAccess — in rootless mode
   the host decides where windows go and how monitors are arranged.
 - **The server doubles as the XSETTINGS manager**: it owns `_XSETTINGS_S0` and publishes `Xft/DPI`,
@@ -186,7 +194,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   properties being present.
 - **XKB is derived from the core keymap**: there is no separately maintained XKB keymap — the four canonical types (plus two four-level types for the AltGr level),
   modifier actions, SymInterprets, indicators and key names are all computed from the core table; when the core table
-  changes (xmodmap, the host's `SetKeyboardMapping`), XKB follows and sends MapNotify. XKB's SetMap writes the uploaded
+  changes (xmodmap, the host's `SetKeymap`), XKB follows and sends MapNotify. XKB's SetMap writes the uploaded
   keysyms (in the §17 column order) and modifier map back into the core table, which is then derived as usual; SetCompatMap,
   SetNames and the other mapping-change requests are not supported.
 - **XInput2's device topology can change, but this is not full multi-pointer X**: it starts with master pointer 2 / master
@@ -246,7 +254,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
 - **Expose errs on the side of more, not less**: when a child moves or restacks we repaint and send Expose for both the
   old and new areas instead of moving the old contents — clients must handle Expose anyway; one extra means one extra
   redraw, one missing means a dirty patch on screen.
-- **Synthesized fonts**: `cursor` (metrics only; the host maps glyph numbers to cursor shapes) and `nil2` (xterm's
+- **Synthesized fonts**: `cursor` (metrics only; cursor shapes are derived from the glyph numbers) and `nil2` (xterm's
   invisible pointer, all-blank glyphs) do not come from BDF files.
 - **M1 acceptance (2026-09-23)**: 40 unit tests; real clients `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` cause
   zero protocol errors and draw content; keyboard injection round-trips through xterm to `sh` in the container.
@@ -403,3 +411,33 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   and host pixel reads under load): full-window PutImage throughput +6–13 %, CPU −12–26 %; the in-process benchmark is bound by its test
   client and pipes, so the server-side savings show up mainly as CPU and lock-hold time, and the other scenarios are within noise. The
   host half (damage-only, per-frame, tiled uploads) is not covered by this benchmark.
+- **Host API clean-up (2026-09-25)**: an API review went over the public surface; where behaviour stays the same only the shape changed.
+  ① **One public surface**: every public type moved to the root namespace `VelaShell.XServer` (it used to be spread over `.Host`, `.Server` and
+  `.Drawing`), and every public member of `X11Server` now lives in `X11Server.cs`; `PixelLock` (unused, and locking it directly bypassed the yield)
+  and `XErrorCode` went back to internal. `XServerOptions` / `IXServerHost` became `X11ServerOptions` / `IX11ServerHost`, sharing the `X11Server`
+  prefix and no longer clashing with the host application's own `XServerOptions`; the options are a sealed class validated once at construction
+  (invalid values throw `ArgumentException`).
+  ② **Consistent naming**: host methods fall into three groups — `Inject*` (synthesized input), `*TopLevel` (window-manager actions), `Set*`
+  (configuration); callbacks are all "subject + past participle" (`Bell` → `BellRequested`, `WindowManagerRequest` → `WindowManagerRequested`).
+  Windows are named by their `XTopLevelWindow` handle instead of an XID.
+  ③ **Window properties are an immutable snapshot**: `XTopLevelWindow`'s two dozen properties used to be written one by one on the execution
+  thread while the host read them on its UI thread, so it could see a new width with an old height, and the 16-byte `ClientFrameExtents` tuple
+  could tear. The execution thread now builds an `XTopLevelSnapshot` and swaps it in whole, and `TopLevelChanged` says which groups changed;
+  nothing is reported when nothing changed (setting the same title again no longer disturbs the host), and an unchanged shape keeps its list instance.
+  ④ **Cursors**: the callback used to carry a magic int (a glyph number; −1 meant both "default" and "bitmap cursor", −2 hidden), the host had to
+  keep its own glyph table, and bitmap / ARGB cursors (which libXcursor creates through RENDER CreateCursor whenever a cursor theme is installed)
+  all showed as arrows. It is now an `XCursor`: the library derives the shape from the glyph number or from the name given through XFIXES
+  SetCursorName, bitmap and ARGB cursors carry their image baked at creation, and the Avalonia host shows the image directly.
+  ⑤ **The keymap changes at once**: switching layouts used to take three `SetKeyboardMapping` calls plus one `SetModifierMapping`, each sending
+  every client a round of notifications; the layout name was an optional trailing parameter the host never passed, so with `de` selected
+  `_XKB_RULES_NAMES` still said `us`. `SetKeymap(XKeymap)` now commits everything with the layout name; the keysyms and modifier bit for right Alt
+  as AltGr come from the library, so the host no longer writes a modifier map by hand; when following the system, the host takes the name of the
+  most similar bundled layout.
+  ⑥ **Extension registry**: major opcodes and event / error numbers sit in one table and registration checks they do not overlap; extensions register
+  cleanup hooks for disconnects and destroyed windows, so connection teardown and window destruction no longer keep their own lists.
+  GLX became a class of its own, `GlxExtension`; each extension's resource types moved to `Resources/`; `Queries` was split into Xinerama / XRes,
+  `CompositeDbe` into Composite / Dbe, DPMS moved out of ScreenSaver, `SyncGrabs` was renamed `GrabFreeze` (distinct from the SYNC extension),
+  and the top-level bridge moved from Exposure to TopLevels.
+  ⑦ Other: `Display` reflects the transports actually listening (`:N` / `localhost:N.0` / null when neither), with `DisplayNumber` alongside;
+  `ServeAsync`'s `isLocal` has no default any more and the docs state the stream is not disposed; diagnostics go only through `Log` (some used to go to
+  `Trace`, so failures in host-injected work items were invisible to the host); the bell volume is computed as the protocol specifies.
