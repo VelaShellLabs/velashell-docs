@@ -470,12 +470,12 @@ interface ISshSigner
 一个计数都不给。** VelaShell 只好写 376 行 `MeteredPortForwardHandle` 自己重做一遍转发
 （本地/动态自己监听；远程转发更是让库转到本机一个临时监听、再接力一次，多一次环回拷贝）。
 
-我们让 `PortForwarder` 自带：
+我们让 `PortForwarder`（`LocalPortForwarder` 与 `RemotePortForwarder` 的共同基类）自带：
 
 ```
 int  ActiveConnections { get; }
 long TotalConnections  { get; }
-long BytesUp { get; }  long BytesDown { get; }
+long BytesSent { get; }  long BytesReceived { get; }   // 本机送进隧道 / 从隧道收回本机
 event EventHandler<ForwardConnectionEventArgs> ConnectionOpened, ConnectionClosed;
 event EventHandler<ForwardErrorEventArgs>      Error;
 ```
@@ -493,7 +493,7 @@ event EventHandler<ForwardErrorEventArgs>      Error;
 ```
 class SshNegotiationException : SshException
 {
-    NegotiationCategory   Category      { get; }  // KeyExchange / HostKey / Cipher / Mac / Compression
+    SshNegotiationCategory Category     { get; }  // KeyExchange / HostKey / Encryption* / Mac* / Compression*（各分两个方向）
     IReadOnlyList<string> OfferedByPeer { get; }  // 对端 KEXINIT 原样
     IReadOnlyList<string> OfferedByUs   { get; }
     string                PeerVersion   { get; }  // "SSH-2.0-OpenSSH_9.5"
@@ -508,14 +508,22 @@ class SshNegotiationException : SshException
 
 ```
 enum SshFailureReason {
-    DnsFailure, TcpRefused, TcpTimeout, ProxyRefused, ProxyAuthRequired,
-    VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
-    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired,
-    Timeout, ClosedByPeer, KeepAliveTimeout, ProtocolError, Aborted
+    Unknown,
+    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired,
+    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
+    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
+    KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
+    AgentUnavailable, AgentRefused,
+    Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
+    ChannelOpenFailed, ChannelRequestRejected,
+    ForwardRejected, ForwardBindFailed, ForwardSetupFailed, LimitExceeded,
+    CommandFailed, InvalidConfiguration, Aborted, Unsupported
 }
 ```
 
 每个失败都带 `Reason` + `Phase`（在哪一步）+ `Attempts`（试过哪些认证方法、各自结果）。
+**`Reason` 必须说真话**：同一种异常在不同处境下给不同的值，不借一个相近的凑数 ——
+宿主据此分流（该不该自动重连）、据此选界面文案。逐值的含义见 [`spec/08-failures.md`](../spec/08-failures.md) §三。
 
 > **VelaShell 收益**：`TmdsSshInterop.ExtractConnectFailedReason` 那段
 > 「按 `"The connection could not be established - "` 前缀切字符串」删掉。
@@ -532,23 +540,26 @@ enum SshFailureReason {
 
 ## 六 公共 API 形态
 
+> 这一节原本写的是设计阶段设想的 API（`new SshConnection(options)` + `OpenAsync`、`TofuHostKeyPolicy`、`conn.StreamAsync`……），
+> 与后来实现出来的对不上。2026-09-25 的 API 审查之后按代码改写（经过见 §11.2.24）；
+> 公开面的规则 —— 什么该公开、怎么命名、一个功能只留一个入口 —— 写在宿主仓库
+> [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) 第四节。
+
 ### 6.1 命名对照（同时是 §2.2 第 3 条纪律的兑现）
 
 | Tmds.Ssh | VelaShell.Ssh | 为什么这么改 |
 | --- | --- | --- |
-| `SshClient` | **`SshConnection`** | 换一个隐喻：ADO.NET 的 `SqlConnection` / SignalR 的 `HubConnection` 那套 —— 有 `State`、`StateChanged`、`OpenAsync`/`CloseAsync`。**「客户端」是个物件，「连接」是个有生命周期的东西**，后者才是 VelaShell 要管的 |
+| `SshClient` | **`SshConnection`** | 换一个隐喻：「客户端」是个物件，「连接」是个有生命周期的东西，后者才是 VelaShell 要管的。只能经静态的 `SshConnection.ConnectAsync(options, ct)` 得到，交回来时已经完成握手与认证 —— 没有公开构造，也没有「先 new 再 Open」的中间态 |
 | `SshClientSettings` | `SshConnectionOptions` | .NET 的 `*Options` 惯例 |
-| `Credential` | `SshCredential` | — |
-| `RemoteProcess` | **`SshCommand` / `SshShell`** | **拆成两个。** 一次性命令与交互式 shell 的生命周期、读写形状、退出语义都不一样，现在挤在一个 1,198 行的类里，`HasTerminal` 这种属性就是挤出来的 |
+| `Credential` | `SshCredential` | 具体凭据是 `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `RemoteProcess` | **`SshCommand` / `SshShell`** | **拆成两个。** 一次性命令与交互式 shell 的生命周期、读写形状、退出语义都不一样，挤在一个类里，`HasTerminal` 这种属性就是挤出来的。一次跑完拿全部输出是 `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | 它不是一个「客户端」，它是一个文件系统视图 |
 | `SftpFile` | `SftpFileStream` | 它是 `Stream` 的子类，名字就该说这件事 |
-| `SftpDirectory` / `ISftpDirectory` | `SftpDirectoryHandle` | — |
-| `SshDataStream` | `SshTunnelStream` | — |
-| `LocalForward`/`RemoteForward`/`SocksForward` | `PortForwarder` + `ForwardKind` | 三个类的公开面几乎一样，差别只在「谁监听」 |
-| `HostAuthentication`（委托） | `IHostKeyPolicy`（接口） | 策略要能带状态（known_hosts 句柄、CA 信任链、本次运行的临时信任），委托做不了 |
-| `SftpProgressHandler`（抽象类） | `IProgress<SftpTransferProgress>` | BCL 已有的惯例，不另造 |
-| `SshChannel`（internal） | `SshChannelCore` + `SshChannelPipe` | 内部模型不同，见 §5.5 |
-| `SshSession`（internal） | `SessionMachine` + `SendPump` + `ReceivePump` | 同上，见 §5.4 |
+| `SshDataStream` | `SshChannelStream` | 经 `SshChannel.AsStream()` 拿；只有异步读写 |
+| `LocalForward` / `SocksForward` / `RemoteForward` | `LocalPortForwarder`（`Start` / `StartDynamic`）、`RemotePortForwarder`（`StartAsync`），共同基类 `PortForwarder` | 计量、事件与释放在基类上；「谁监听」不同，入口就分开 |
+| `HostAuthentication`（委托） | `IHostKeyPolicy`（接口） | 策略要能带状态（known_hosts 句柄、CA 信任、本次运行的临时信任），委托做不了 |
+| `SshChannel`（internal） | `SshChannel`（公开，只能由连接交出） | 通道要交给调用方直接读写（隧道、子系统、自定义请求）；流控窗口与 stdin 泵在它内部 |
+| `SshSession`（internal） | `SshConnection` 内部（发送闸门、收发泵、重协商） | 见 §5.4 |
 | `Sequence` / `SequencePool` / `Packet` | **（不存在）** | 用 Pipelines，见 §5.2 |
 
 ### 6.2 主线用法（对照 VelaShell 现有调用点）
@@ -557,42 +568,41 @@ enum SshFailureReason {
 var options = new SshConnectionOptions("root@10.0.0.1:22")
 {
     ConnectTimeout = TimeSpan.FromSeconds(15),
-    KeepAlive      = new KeepAlivePolicy(TimeSpan.FromSeconds(30), maxMissed: 3),
-    Credentials    = [ new PrivateKeyCredential(path, passphrase),
+    KeepAlive      = new SshKeepAlivePolicy(TimeSpan.FromSeconds(30), maxMissed: 3),
+    Credentials    = [ new PublicKeyCredential(key),
                        new KeyboardInteractiveCredential(PromptAsync) ],
-    HostKeyPolicy  = new TofuHostKeyPolicy(store, onDecision: AskUserAsync),
-    Dialer         = DialerChain.Socks5("127.0.0.1", 10808),   // 到代理本身默认直连；嵌套用 .Via(...)
-    Algorithms     = SshAlgorithmSet.Default.WithCompression(Compression.ZlibOpenSsh),
-    AutoConnect    = false,   // 显式连接（VelaShell 现在就是这么配的，而且是对的）
-    AutoReconnect  = false,
+    HostKeyPolicy  = new KnownHostsPolicy(askUnknownHost: AskUserAsync),
+    Dialer         = DialerChain.Socks5("127.0.0.1", 10808),   // 到代理本身默认直连；嵌套传 via:
+    Algorithms     = SshAlgorithmSet.Default.WithCompression(),
 };
 
-await using var conn = new SshConnection(options, loggerFactory);
-await conn.OpenAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);   // 交回时已就绪
 
 // 交互式 shell —— 像素尺寸一等公民
-await using SshShell shell = await conn.OpenShellAsync(new ShellOptions {
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions {
     TerminalType = "xterm-256color",
-    Size  = new TerminalSize(cols, rows, widthPx, heightPx),
-    Modes = modes,            // pty-req 的 encoded terminal modes
+    Size  = new SshTerminalSize(cols, rows, widthPx, heightPx),
+    Modes = modes,            // SshTerminalModes，不可变；pty-req 的 encoded terminal modes
 }, ct);
-shell.Resize(new TerminalSize(cols, rows, widthPx, heightPx));
+await shell.ResizeAsync(new SshTerminalSize(cols, rows, widthPx, heightPx), ct);
 
 // 一次性命令 —— 三样东西一次拿全
-SshCommandResult r = await conn.RunAsync("uname -a", ct);  // StdOut · StdErr · ExitCode · ExitSignal
+SshCommandResult r = await conn.RunAsync("uname -a", cancellationToken: ct);  // StandardOutput · StandardError · ExitStatus
 
-// 长驻命令 —— 逐行，取消时先 TERM
-await foreach (var line in conn.StreamAsync("tail -F /var/log/x", StreamOptions.IncludeStderr, ct)) { }
+// 长驻命令 —— 自己读 StandardOutput，取消时先 TERM
+await using SshCommand cmd = await conn.ExecuteAsync("tail -F /var/log/x", cancellationToken: ct);
 
 // SFTP
-await using SftpFileSystem fs = await conn.OpenSftpAsync(ct);
-if (fs.Capabilities.HasPosixRename) await fs.PosixRenameAsync(a, b, ct);
+await using SftpFileSystem fs = await SftpFileSystem.ConnectAsync(conn, cancellationToken: ct);
+if (fs.Capabilities.HasPosixRename) await fs.RenameAsync(a, b, overwrite: true, ct);
 
 // 转发 —— 计量在库里
-await using PortForwarder fwd = await conn.ForwardAsync(
-    ForwardKind.Local, bind: "127.0.0.1:8080", target: "10.0.0.9:80", ct);
-Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown} B");
+await using LocalPortForwarder fwd = LocalPortForwarder.Start(
+    conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
+Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesReceived} B");
 ```
+
+完整的用法见 [`getting-started.md`](../getting-started.md)。
 
 ### 6.3 兼容层 `VelaShell.Ssh.Compat.Tmds`（可选）
 
@@ -608,6 +618,9 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown
 
 > **决策点**：兼容层是「省事」还是「拖累」有争议。建议**做，但只做 VelaShell 用到的那一面，
 > 并从第一天就标 Obsolete** —— 它的价值在于把「换引擎」和「换 API」拆成两次可独立回滚的改动。
+>
+> 〔结果〕**没有做。**宿主的库中立抽象（§11.3 第 1 条）已经把爆炸半径收在 `Infrastructure/Ssh/` 一个目录里，
+> 在那里直接改写成新 API 比先写一层同名垫片更省事，也少一份要删的代码。
 
 ---
 
@@ -632,24 +645,29 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown
 
 ## 八 扩展点清单（这一条决定五年后好不好加东西）
 
-| # | 扩展点 | 用来加什么 |
-| :-: | --- | --- |
-| 1 | `ISshTransportDialer` | 代理、跳板、TUN、内存传输（测试）、异构承载 |
-| 2 | `ISshCipherSuite` + `CipherRegistry` | 新加密算法。**含国密 SM4-GCM / SM3**（国内政企的现实需求） |
-| 3 | `IKeyExchange` + `KexRegistry` | 新 KEX。后量子（ML-KEM、sntrup761）内置，将来的混合方案照此加 |
-| 4 | `IHostKeyAlgorithm` | 新主机密钥类型，含 **CA 签发的主机证书**（`*-cert-v01@openssh.com`） |
-| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 |
-| 6 | `IAuthMethod` | 新认证方式，含堡垒机的私有扩展 |
-| 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 |
-| 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` |
-| 9 | `IGlobalRequestHandler` | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） |
-| 10 | `ISftpExtension` | 厂商 SFTP 扩展 |
-| 11 | `IPacketTap` / Metrics / ActivitySource | 诊断、录制、APM |
-| 12 | `ISshConfigSource` | 配置来源：`~/.ssh/config`、企业下发、UI |
+设计阶段列了十二个扩展点。实现下来，**对外开放的只有调用方确实要自己实现的那几个**；
+其余是库内部的接缝 —— 加东西要改库本身，但只动一处，不用碰状态机。
+这不是退步：本库只有一个调用方（宿主），不单独发包，「谁都能注册」的扩展点换不来任何东西，
+却要把时序约束交到调用方手里（规则见宿主仓库 `src/VelaShell.Ssh/AGENTS.md` 4.1）。
 
-> 这张表就是「后期扩展性」的全部答案。判据很简单：
+| # | 扩展点 | 用来加什么 | 现状 |
+| :-: | --- | --- | --- |
+| 1 | `ISshTransportDialer` | 代理、跳板、TUN、内存传输（测试）、异构承载 | ✅ 公开。内置的几种从 `DialerChain` 拿（`Tcp` / `Socks5` / `HttpConnect` / `Jump` / `Jumps` / `Command`，可用 `via:` 嵌套），具体类型不公开 |
+| 2 | `ISshCipherSuite` | 新加密算法。**含国密 SM4-GCM / SM3**（国内政企的现实需求） | 🔒 库内接缝：加一种 = 实现接口 + 在算法清单里登记一个名字 |
+| 3 | `ISshKeyExchange` | 新 KEX。后量子（ML-KEM、sntrup761）内置，将来的混合方案照此加 | 🔒 库内接缝：`SshKeyExchangeFactory` 是一张固定的表，加一种就是加一行；**没有运行期注册**（设计时的 `KexRegistry` 已删，§11.2.24） |
+| 4 | 主机密钥类型 | 新主机密钥类型，含 **CA 签发的主机证书**（`*-cert-v01@openssh.com`） | 🔒 在 `SshPublicKey` 里加；主机证书已支持（§11.2.22）。`IHostKeyTypePreference` 是公开的，只管「连接时先谈哪几种」 |
+| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 | ✅ 公开。内置 `InMemorySshSigner`（私钥文件）、agent 身份、`SshCertificateSigner`（证书） |
+| 6 | 认证方法 | 新认证方式，含堡垒机的私有扩展 | 🔒 凭据是公开的 `SshCredential` 家族；新方法在库里加一个凭据类型与认证器分支。设计时的 `IAuthMethod` 没有做 |
+| 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 | ✅ 公开。内置 `KnownHostsPolicy`、`PinnedFingerprintHostKeyPolicy`、`DangerousAcceptAnyHostKeyPolicy` |
+| 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` | 🔒 库内接缝。三种都已内置（`AgentForwarder`、`X11Forwarder`、`RemotePortForwarder`，它们对这个接口是显式实现） |
+| 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ❌ 没有做。发全局请求是库内部的一个方法 |
+| 10 | SFTP 扩展 | 厂商 SFTP 扩展 | 🔒 库内：`posix-rename`、`limits`、`statvfs` 等由 `SftpFileSystem` 按能力查询直接用 |
+| 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 转发的度量走 `System.Diagnostics.Metrics`（`ForwardMetrics.MeterName`）；`ActivitySource` 与报文旁路（`IPacketTap`）还没有做 |
+| 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`，没有另设接口 |
+
+> 这张表原本是「后期扩展性」的全部答案，判据是：
 > **§1 那九条宿主补丁，逐条都能对应到这张表的某一行。**
-> 也就是说 —— 如果当初有这十二个扩展点，那九条补丁一条都不用写。
+> 这条判据仍然成立，只是对上的方式变了：大半靠的是「库里直接有」，而不是「宿主能插进来」。
 
 ---
 
@@ -659,7 +677,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown
 
 | 文件 | 行数 | 结局 |
 | --- | :-: | --- |
-| `Infrastructure/Net/LoopbackProxyRelay.cs` | ~200 | **删** → `Socks5Dialer` / `HttpConnectDialer` |
+| `Infrastructure/Net/LoopbackProxyRelay.cs` | ~200 | **删** → `DialerChain.Socks5` / `DialerChain.HttpConnect` |
 | `Infrastructure/Ssh/SshAlgorithmProbe.cs` | 199 | **删** → 协商异常自带名单 |
 | `Infrastructure/Ssh/SshAlgorithmDiagnostics.cs` | 105 | 缩成一个格式化函数（~30 行） |
 | `Infrastructure/Ssh/MeteredPortForwardHandle.cs` | 376 | 缩成薄适配（~60 行） |
@@ -678,7 +696,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesUp + fwd.BytesDown
 | 能力 | 现状 | 之后 |
 | --- | --- | --- |
 | **2FA / OTP（keyboard-interactive）** | 连不上，文案写「本版无法连接」 | 原生支持，`KeyboardInteractiveSupportTests` 那条引信可以拆 |
-| **PTY 像素尺寸** | 恒为 0，卡上游 PR #519 | 一等公民，`TerminalSize` 四个字段 |
+| **PTY 像素尺寸** | 恒为 0，卡上游 PR #519 | 一等公民，`SshTerminalSize` 四个字段 |
 | **压缩 zlib@openssh.com** | 卡上游 PR #513 | 内置 |
 | **SSH Agent 转发** | 无（对标矩阵里最扎眼的一格） | `IIncomingChannelHandler` + `auth-agent-req@openssh.com` |
 | **算法协商可配** | 一半（能诊断，不能配） | `SshAlgorithmSet` 完整可配，且能从 UI 直接列 |
@@ -2458,6 +2476,50 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 | `ssh_config` 的 `ForwardX11Timeout` 不认 | 按 ssh_config 的时间格式解析（`1h30m`、纯数字为秒），`0` 为整条连接期间有效，写不对就用默认（`spec/09` §7） |
 
 保留的有意差异：有效期对受信模式同样生效（OpenSSH 的 `ForwardX11Timeout` 只管非受信）—— 受信模式危险得多，它反而没有期限说不通。
+
+### 11.2.24 全库 API 审查：定下公开面的规则并整改（2026-09-25）
+
+起因：本库此前没有成文的 API 规范，同一件事长出了好几种写法 —— 191 个公开类型里约 125 个宿主从未引用，
+帧层、密码套件、KEX、SFTP 请求管线这些**协议管道**全是 public；建连、跑命令各有两三个公开入口；
+异常把 `Reason` 写死（转发、私钥、证书、agent 一律 `Unsupported`，跳板成环报成可重试的 `ProxyRefused`），
+宿主只好把中文的异常消息直接显示给用户。另有几处默认值落在不安全的一边：`SshHostKeyDecision.Accept` 是枚举零值，
+`ISshSigner.IsLocalAndCheap` 默认 `true`，`SshShellOptions.Default.Modes` 是全局共享的可变对象。
+
+规则写进了宿主仓库的 [`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) 第四节
+（公开面默认 `internal`、后缀与动词一个一个意思、record 成员不可变、枚举零值安全、`Reason` 说真话、一个类型一个文件……），
+这里只记与本文档有关的结论：
+
+- **公开面：191 → 130 个公开类型。**公开的标准只有三条：`getting-started.md` 写到的功能入口、宿主在用的、只读的可观测信息（原则 4）。
+  §6 与 §8 按代码改写，设计阶段设想而没有做的（`KexRegistry`、`IAuthMethod`、`IPacketTap`……）在 §8 标了现状。
+- **KEX 不再能运行期注册。**`SshKeyExchangeFactory.Register` 挂在一个 internal 类型上，除了一条测试谁也调不到，
+  却让一张无锁的字典在运行期可写；删掉，表改成固定的。加一种 KEX 就是在表里加一行（§8 第 3 项）。
+- **一个功能一个入口。**建连只剩 `SshConnection.ConnectAsync(options, ct)`；跑完拿全部输出只剩 `RunAsync`；
+  通道流只经 `SshChannel.AsStream()`；嵌套代理用 `DialerChain.*` 的 `via:` 参数（拨号器的具体类型不再公开，`.Via(...)` 随之没有了）。
+- **失败原因说真话。**`SshFailureReason` 新增 14 个值，各处按实情报（见 [`spec/08`](../spec/08-failures.md) §二、§三）；
+  转发错误事件与 SFTP 的操作名从字符串改成枚举（`ForwardErrorReason`、`SftpOperation`）。
+- **完成 `StandardInput` 就是 EOF。**之前只有 `CompleteStandardInputAsync` 才发 `CHANNEL_EOF`，
+  调用方用 `PipeWriter` 的惯用法 `Complete()` 表达「写完了」时，远端的 `cat` 会一直等（[`spec/05`](../spec/05-connection.md) §4.3）。
+
+§11.2.1–§11.2.23 是当时的记录，里面的类型名保持原样。改了名的对照如下：
+
+| 以前 | 现在 |
+| --- | --- |
+| `SshConnectionFactory.ConnectAsync(options)`、`options.ConnectAsync()` | `SshConnection.ConnectAsync(options, ct)` |
+| `SshCommandOutput`（完整结果） / `SshCommandResult`（只有退出状态） | `SshCommandResult` / `SshExitStatus` |
+| `SshExecutionOptions` | `SshCommandOptions`（与 `SshShellOptions` 共用基类 `SshSessionRequestOptions`） |
+| `SshShellOptions.X11` | `SshShellOptions.X11Forwarding` |
+| `AgentForwardPolicy` · `MaxConcurrentChannels` | `AgentForwardOptions` · `MaxConnections` |
+| `KeepAlivePolicy` | `SshKeepAlivePolicy` |
+| `SshStderrPolicy` · `StderrPolicy` | `SshStderrMode` · `StderrMode` |
+| `TerminalSize` · `TerminalModes`（可变，`Set`） · `TerminalModeOpcode` | `SshTerminalSize` · `SshTerminalModes`（不可变，`With`） · `SshTerminalModeOpcode` |
+| `PortForwarder.StartLocal` / `StartDynamic` · `PortForwardOptions` | `LocalPortForwarder.Start` / `StartDynamic` · `LocalPortForwardOptions` |
+| `RemoteForwarder` · `RemoteForwardOptions` | `RemotePortForwarder` · `RemotePortForwardOptions` |
+| `BytesUp` / `BytesDown` | `BytesSent` / `BytesReceived` |
+| `SshConfigConnectSettings` | `SshConfigConnectOptions` |
+| `SftpOpenMode` | `SftpOpenModes` |
+| `KnownHostsPolicy(askUser: …)` | `KnownHostsPolicy(askUnknownHost: …)` |
+| `SshConnection.SendGlobalRequestWithReplyAsync` | 与 `SendGlobalRequestAsync` 合并，改为库内部方法 |
+| `SshPrivateKeyFile.LoadAsync` → `ISshSigner` | → `InMemorySshSigner`（可释放，释放时清零私钥） |
 
 ### 11.3 与 VelaShell 的切换策略
 

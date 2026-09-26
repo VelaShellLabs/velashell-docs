@@ -326,10 +326,10 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 所以 agent 的身份列表里常有 `*-cert-v01@openssh.com` 类型的条目。
 
 〔决策〕**agent 里的证书作为证书身份列出，可以直接用来认证。**
-`SshAgentClient.ListIdentitiesAsync` 用 `SshPublicKey.Parse` 解析每条身份，它认得证书 blob
+`SshAgentClient.ListIdentitiesAsync` 用 `SshPublicKey.Decode` 解析每条身份（wire 字节用 `Decode`，`Parse` 留给文本），它认得证书 blob
 （`IsCertificate = true`）；`GetCredentialsAsync` 把证书身份与普通钥一样包成 `publickey` 凭据。
 出示的是整张证书，签名仍由 agent 用证书里那把钥来做 —— 签名请求里带的也是那张证书的 blob，与 agent 列出的一致。
-曾经 `Parse` 不认证书，而列表只跳过特定几种异常：agent 里只要有一张证书，整个列表就解析失败，
+曾经它（当时叫 `Parse`）不认证书，而列表只跳过特定几种异常：agent 里只要有一张证书，整个列表就解析失败，
 agent 认证、agent 转发、自动加钥三条路一起断。
 
 〔决策〕**解析不了的身份只跳过那一条。** 格式坏掉的证书、本库不支持的证书类型

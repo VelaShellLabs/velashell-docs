@@ -245,7 +245,7 @@ Externally, each channel is three pipes plus one event stream:
 ```
 PipeReader StandardOutput;   // CHANNEL_DATA
 PipeReader StandardError;    // CHANNEL_EXTENDED_DATA(1)
-PipeWriter StandardInput;    // what is written becomes CHANNEL_DATA
+PipeWriter StandardInput;    // what is written becomes CHANNEL_DATA; completing it = flush, then send CHANNEL_EOF
 ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / ExitSignal / requests
 ```
 
@@ -261,8 +261,16 @@ There are two reasons, and the second is a hard one:
 Each pipe has its own buffer, but there is only one window: if one side is not read, once its data fills the window **the other side stalls too**.
 So either read both sides (`ReadToEndAsync` reads them concurrently) or set the stderr you do not care about to `Discard`.
 
-〔Decision〕**stderr can be explicitly discarded** (`StderrPolicy.Discard`).
+〔Decision〕**stderr can be explicitly discarded** (`SshChannelOptions.StderrMode = SshStderrMode.Discard`).
 In that case the library still receives packets as usual and **replenishes the window immediately**, but does not buffer — otherwise discarding would turn into a deadlock.
+
+〔Decision〕**Completing `StandardInput` sends EOF.** When the caller completes this `PipeWriter` (`Complete` / `CompleteAsync`),
+the library does what `SendEofAsync` does: first send everything already written, then send `CHANNEL_EOF` (§1 item 1: EOF is not closing the channel).
+`SendEofAsync` and `CompleteStandardInputAsync` are still there; the only difference is that they **wait** until the EOF is queued before returning.
+EOF is sent only once: whichever first moves the channel to "local EOF" sends it; neither sends it while the channel is closing or already closed.
+
+Rationale: completing the writer is the idiomatic way for a `PipeWriter` to say "I'm done writing". If it were not treated as EOF, the caller would write, complete the writer,
+and a remote program waiting to read all of its input (`cat`, `sort`, `tar x`) would wait forever —— with no visible error on the caller's side.
 
 ### 4.4 End of stream vs. broken connection
 
@@ -363,7 +371,7 @@ Sending data without waiting manifests, when the server refuses to execute, as "
 | 5–8 | `uint32` ×4 | width (columns) ‖ height (rows) ‖ width (pixels) ‖ height (pixels) |
 
 〔Decision〕**Pixel dimensions are first-class citizens, not always 0.**
-`TerminalSize` is a read-only struct with four fields, carried all the way from `OpenShellAsync` through to `Resize`.
+`SshTerminalSize` is a read-only struct with four fields, carried all the way from `OpenShellAsync` through to `ResizeAsync`.
 
 Rationale: programs that depend on pixel dimensions really exist — sixel images, the kitty graphics protocol,
 and any TUI that lays out by pixel. Hard-coding 0 amounts to telling the remote side "unknown",
@@ -388,7 +396,7 @@ end:      byte 0 (TTY_OP_END)
 ```
 
 - Opcodes 1–159 carry a `uint32` argument; 160–255 are reserved (stop parsing upon an unknown one).
-- 〔Decision〕The opcode table lives in `Protocol/TerminalModeOpcode.cs`;
+- 〔Decision〕The opcode table lives in `Channels/SshTerminalModeOpcode.cs`;
   common ones (`VINTR`=1, `VERASE`=3, `ECHO`=53, `ICRNL`=36, `ONLCR`=72,
   `IUTF8`=42, `ISPEED`=128, `OSPEED`=129) get named members, the rest may be passed as raw values.
 - It **must** end with `TTY_OP_END` (0). If this byte is missing, OpenSSH rejects the entire `pty-req`.
@@ -415,7 +423,7 @@ end:      byte 0 (TTY_OP_END)
 
 - Process killed by a signal → only `exit-signal`, no `exit-status`.
 - Connection interrupted → neither.
-- Therefore `SshCommandResult.ExitCode` must be `int?`, not `int`.
+- Therefore `SshExitStatus.ExitCode` must be `int?`, not `int`.
   〔Decision〕**Signals are not encoded as pseudo exit codes like 128+n** — that is a shell convention,
   not an SSH one; faking it would make "process returned 137" indistinguishable from "process was KILLed".
 

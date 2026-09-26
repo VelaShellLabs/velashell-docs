@@ -333,11 +333,11 @@ the validity period is exposed to the caller through `OpenSshCertificate.ValidBe
 so the agent's identity list often contains entries of type `*-cert-v01@openssh.com`.
 
 〔Decision〕**Certificates in the agent are listed as certificate identities and can be used for authentication directly.**
-`SshAgentClient.ListIdentitiesAsync` parses each identity with `SshPublicKey.Parse`, which understands certificate blobs
+`SshAgentClient.ListIdentitiesAsync` parses each identity with `SshPublicKey.Decode` (`Decode` for wire bytes, `Parse` is kept for text), which understands certificate blobs
 (`IsCertificate = true`); `GetCredentialsAsync` wraps certificate identities into `publickey` credentials just like plain keys.
 The whole certificate is presented, and the signature is still made by the agent with the key inside the certificate — the sign
 request carries that certificate's blob, the same one the agent listed.
-`Parse` used to reject certificates while the listing skipped only a few specific exception types: a single certificate in the agent
+It (then called `Parse`) used to reject certificates while the listing skipped only a few specific exception types: a single certificate in the agent
 made the whole list fail to parse, and agent authentication, agent forwarding, and automatic key loading all broke at once.
 
 〔Decision〕**An identity that cannot be parsed skips only that entry.** A malformed certificate or a certificate type this library

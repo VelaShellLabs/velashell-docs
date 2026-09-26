@@ -18,13 +18,14 @@ var options = new SshConnectionOptions("joe@10.0.0.1:22")
 {
     Credentials   = [ new PasswordCredential("hunter2") ],
     HostKeyPolicy = new KnownHostsPolicy(),   // reads ~/.ssh/known_hosts by default
-    KeepAlive     = new KeepAlivePolicy(TimeSpan.FromSeconds(30)),
+    KeepAlive     = new SshKeepAlivePolicy(TimeSpan.FromSeconds(30)),
 };
 
-await using SshConnection conn = await options.ConnectAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);
 ```
 
-`ConnectAsync` does dialing → version exchange → key exchange → **host key decision** → authentication in one go.
+`SshConnection.ConnectAsync` does dialing → version exchange → key exchange → **host key decision** → authentication in one go,
+and the connection it returns is ready to use — `SshConnection` has no public constructor and no separate `Start` to call; this is the only way to connect.
 
 **The three timers are separate**, and this is no small thing:
 
@@ -54,8 +55,8 @@ Dialer = DialerChain.Socks5("127.0.0.1", 1080, new SshProxyCredentials("alice", 
 // HTTP proxy CONNECT (Basic authentication, sent with the very first request)
 Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 
-// Nesting: reach the SOCKS5 proxy via the HTTP proxy, then let it connect to the target
-Dialer = DialerChain.Socks5("socks.internal", 1080).Via(DialerChain.HttpConnect("proxy.corp", 3128)),
+// Nesting: reach the SOCKS5 proxy via the HTTP proxy, then let it connect to the target (via = how to reach the proxy itself)
+Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
 // Jump host (ssh -J): the jump host is itself a full connection, with its own credentials and host key policy
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
@@ -86,7 +87,7 @@ During the host key decision (the dialog asking the user), the connect timer is 
 Interactive clients should switch to the variant with an ask callback:
 
 ```csharp
-HostKeyPolicy = new KnownHostsPolicy(askUser: async (ctx, ct) =>
+HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
 {
     // ctx.Key.Sha256Fingerprint is the same string the ssh command line shows
     return await ui.ConfirmAsync(
@@ -118,19 +119,24 @@ If you want them, add them explicitly:
 ```csharp
 using VelaShell.Ssh.Keys;
 
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: null, ct);
+// The path goes to the file system as is; ~ is not expanded
+string keyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "id_ed25519");
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, passphrase: null, ct);
 
 await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
 IReadOnlyList<SshCredential> fromAgent = await agent.GetCredentialsAsync(ct);
 
 Credentials =
 [
-    new PublicKeyCredential(key, "~/.ssh/id_ed25519"),
+    new PublicKeyCredential(key, "~/.ssh/id_ed25519"),   // the second argument is only the label shown in the attempt record
     .. fromAgent,
     new KeyboardInteractiveCredential(PromptAsync),   // 2FA / one-time code
     new PasswordCredential(AskPasswordAsync),
 ];
 ```
+
+`LoadAsync` returns an `InMemorySshSigner`: it holds the private key in memory and **zeroes it on dispose**, so take it with `using`.
+The connection only needs it during authentication; once connected it can be disposed.
 
 The order is the order of attempts. Methods the server does not accept are skipped and faithfully recorded in the attempt record —
 on failure, `SshAuthenticationException.DescribeAttempts()` tells you what happened with each one:
@@ -152,7 +158,7 @@ the OpenSSH format (`BEGIN OPENSSH PRIVATE KEY` + `cipher != none`, i.e. the def
 `ssh-keygen` with a passphrase), and `.ppk` v2/v3.
 
 ```csharp
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", "passphrase", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, "passphrase", ct);
 ```
 
 Algorithms supported for OpenSSH encrypted private keys: `aes{128,192,256}-{ctr,cbc}`,
@@ -174,8 +180,8 @@ Certificate authentication **has no separate authentication method** — it stil
 ```csharp
 using VelaShell.Ssh.Keys;
 
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", null, ct);
-OpenSshCertificate cert = await OpenSshCertificate.LoadAsync("~/.ssh/id_ed25519-cert.pub", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, null, ct);
+OpenSshCertificate cert = await OpenSshCertificate.LoadAsync(keyPath + "-cert.pub", ct);
 
 Credentials = [ new PublicKeyCredential(SshCertificateSigner.Create(cert, key)) ];
 ```
@@ -203,7 +209,7 @@ if (!cert.IsTimeValid(DateTimeOffset.UtcNow))
 Both `.ppk` v2 and v3 can be read, **including encrypted ones**:
 
 ```csharp
-ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "passphrase", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "passphrase", ct);
 ```
 
 > The `.ppk` KDFs (SHA-1 concatenation for v2, Argon2id for v3) are provided directly by BouncyCastle,
@@ -215,7 +221,7 @@ ISshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passphrase: "passp
 Decrypt an encrypted private key once and hand it to the agent; authentication and forwarding are then signed through the agent:
 
 ```csharp
-var key = (InMemorySshSigner)await SshPrivateKeyFile.LoadAsync("~/.ssh/id_ed25519", passphrase: "passphrase", ct);
+using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync(keyPath, passphrase: "passphrase", ct);
 
 await using SshAgentClient agent = await SshAgentClient.ConnectAsync(cancellationToken: ct);
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
@@ -235,11 +241,12 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
 ## 4. Running commands
 
 ```csharp
-SshCommandOutput r = await conn.RunAsync("uname -a", cancellationToken: ct);
+SshCommandResult r = await conn.RunAsync("uname -a", cancellationToken: ct);
 Console.WriteLine(r.StandardOutput);
-r.EnsureSuccess("uname -a");   // on failure, the exception carries stderr
+r.EnsureSuccess("uname -a");   // on failure, throws SshCommandFailedException (Reason = CommandFailed) carrying stderr
 ```
 
+`SshCommandResult` is the **complete** result of one run: `StandardOutput`, `StandardError`, and the exit status `ExitStatus` (`SshExitStatus`).
 `ExitCode` is **`int?`**, not `int`:
 
 | Situation | `ExitCode` | `ExitSignalName` |
@@ -257,7 +264,12 @@ To process output as a stream, take the channel yourself:
 await using SshCommand cmd = await conn.ExecuteAsync("tail -F /var/log/x", cancellationToken: ct);
 await foreach (var line in ReadLinesAsync(cmd.StandardOutput, ct)) { }
 await cmd.SendSignalAsync("TERM", ct);    // note: no SIG prefix
+SshExitStatus status = await cmd.WaitAsync(ct);
 ```
+
+When you are done writing to `cmd.StandardInput`, **completing it is EOF**: `await cmd.StandardInput.CompleteAsync()` and
+`await cmd.CompleteStandardInputAsync(ct)` do the same thing — both flush what was written and then send `CHANNEL_EOF`,
+so remote programs waiting for end of input (`cat`, `sort`) can finish. EOF does not close the channel; output keeps arriving.
 
 ---
 
@@ -267,12 +279,14 @@ await cmd.SendSignalAsync("TERM", ct);    // note: no SIG prefix
 await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 {
     TerminalType = "xterm-256color",
-    Size  = new TerminalSize(cols, rows, pixelWidth, pixelHeight),
-    Modes = TerminalModes.Empty.Set(TerminalModeOpcode.Utf8Input, 1),
+    Size  = new SshTerminalSize(cols, rows, pixelWidth, pixelHeight),
+    Modes = SshTerminalModes.Empty.With(SshTerminalModeOpcode.Utf8Input, 1),
 }, ct);
 
-await shell.ResizeAsync(new TerminalSize(cols, rows, pixelWidth, pixelHeight), ct);
+await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight), ct);
 ```
+
+`SshTerminalModes` is immutable: `With` returns a new copy, so `SshTerminalModes.Empty` is safe to share everywhere.
 
 **Pixel dimensions are first-class citizens**, not always 0 — things like sixel and the kitty graphics protocol rely on them for layout.
 If you don't know, pass 0; that is also a meaningful answer.
@@ -286,13 +300,13 @@ To enable X11 / agent forwarding on a shell, specify it directly in the options 
 ```csharp
 await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 {
-    X11             = new X11ForwardOptions(),        // ssh -X
-    AgentForwarding = AgentForwardPolicy.Default,     // ssh -A
+    X11Forwarding   = new X11ForwardOptions(),        // ssh -X
+    AgentForwarding = AgentForwardOptions.Default,    // ssh -A
     BeforeStart     = (channel, ct) => SendMyCustomRequestAsync(channel, ct),   // requests the library has no built-in support for
 }, ct);
 ```
 
-`SshExecutionOptions` (one-shot commands) has the same three options.
+`SshCommandOptions` (one-shot commands) has the same three options — they live on the shared base class `SshSessionRequestOptions`.
 
 ---
 
@@ -376,7 +390,7 @@ Two things worth knowing first:
 **without an error**:
 
 ```csharp
-Console.WriteLine(conn.Algorithms?.CompressionServerToClient);   // zlib@openssh.com or none
+Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.com or none
 ```
 
 `Algorithms` exposes all algorithms actually negotiated for this session (key exchange, host key,
@@ -392,22 +406,24 @@ both come from here — no need to probe again yourself.
 using VelaShell.Ssh.Forwarding;
 
 // -L: local 127.0.0.1:8080 → remote 10.0.0.9:80
-await using PortForwarder local = PortForwarder.StartLocal(
-    conn, "10.0.0.9", 80, new PortForwardOptions { BindPort = 8080 });
+await using LocalPortForwarder local = LocalPortForwarder.Start(
+    conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
 // -D: local SOCKS5
-await using PortForwarder socks = PortForwarder.StartDynamic(conn);
+await using LocalPortForwarder socks = LocalPortForwarder.StartDynamic(conn);
 
 // -R: server listens → connects back to the local machine
-await using RemoteForwarder remote = await RemoteForwarder.StartAsync(
+await using RemotePortForwarder remote = await RemotePortForwarder.StartAsync(
     conn, "127.0.0.1", 3000,
-    new RemoteForwardOptions { BindAddress = "localhost", BindPort = 0 }, ct);
+    new RemotePortForwardOptions { BindAddress = "localhost", BindPort = 0 }, ct);
 Console.WriteLine(remote.BoundPort);   // when 0 was requested, the actual port assigned by the server is here
 
-// metering is in the library
-Console.WriteLine($"{local.ActiveConnections} connections · up {local.BytesUp} B · down {local.BytesDown} B");
-local.ConnectionClosed += (_, e) => log.Info($"{e.Target} transferred {e.BytesUp + e.BytesDown} bytes");
+// metering is in the library (on PortForwarder, the base class shared by all three)
+Console.WriteLine($"{local.ActiveConnections} connections · sent {local.BytesSent} B · received {local.BytesReceived} B");
+local.ConnectionClosed += (_, e) => log.Info($"{e.Target} transferred {e.BytesSent + e.BytesReceived} bytes");
 ```
+
+The local forwarder's `Start` is synchronous — it only binds a port on this machine; a remote forward has to wait for the server to answer `tcpip-forward`, hence `StartAsync`.
 
 **Binds to loopback by default.** To open it to the outside you must explicitly write `BindAddress = IPAddress.Any` —
 the other end of a tunnel is often an internal database, and binding to `0.0.0.0` by default would expose it to everyone on the same network segment.
@@ -415,7 +431,7 @@ the other end of a tunnel is often an internal database, and binding to `0.0.0.0
 ### Unix sockets in the reverse direction (`ssh -R /remote:/local`)
 
 ```csharp
-await using RemoteForwarder sock = await RemoteForwarder.StartUnixSocketAsync(
+await using RemotePortForwarder sock = await RemotePortForwarder.StartUnixSocketAsync(
     conn,
     targetSocketPath: "/var/run/docker.sock",   // the local one
     remoteSocketPath: "/tmp/docker.sock",       // the one the server should create
@@ -481,7 +497,7 @@ Two more points:
 When connecting to `/var/run/docker.sock` or an internal API, **the local machine does not need a listening port**:
 
 ```csharp
-await using SshChannel tunnel = await conn.OpenUnixSocketTunnelAsync("/var/run/docker.sock", ct);
+await using SshChannel tunnel = await conn.OpenUnixSocketTunnelAsync("/var/run/docker.sock", cancellationToken: ct);
 // tunnel.StandardInput / tunnel.StandardOutput are the stream
 ```
 
@@ -497,11 +513,11 @@ await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
 
 await using AgentForwarder fwd = await AgentForwarder.RequestAsync(
     conn, session,
-    new AgentForwardPolicy
+    new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // forward only this one; the rest are invisible to the remote
         ConfirmEachSignature = AskUserAsync,    // ask a human for every signature
-        MaxConcurrentChannels = 4,
+        MaxConnections = 4,
     },
     cancellationToken: ct);
 ```
@@ -546,14 +562,14 @@ If you decide to use it, it turns into ready-to-connect parameters in one step:
 ```csharp
 SshConnectionOptions options = await SshConfigFile.CreateConnectionOptionsAsync(
     blocks, "prod-web-1",
-    new SshConfigConnectSettings
+    new SshConfigConnectOptions
     {
         Credentials        = [new KeyboardInteractiveCredential(PromptAsync)],   // placed after IdentityFile
         PassphraseProvider = (path, ct) => AskPassphraseAsync(path, ct),         // for encrypted IdentityFile
         AskUnknownHost     = ConfirmFingerprintAsync,
     }, ct);
 
-await using SshConnection conn = await options.ConnectAsync(ct);
+await using SshConnection conn = await SshConnection.ConnectAsync(options, ct);
 
 // ForwardAgent / ForwardX11 are session items, not connection items:
 await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blocks, "prod-web-1").ApplyToShell(), ct);
@@ -628,12 +644,19 @@ All exceptions derive from `SshException` and carry `Reason` (a decidable reason
 
 | Exception | When | Key fields |
 | --- | --- | --- |
-| `SshConnectException` | Dialing / handshake phase | `Reason`: `DnsFailure` / `TcpRefused` / `TcpTimeout` / … |
+| `SshConnectException` | Dialing / handshake phase | `Reason`: `DnsFailure` / `TcpRefused` / `TcpTimeout` / …; a configuration that cannot work (`ProxyJump` loop, invalid `ProxyCommand` template) is `InvalidConfiguration` |
 | `SshAuthenticationException` | Authentication failed | `Attempts`, `ServerOffered`, `PartialSuccessAchieved` |
-| `SshChannelException` | Channel could not be opened | `OpenFailureReason` + an actionable hint |
-| `SftpException` | SFTP operation failed | **`ServerMessage` (the server's own words)** |
+| `SshPrivateKeyException` | Private key unreadable or cannot be decrypted | `Reason`: `KeyFileUnreadable` / `KeyFormatInvalid` / `KeyPassphraseRequired` / `KeyPassphraseIncorrect`; `NeedsPassphrase` |
+| `SshCertificateException` | Certificate is wrong | `Reason`: `KeyFormatInvalid` / `KeyMismatch` (not a pair with the private key, or a host certificate used to log in) |
+| `SshAgentException` | ssh-agent error | `Reason`: `AgentUnavailable` / `AgentRefused` |
+| `SshChannelException` | Channel could not be opened, or a request on it was refused | not opened: `ChannelOpenFailed` + `OpenFailureReason` + an actionable hint; exec / pty-req / shell / subsystem refused: `ChannelRequestRejected` |
+| `SftpException` | SFTP operation failed | **`ServerMessage` (the server's own words)**, `Operation` (`SftpOperation`), `Path` |
 | `SftpTransferInterruptedException` | Transfer interrupted | `DurableLength` |
-| `SshForwardException` | Forwarder failed to start | — |
+| `SshForwardException` | Forwarder failed to start | `Reason`: `ForwardRejected` / `ForwardBindFailed` / `ForwardSetupFailed` / `LimitExceeded` |
+| `SshCommandFailedException` | `EnsureSuccess` found the command did not succeed | `Reason` = `CommandFailed`; `Result` (the complete `SshCommandResult`) |
+
+`Reason` tells the truth: the same exception type carries different reason codes in different situations, so a UI can branch and translate on it
+without parsing message sentences — **messages are diagnostic text for developers**, not UI copy.
 
 `SftpException.ServerMessage` deserves a separate word: SFTP v3 has only 9 status codes,
 and code `4` carries the vast majority of real errors — "directory not empty", "file already exists", "disk full", "quota exceeded"

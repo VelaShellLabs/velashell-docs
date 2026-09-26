@@ -164,18 +164,18 @@ flowchart TD
 
 ### 端口转发隧道
 
-本地 `-L` / 远程 `-R` / 动态 SOCKS5 `-D`。**数据面由宿主自己搬运** ——
-Tmds.Ssh 把搬运做在库内部、不暴露任何计数，`TunnelInfo.BytesTransferred` 恒为 0 就是这个原因。
+本地 `-L` / 远程 `-R` / 动态 SOCKS5 `-D`。**数据面与计量都在 SSH 库（`src/VelaShell.Ssh`）里** ——
+宿主的 `Infrastructure/Ssh/LibraryPortForwardHandle.cs` 只是薄适配，把库的转发器（共同基类 `PortForwarder`）的
+连接数、字节数与错误事件接到 `IPortForwardHandle` 上。换库之前 Tmds.Ssh 不给任何计数，宿主只好自己监听、自己搬运，那一套已经删了。
 
 | 方向 | 实现 |
 | --- | --- |
-| 本地 `-L` | 自己开 `TcpListener` + `SshClient.OpenTcpConnectionAsync`（direct-tcpip，与库内部同构，无额外跳数） |
-| 动态 `-D` | 自己监听 + SOCKS5 服务端握手（`Socks5Negotiation`，RFC 1928，仅 CONNECT + 无认证） |
-| 远程 `-R` | 监听端只有库能开 → 转发到本机一个临时计量监听 → 宿主接力到真实目标（多一次环回拷贝换统计） |
+| 本地 `-L` | `LocalPortForwarder.Start`：库在本机监听，每条连接开一个 `direct-tcpip` 通道 |
+| 动态 `-D` | `LocalPortForwarder.StartDynamic`：库里的 SOCKS5 服务端（RFC 1928，仅 `CONNECT` + 无认证），握手有时限 |
+| 远程 `-R` | `RemotePortForwarder.StartAsync`：`tcpip-forward` 让服务端监听，回连的通道由库直接接到本机目标 —— 不再经本机临时监听接力 |
 
-> ⚠️ 搬运保留**半关闭语义**（SSH 侧 `SshDataStream.WriteEof`，套接字侧 `Shutdown(Send)`）。
-> 做成整条拆链的话，「发完请求就 shutdown 再等响应」的协议全部读不到东西 ——
-> 有回归测试 `MeteredPortForwardTests.Relay_ForwardsHalfClose` 钉住。
+> ⚠️ 搬运保留**半关闭语义**：一侧读完就对另一侧发 EOF / `Shutdown(Send)`，而不是整条拆链；
+> 链路断了则两端都中止（本机 socket 发 RST），不把截断的数据当成完整的交出去。规格见 [`ssh/spec/07-forwarding.md`](../ssh/spec/07-forwarding.md) §2.2、§6。
 
 详见 [隧道功能规划.md](隧道功能规划.md)。
 

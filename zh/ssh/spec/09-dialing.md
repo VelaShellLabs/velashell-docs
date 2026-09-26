@@ -313,13 +313,13 @@ sequenceDiagram
 | `ssh_config` 项 | 连接参数 |
 | --- | --- |
 | `HostName` / `Port` / `User` | 目标端点与用户名（`User` 缺省时用调用方给的默认用户名） |
-| `IdentityFile` | 逐个读取私钥（`~` 与 `%d` `%u` `%h` `%r` `%%` 展开；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectSettings.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
+| `IdentityFile` | 逐个读取私钥（`~` 与 `%d` `%u` `%h` `%r` `%%` 展开；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectOptions.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
 | `IdentitiesOnly` | 无需额外动作：本库从不自动去 agent 里取钥，用哪些钥完全由凭据清单决定。配置里的密钥排在调用方模板凭据**之前**（与 `ssh` 先试 `IdentityFile` 的行为一致） |
 | `Compression yes` | 算法清单打开 `zlib@openssh.com` |
 | `ServerAliveInterval` / `ServerAliveCountMax` | 保活策略 |
 | `ConnectTimeout` | 连接超时（`SshConnectionOptions.ConnectTimeout`，§2.4）；每个跳板用它自己那台主机的配置 |
 | `UserKnownHostsFile` | 主机密钥策略改用该文件（写了多个路径时只用第一个）；`none` / `/dev/null` → **不读也不写**任何 `known_hosts`（`KnownHostsPolicy.WithoutFile`：每台主机都当成没见过，接受了也不记）。`StrictHostKeyChecking` 为 `ask` / 缺省且调用方给了策略时，这一项不起作用（见下一行） |
-| `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectSettings.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝 |
+| `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝 |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。跳板拿到哪些调用方凭据见下 |
 | `ProxyCommand` | 代理命令拨号器；`none` 表示不用 |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数 |
@@ -332,7 +332,7 @@ sequenceDiagram
 〔决策〕跳板链的解析有深度上限（8）并检测环：`a` 的跳板是 `b`、`b` 的跳板又是 `a`
 这种配置应当报错，而不是无限递归。
 
-〔决策〕**调用方给的口令与键盘交互只交给最终目标。**调用方的凭据（`SshConfigConnectSettings.Credentials`）排在 `IdentityFile` 之后；
+〔决策〕**调用方给的口令与键盘交互只交给最终目标。**调用方的凭据（`SshConfigConnectOptions.Credentials`）排在 `IdentityFile` 之后；
 跳板只拿到其中的公钥凭据（agent 里的钥、内存里的钥），跳板自己的 `IdentityFile` 照常从配置读。
 调用方的口令是为目标准备的：曾经每一跳都拿到同一份凭据，目标的口令就这样发给了跳板 ——
 跳板的管理员（或者攻下了跳板的人）就此拿到它。出示公钥不泄露秘密，而经 agent 登跳板正是最常见的用法。
