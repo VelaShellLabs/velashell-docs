@@ -254,23 +254,114 @@ needs are served by the five-zone split.
 
 ### Window shell
 
-The main window is a **self-drawn borderless window** (`WindowDecorations="None"`), *not* native
-chrome.
+On Windows and Linux the main window is a **self-drawn borderless window**
+(`WindowDecorations="None"`), *not* native chrome; on macOS it uses the system frame and the native
+traffic lights instead — see "Per-platform window frames" below.
 
-> ⚠️ This conclusion was earned; do not try to revert it. Avalonia 12.x's `ExtendClientArea` /
-> `WindowDecorationsElementRole` managed decorations intercept title-bar input on Win32 (buttons
-> stop responding, the window stops dragging), and `BorderOnly` additionally drops `WS_CAPTION`
-> (HTCAPTION dragging plus minimise/maximise animations break). The whole mechanism is unusable.
+> ⚠️ This conclusion was earned on **Windows (Win32)**; do not try to revert it there. Avalonia
+> 12.x's `ExtendClientArea` / `WindowDecorationsElementRole` managed decorations intercept title-bar
+> input on Win32 (buttons stop responding, the window stops dragging), and `BorderOnly`
+> additionally drops `WS_CAPTION` (HTCAPTION dragging plus minimise/maximise animations break). The
+> whole mechanism is unusable on Win32. The rule is about Win32 only: macOS and Linux use their own
+> native mechanisms (next subsection), which do not conflict with it.
 > A second trap: `VisualRoot as Window` is **always null** (the visual root is TopLevelHost) — the
 > window must be reached through the logical tree via `FindLogicalAncestorOfType<Window>()`. That
 > one cost hours of "the title-bar buttons appear to receive no input".
 
 Instead: **self-drawn plus native behaviour restored programmatically.** `Views/TitleBarView` draws
-a 36px bar (logo + product name on the left, the global action icon group and self-drawn
+a 28px bar (logo + product name on the left, the global action icon group and self-drawn
 minimise / maximise / close on the right); blank areas call `BeginMoveDrag` (the native move loop,
 so Win11 edge snapping works), double-click toggles maximise, **Win11 Snap Layouts come from a
 `MainWindow` WndProc hook on `HTMAXBUTTON`**, and there is a self-drawn 5px edge / 10px corner
-resize grip area (disabled while maximised). Every dialog uses the same borderless mode.
+resize grip area (disabled while maximised). On Windows every dialog uses the same borderless mode.
+
+#### Per-platform window frames
+
+A transparent window with a 16px card margin and a self-drawn `VelaShadowWindow` inside that margin
+only works on Windows, because DWM adds nothing to a borderless transparent window. A Linux
+compositor only knows the whole window rectangle: it strokes it, rounds its corners and blurs behind
+it, so the transparent margin turns into a ring of "empty space" around the card; an X11 setup
+without transparency (WSLg, for one) paints that margin solid. On macOS `None` has no system shadow
+or rounded corners, and transparent windows scroll poorly there, so those windows had to be opaque —
+a square rectangle with no shadow. Each platform therefore uses its own native mechanism:
+
+|              | Windows | macOS | Linux, native Wayland | Linux X11 (including fallback from Wayland) |
+|--------------|---------|-------|-----------------------|---------------------------------------------|
+| Main window  | Self-drawn borderless (as above) | `Full` + `ExtendClientAreaToDecorationsHint`: native traffic lights, system corners and shadow; the self-drawn window buttons and resize grips are turned off, and the title bar makes room for the traffic lights on the left (not in full screen) and takes the system title bar height (28pt today) so the traffic lights share its centre line | Self-drawn borderless | Self-drawn borderless |
+| Modal dialog | Transparent window + 16px card margin + self-drawn shadow | `BorderOnly` + extended client area: system corners and shadow, no traffic lights, opaque window | `BorderOnly` + the `VelaWaylandWindowDecorations` decorations theme: Avalonia draws a 16px shadow and a 1px frame, and reports the real window bounds to the compositor through `xdg_surface.set_window_geometry` | Opaque square rectangle |
+| Modeless window | Same as dialogs | `Full` + extended client area: native traffic lights; the self-drawn window buttons are hidden and the title bar makes room on the left | Same as dialogs | Same as dialogs |
+
+Maximised or full screen, the card fills the window with square corners on every platform. The
+self-drawn resize grips only appear in the normal state, and only where the system does not provide
+edge resizing: the macOS system frame and the Wayland decorations layer both do (the main window on
+Wayland is still `None`, so it keeps its self-drawn grips).
+
+**Implementation**: the window constructor calls `WindowChrome.Apply(window, kind[, resize grips])`
+(`Views/WindowChrome.cs`), which sets the decorations mode, transparency and background for the
+platform (plus the decorations theme on Wayland), follows the window state, and adds style classes to
+the window: the platform class `chrome-windows` / `chrome-macos` / `chrome-wayland` / `chrome-x11`;
+`chrome-traffic-lights` (the system traffic lights are shown); `window-card-flat` (the card is square
+— always on macOS / X11, and on every platform while maximised or full screen); `window-fullscreen`.
+The XAML conventions (styles live in `Themes/WindowChrome.axaml`):
+
+- The card carries `Classes="window-card"` and hard-codes none of margin, corner radius, border
+  thickness or shadow — a local value outranks a style, so a hard-coded one stops following the platform;
+- Children that hug the card's corners with an opaque background (title bar, status bar, left
+  navigation…) set no `CornerRadius` and carry `window-card-top` / `-bottom` / `-left` / `-right` /
+  `-bottom-left` instead: the inner radius 7 while the card is rounded, square while it is square;
+- Modeless windows put `window-caption` on their self-drawn minimise / maximise / close, and a
+  `<Panel Classes="traffic-light-spacer" />` at the far left of the title bar to make room for the
+  traffic lights;
+- **Every window's title bar has one height** (main window, standalone windows and dialogs; 28 since
+  2026-09-26): the title bar carries `window-titlebar`, its height is set once in the style, never in
+  XAML, and the title row is `Auto`; window buttons are 27×27 squares (side = bar − 1px border). A subtitle or
+  action buttons that do not fit move to a row below the title bar (resource monitor, recording
+  player, remote editor, connection diagnostics). On macOS, windows that show the traffic lights take
+  the system title bar's real height instead (`WindowDecorationMargin.Top`, 28 today) — the lights
+  cannot be moved, so the title bar aligns to them. Two exceptions have no window buttons in their
+  header, so it is not a title bar and stays 48: the settings window, whose top-left strip is the
+  navigation header doubling as the drag area; and the message dialog (notice / confirm / prompt),
+  which has no close button and closes only from its button bar or Esc.
+
+Window sizes are written for Windows (including the 16px margin); macOS / X11 subtract 32 from width
+and height and Wayland 34 (with the client area not extended, Wayland's `Width` / `Height` cover the
+content only and the 1px frame is drawn outside), so the visible card is the same size on every
+platform. Where code carries another Windows-based size (the panel window size a plugin declares,
+the height cap of the new-connection window), it subtracts `WindowChrome.SizeReductionOf`.
+Isolated plugins' windows live in another process (`PluginHostShellWindow` in `VelaShell.PluginHost`),
+which by dependency rule does not reference the main program, so the same rules are written again
+there in code (including the Wayland decorations theme). `WindowChromeCoverageTests` scans every
+window so that a hard-coded frame cannot come back.
+
+**Grounds** (Avalonia 12.1.3 source):
+
+- **macOS**: `None` turns the system shadow off and has no titled style, hence no system corners;
+  `BorderOnly` is `Titled | FullSizeContentView` with a system shadow; the traffic lights appear only
+  with `Full`, and their position cannot be changed (`ExtendClientAreaTitleBarHeightHint` only
+  resizes the title-bar material). With the client area extended, a left-button press is first
+  hit-tested against the UI: hitting a button is an ordinary click, and only a press that hits
+  nothing, or hits an element with the `TitleBar` role, is handed to the system for dragging /
+  double-click zoom — so the action buttons at the top right stay clickable.
+- **Wayland**: anything other than `Full` switches permanently to client-side decorations;
+  `BorderOnly` draws the shadow, frame and resize grips but no title bar; the shadow width goes to
+  the compositor through `set_window_geometry`, which then treats the frame as the window edge (GTK4
+  applications do the same). Do not switch a window back and forth between frame modes. Avalonia
+  12.1.3's Wayland backend requires `xdg_wm_base` version 3 or later from the compositor; WSLg's
+  Weston does not have it, so WSLg always falls back to X11.
+- **X11**: `BorderOnly` also makes Avalonia draw decorations, but the X11 backend implements no
+  shadow extents and does not write `_GTK_FRAME_EXTENTS`, so the compositor still gets the whole
+  rectangle — hence the opaque rectangle. The window handle descriptor is `"XID"`, while the Wayland
+  backend provides no handle; that is how the two are told apart.
+
+**Acceptance**: the frame rework itself left every window on Windows pixel-identical to before
+(headless render comparison of all windows in both the dark and the light theme; only the
+**maximised** state of the recording player and the remote editor changed — they used not to fill
+the window when maximised and now behave like the other modeless windows). Afterwards, at the user's
+request, every window's title bar was unified at 28, which intentionally changes the title bar height
+on Windows too. On macOS the main window, the settings window and the message dialog were accepted
+on real hardware (2026-09-26); the other windows use the same mechanism, and the modeless windows'
+traffic lights, the traffic-light alignment after the move to 28, and native Linux Wayland desktops
+await the next round of on-device checks.
 
 The text menu bar was removed entirely; the command palette (`Ctrl+P` / `Ctrl+K`) took over.
 

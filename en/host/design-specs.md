@@ -4,7 +4,7 @@
 > Fonts: JetBrains Mono = mono, Inter = ui. Icon library: lucide (2px stroke, rounded endpoints, scaled to a 24×24 view box).
 >
 > ⚠️ **Implementation difference note**: This document is the original design-file extraction. In the implementation, the window is **self-drawn and borderless** (`WindowDecorations="None"`, not a native title bar),
-> with `TitleBarView` drawing a 36px title bar: logo + product name on the left, and the action icon group + self-drawn minimize/maximize/close window buttons on the right;
+> with `TitleBarView` drawing a 28px title bar: logo + product name on the left, and the action icon group + self-drawn minimize/maximize/close window buttons on the right (on macOS those three are replaced by the system traffic lights on the left; see [`architecture.md`](architecture.md) §5 "Window shell");
 > the 6 **text menu items (Session/Edit/Actions/Search/Tools/Help)** in the “menu bar” below have also been removed wholesale (they duplicated command-palette functionality, a product decision),
 > the “Broadcast send” action in the right-side action icon group is implemented as the multi-terminal input-bar toggle; “Group sync link-2” remains an unimplemented disabled state (semi-transparent). The rest of the layout and tokens remain the basis for UI reconstruction.
 
