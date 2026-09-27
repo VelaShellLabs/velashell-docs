@@ -77,8 +77,8 @@ Host/         Every public type, all in the root namespace VelaShell.XServer: IX
 Protocol/     Constants (opcodes, event codes, error codes, masks, predefined atoms), byte-order-aware request
               reading and reply / event / error writing
 Server/       X11Server: every public member lives in X11Server.cs (construction, lifecycle, host injection); the execution
-              loop (WorkLoop), listening and connections (Connection, UnixSocket: TCP 6000+N, Unix sockets and ServeAsync over
-              any duplex stream, connection setup and authorization MIT-MAGIC-COOKIE-1 / local only, backpressure, BIG-REQUESTS,
+              loop (WorkLoop), listening and connections (Connection, UnixSocket: TCP 6000+N, Unix sockets and ServeAsync /
+              ServeAuthenticatedAsync over any duplex stream, connection setup (time-limited) and authorization (see §7), backpressure, BIG-REQUESTS,
               cleanup on disconnect), the resource table and XC-MISC (Resources), request dispatch (Dispatch), deferred host
               callbacks (DeferredHost), the extension registry (Extensions: the numbering table, the check that event / error
               numbers do not overlap, cleanup hooks for disconnects and destroyed windows, Generic Event);
@@ -92,7 +92,7 @@ Windowing/    Window model (tree, geometry, attributes, event selections, passiv
 Resources/    Resource types: GCs, pixmaps, colormaps, cursors, font handles, plus each extension's resources (RENDER pictures
               and glyph sets, SYNC, DAMAGE, XFIXES regions, Present event contexts, MIT-SHM segments, GLX contexts and
               drawables); the colour-name table
-Drawing/      32-bit software framebuffer, regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
+Drawing/      32-bit software framebuffer, y-banded regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
               points / lines (thin Bresenham + wide-line polygons) / rectangles / scan-line polygon fill / arcs /
               image blocks / text; RENDER: pixel formats, compositing operators and blend modes, sources (image / solid /
               gradients with repeat, transform, filter), trapezoid coverage
@@ -125,13 +125,32 @@ each request's effects are visible to everything after it. Therefore:
 - One **reader task** per connection (64 KB buffer) cuts complete requests by their length field and hands them to the
   loop; one **writer task** packs the messages the loop queued for that connection into one pooled buffer and writes it.
   The loop never blocks on a socket, so a slow client cannot stall the others.
-- **Backpressure**: at most 1024 read-but-not-executed requests per client (the reader waits asynchronously on a
-  `SemaphoreSlim`); a client whose queued output exceeds 64 MB (it stopped reading) is disconnected. Disconnecting is
+- **Backpressure**: at most 1024 read-but-not-executed requests per client, 32 MB in total (the reader waits asynchronously on a
+  `SemaphoreSlim` and on the byte budget, and only then allocates and reads — counting requests alone would allow 1024 requests of
+  16 MB, 16 GB); a client whose queued output exceeds 64 MB (it stopped reading) is disconnected. Disconnecting is
   real — `XClient.Abort` cancels the pending read and write on the connection.
+  Request buffers are rented from `ArrayPool` and returned after execution (a full-window PutImage is several MB, and allocating
+  each one would put every one of them on the large object heap); the request reader carries its own length and reads only that
+  many bytes, and anything a request's content must outlive is copied out. Replies and events are assembled in a writer reused per
+  thread; only the copy handed to the writer task is allocated.
+- **Connection setup has a time limit**: the setup message (the 12-byte header plus the authorization name and data) must arrive,
+  and a failure reply must be written, within 30 seconds, or the connection is closed — the client limit (255) counts only
+  established clients, so without a limit a connection that never finishes setup could hold a socket forever. Waiting for the
+  execution thread to register the client is not timed.
 - **Everything that waits, waits asynchronously**: XTEST and Present delays and SYNC timers use `Task.Delay` and `Post`
   back to the loop when due; SYNC's Await parks that client's later requests and replays them in order once satisfied.
+  An XTEST FakeInput with a delay parks that client's later requests the same way (per the spec, no other requests from the client
+  are processed until the delay expires) without blocking the execution thread; Present's NotifyMSC queues at most 256 per client.
+  A client's pending timers are cancelled when it disconnects.
+- **Diagnostics are never written under the lock**: protocol errors and other diagnostics are collected on the execution loop and
+  handed to `X11ServerOptions.Log` after the lock is released (host logs often write files synchronously, and writing under the lock
+  makes the UI thread wait on the disk); at most 50 lines per second, with the rest folded into one "N suppressed" line. Each request's
+  opcodes are recorded as integers in a ring and turned into text only when an error is printed.
 - During **GrabServer** the loop runs only the holder's requests; other clients' requests are parked as they are and
   replayed in order after the ungrab.
+- **While a synchronous grab freezes devices**, device events queue in a single list, pointer and keyboard in arrival order
+  (at most 4096; when full, the oldest motion is dropped first); after release, one work item replays at most 64 of them and the
+  rest go to the next work item — so client requests in between (the next AllowEvents) can get in.
 - Damage is merged after a batch of work items and reported to the host once (not once per drawing request); each
   top-level accumulates at most 8 rectangles per batch and falls back to their bounding box beyond that — an exact
   union degrades to O(n²) over a batch of a few hundred requests.
@@ -165,17 +184,40 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   how they reach the screen is the host's business.
 - **Keycodes use evdev numbering (evdev + 8)**, like X.Org on modern Linux — most remote clients expect it. The host
   translates physical keys to X keycodes; the keysym table comes from the library (US layout to start, replaceable).
-- **Authorization**: listens on `127.0.0.1` by default; without a configured cookie it admits local connections only
-  (matching X.Org's host access control — connections arriving through SSH X11 forwarding come from 127.0.0.1); with a
-  cookie it requires `MIT-MAGIC-COOKIE-1`, compared in constant time.
+- **Authorization**: listens on `127.0.0.1` and Unix sockets by default. In order: ① a stream the caller has already
+  authenticated (`ServeAuthenticatedAsync`, used by the host's SSH connector — the fake cookie was already checked at the SSH layer)
+  is admitted; ② a correct `MIT-MAGIC-COOKIE-1` (compared in constant time) is admitted; ③ a peer known to be the user running the
+  server — the socket file set to 0600 between `bind` and `listen`, or an SO_PEERCRED uid equal to this process's — is admitted;
+  ④ a peer whose uid is known and belongs to another user is refused (sockets in the Linux abstract namespace have no file
+  permissions, so without the uid check any local user could connect, read windows, log keystrokes and inject input through XTEST);
+  ⑤ with a configured cookie everything else is refused (loopback TCP included: any local process or user can reach that port);
+  without one, as with X.Org's host access control, only local connections are admitted.
+  The host's built-in server generates a fresh cookie on every start and writes it to the user's `.Xauthority` (`XAUTHORITY`
+  first; read-modify-write under xauth's lock-file convention, leaving unrecognised content alone; on stop it removes only its own
+  entry), so local X programs send it automatically through Xlib; programs that cannot read that file are refused.
+  ⚠️ A design-level caveat (not a defect): every SSH session with X11 forwarding shares this one trusted display — a compromised
+  remote machine can, through its forwarding, see and operate X programs from other sessions (read window contents, log keystrokes,
+  inject input). That is what trusted X11 forwarding means; do not enable X11 forwarding for remote machines you do not trust.
+- **Every resource has a limit, and exceeding it gets BadAlloc (or GL's OUT_OF_MEMORY) instead of taking the process down**:
+  255 clients; windows nested at most 256 deep, 32768 windows per client (destruction and repainting walk an explicit stack,
+  not recursion); regions at most 16384 rectangles, with a merge budget for union / intersect / subtract; pixel buffers 2²⁶ pixels;
+  property values 32 MB, client-created atoms 2¹⁸ with 16 MB of names in total; XI2 device IDs up to 255; XC-MISC at most 65536 IDs
+  per request; GLX display lists 65536 / 64 MB, textures 65536 / 256 MB, 2¹⁹ vertices per primitive, line width and point size 64,
+  and a ReadPixels reply no larger than half the output backlog limit.
 - **Fonts**: core fonts come from the built-in BDFs (`fixed` / `6x13` / `9x15` / `10x20` and their XLFD names); later the
   host may add more through a font-provider interface (e.g. rasterizing Cascadia Mono into bitmap fonts). The `cursor`
   font is virtual: metrics only; the library derives a semantic shape (`XCursorShape`) from the glyph number and the host picks a system cursor for it. Modern toolkits do not use core
   fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
-- **RENDER's general path composites per pixel in floating point; the two dominant cases use integer kernels**:
-  premultiplied alpha, 0–1 per channel on the general path; solid source + one-byte mask + Over (Xft text, cairo's
-  anti-aliased shapes) and 8888 image Src / Over (image blits, window-to-window copies) run in 8-bit integer
-  arithmetic. Alpha-only glyphs are stored one byte per pixel; one CompositeGlyphs request computes its target once
+- **RENDER composites in integers on 8888 targets**: pixels are always premultiplied. For Src / Over / Add (without component
+  alpha) onto a8r8g8b8 / x8r8g8b8 targets, the source and the mask are each fetched as a row of 8-bit premultiplied pixels —
+  gradients, transforms, repeat and every source format are handled while sampling (solid colours, 8888 and a8 are just
+  rearranged, bilinear filtering uses 0–256 fixed-point weights, gradient colours are still computed in floating point and
+  quantized once) — and then combined per pixel in integers, at most 2 away from all-floating-point. Of these, solid source +
+  one-byte mask + Over (Xft text, cairo's anti-aliased shapes) and 8888 image Src / Over (image blits, window-to-window copies)
+  skip row sampling and work directly on the stored pixels. Other operators, component alpha and other target formats
+  composite per pixel in floating point (0–1 per channel). When the source or mask is the target's own buffer, the part to
+  be read is copied out first (the result must be as if the source were read before any write).
+  Alpha-only glyphs are stored one byte per pixel; one CompositeGlyphs request computes its target once
   and records damage once. Trapezoids and triangles use 16 sub-scanlines per row with analytic horizontal coverage,
   computed only over the writable part of the target. Source-picture clipping, alpha maps, poly-edge / poly-mode /
   dither are accepted but have no effect.
@@ -207,13 +249,18 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   Unix socket — a shmid from a remote client forwarded over SSH means nothing on this machine. Segment size and owner come
   from `/proc/sysvipc/shm` and the peer uid from SO_PEERCRED; a peer that is neither owner nor creator, on a segment not
   opened to others, gets BadAccess (otherwise a local client could read and write someone else's shared memory through the
-  server). Shared pixmaps and 1.2's fd passing are not implemented.
+  server); when another client refers to a segment by its XID (not the one that attached it), the check runs again.
+  Shared pixmaps and 1.2's fd passing are not implemented.
 - **Two GLX paths**: without DRI3 / DRI2, Mesa defaults to drisw — the client renders with llvmpipe (GL 4.5) and sends
   pixels with PutImage, so the server only has to register configs, contexts and drawables; programs forwarded over SSH
   work the same way. With `LIBGL_ALWAYS_INDIRECT` forced, the software GL in `Gl/` executes a subset of the fixed-function
   pipeline and honestly reports version 1.1 (3D textures are not implemented); evaluators, the accumulation buffer,
   selection / feedback, mipmap LOD and stippling are not implemented. A GLX surface is at most 4096 × 4096 pixels, and one
-  request may expand at most 4 million display-list commands (lists calling each other expand exponentially).
+  request may expand at most 4 million display-list commands (lists calling each other expand exponentially; every CallList counts).
+  After each Render request, a single-buffered front buffer copies only the bounding rectangle drawn since the last copy into the
+  window and records damage for just that — no full-window copy, and X drawing elsewhere in the window is not overwritten.
+  Surfaces are released with their drawable and their client (a reused XID gets a fresh surface); GL_EXT_abgr, advertised in the
+  extension string, is implemented.
 - **Clipboard**: host → X, the server itself owns CLIPBOARD and answers per ICCCM; X → host, the server fetches the text
   with a hidden InputOnly window as requestor (UTF8_STRING with STRING fallback, INCR supported). When the host writes
   back the text it just received, the server does not take the selection, so the two sides never fight over it.
@@ -318,9 +365,11 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   that is showing windows). VcXsrv exists only on Windows; other platforms only have the built-in engine.
 - **M3: SSH x11 channels go straight into the server through a connector**: the SSH library's
   `X11ForwardOptions.LocalConnector` (`velashell-docs/en/ssh/spec/07` §7.5.9) gets an in-memory duplex stream pair per channel and
-  hands one end to `X11Server.ServeAsync`. The fake-cookie check is unchanged; the server admits the stream as a local connection.
+  hands one end to `X11Server.ServeAsync`. The fake-cookie check is unchanged; the server admits the stream as a local connection
+  (since 2026-09-26 it is handed to `ServeAuthenticatedAsync` and not checked again, see §7).
   Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP. The server keeps listening
-  on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N`.
+  on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N` (since 2026-09-26 they
+  need the cookie the host writes to `.Xauthority`).
   **Two corrections on 2026-09-24**: ① the connector picks the server that is running **at the moment** each channel arrives,
   instead of remembering the one that was running when the display was resolved — an SSH session outlives the server, and after
   the user stopped and restarted the X Server from the title bar, every channel of an existing session used to go into a disposed
@@ -441,3 +490,32 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   ⑦ Other: `Display` reflects the transports actually listening (`:N` / `localhost:N.0` / null when neither), with `DisplayNumber` alongside;
   `ServeAsync`'s `isLocal` has no default any more and the docs state the stream is not disposed; diagnostics go only through `Log` (some used to go to
   `Trace`, so failures in host-injected work items were invisible to the host); the bell volume is computed as the protocol specifies.
+- **The 31 fixes from the library-wide review (2026-09-26)**: the 31 items recorded by the 2026-09-25 review were fixed one by one,
+  each with a test that was first confirmed to fail with the fix reverted; limits and authorization are in §5 and §7.
+  The ones that changed protocol behaviour or are worth remembering:
+  ① **Extension error numbers moved up by one**: XFIXES gained BadBarrier (`DestroyPointerBarrier` now accepts only pointer barriers;
+  it used to delete whatever ID it was given, so one request could delete the root window), and every later extension's errors moved
+  up with it: XFIXES 128–129, RANDR 130–133, RENDER 134–138, SYNC 139–141, DAMAGE 142, DOUBLE-BUFFER 143, XKEYBOARD 144,
+  XInputExtension 145–149, MIT-SHM 150, GLX 151–164. Clients always get these from `QueryExtension` and are unaffected.
+  ② **Focus and crossing events follow the protocol**: focus events carry the details from the protocol's "Input Focus events"
+  section (Ancestor / Virtual / Inferior / Nonlinear / NonlinearVirtual / Pointer…) with the virtual events, and KeymapNotify follows
+  FocusIn; activating / releasing a grab sends focus and crossing events in Grab / Ungrab mode, and during a grab Enter / Leave go only
+  to the grabbing client; a grab is released automatically when its window or confine-to becomes unviewable; with the keyboard
+  grabbed, key events still take their source window from the focus.
+  ③ **`FocusTopLevel` follows ICCCM's input models** (the WM_HINTS input hint, §4.1.2.4; WM_TAKE_FOCUS, §4.2.8): override-redirect
+  windows are ignored; windows whose input hint is False are not given the focus directly; windows advertising `WM_TAKE_FOCUS` get
+  the ClientMessage (with a real timestamp, not CurrentTime).
+  ④ **CloseDownMode takes effect**: resources of RetainPermanent / RetainTemporary clients survive their disconnect, and KillClient
+  destroys them by resource ID or with AllTemporary.
+  ⑤ **A latched XKB modifier is cleared after one use**; SetMap validates the keycodes in the modifier map; XI2 button events report
+  the buttons as they were before the event (as the protocol specifies).
+  ⑥ **GLX**: MakeCurrent prepares the surfaces before changing any state (a BadAlloc used to leave the context stuck on a phantom tag);
+  RenderLarge checks the assembled length against the one declared in the first part; RenderMode was checked against
+  *GLX Extensions for OpenGL Protocol Specification* 1.3 §2.2.1, which confirmed the existing behaviour — no reply when the previous
+  mode was render.
+  ⑦ **The host tracks pressed buttons one by one**: when a native window loses capture or is deactivated, it releases in X the
+  buttons still held; a release for a top-level that is already gone still takes effect (X used to keep the button pressed).
+  ⑧ **Performance**: the benchmark (`scripts/xserver/bench/bench.cs`, with four new scenarios — gradient / transformed / masked
+  composites and GLX single-buffered small triangles — and a bytes-allocated-per-request column): linear-gradient Over
+  4.2k → 7.2k per second, 2× bilinear upscale 2.2k → 4.0k, ARGB + a8 mask 3.8k → 19.3k; GLX single-buffered one small triangle
+  per request 4.2k → about 46k; full-window PutImage 1.1k → 1.6k (40% less CPU).
