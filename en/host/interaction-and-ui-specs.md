@@ -179,7 +179,7 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 ---
 
-## 4B. Tab Bar (Single 36px Row, `bg-page` background) ★Refactored
+## 4B. Tab Bar (Single 36px Row by Default, Multiple Rows Optional, `bg-page` background) ★Refactored
 
 > Located at the top of the right area. **It carries only tabs and overflow controls, and no longer contains global feature buttons** (those have moved up to the menu bar in §4A.2). Design nodes: `nunbT`, overflow control group `Tab Overflow Controls` (`pZGS4`).
 
@@ -206,27 +206,41 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 - Active state: `bg-terminal` background + 2px accent bar at the top + `text-primary` text.
 - Inactive state: `tab-inactive-bg` background + `text-tertiary` text + `text-muted` close icon, which becomes prominent only on hover.
 - Connecting tabs use a yellow dot; disconnected tabs use a red dot.
+- Width follows the title (#521): the full title when there is room; when one row is too narrow the tab shrinks as described in §4B.3, and **only the title shrinks** (with an ellipsis) — the dot, icons and the button at the end stay as they are.
+- A pinned tab (§4B.5) shows a pin instead of the `x`.
 - Interaction:
-  - Click = activate; middle-click/click `x` = close, with a second confirmation when there are unsaved changes or active transfers.
+  - Click = activate; middle-click/click `x` = close, with a second confirmation when there are unsaved changes or active transfers. A pinned tab ignores middle-click.
   - Double-click empty tab space = rename (inline editing).
-  - Drag = reorder; drag to an edge = trigger Dock splitting/floating window.
-  - Right-click = tab context menu (close, close others, close to the right, duplicate session, rename, move to new window, join sync group).
+  - Drag = reorder; drag to an edge = trigger Dock splitting/floating window. A pinned tab only moves within the pinned block, and an unpinned tab cannot be dragged into it.
+  - Right-click = tab context menu. Current state (2026-09-27): sync input (terminal tabs only) | Close, Close Other Tabs, Close All Tabs, Close Tabs to the Left, Close Tabs to the Right | Pin Tab / Unpin Tab | Split Horizontally, Split Vertically, Maximize / restore pane | Tab Position, Show Tabs in Multiple Rows (check item). Close Others / All / Left / Right always **skip pinned tabs**. Duplicate session, rename and move to new window are not implemented yet.
 
 ### 4B.3 Tab Overflow Logic (VS Code style) ★User specified
 
 - When total tab width ≤ container width: lay out normally, hide/disable `◀ ▶`, and keep `▾` available.
+- When the tabs don't fit, **shrink first, then overflow** (#521, following VS Code's `tabSizing: shrink`): only **the widest tabs** are trimmed, down to one common width; tabs narrower than that keep their width (a short tab such as "FTP" doesn't narrow along with the long ones). Overflow below only starts once they are down to the **120px** floor and still don't fit.
 - On overflow:
   1. Clip the container and automatically use `ScrollIntoView` to keep the active tab visible.
   2. Allow `◀ / ▶` to scroll; disable the corresponding button at each boundary.
   3. Allow horizontal wheel scrolling over the container.
   4. Always list all tabs in the `▾` drop-down as a fallback for quick navigation during overflow.
 - Drop-down items: status dot + session name + a check mark on the right for the current item. Support keyboard up/down + Enter selection. Tabs can also be closed here, with `x` appearing on hover.
+- **Multiple rows** (#521, matching Visual Studio's "Show tabs in multiple rows"): when on, tabs that don't fit wrap onto the next row instead of shrinking or overflowing; the strip grows with the number of rows (35px per row, the 1px separator stays below the last row), and the active tab's accent line moves to its row. Two entry points change the same value: "Show Tabs in Multiple Rows" (check item) in any tab's right-click menu, and the switch of the same name under Settings → Appearance → Window (`AppearanceOptions.MultiRowTabs`, off by default). One switch for the whole workspace, so every pane changes together; it only applies to tab strips at the top — a strip docked left or right already has one tab per row, and the menu item is disabled there.
 
 ### 4B.4 Resource Monitor on Tab Hover ★User specified (see §11)
 
 - Move the mouse over **any tab name** and **hover stationary for >400ms** to show the “System Resource Monitor” at the **current mouse position**.
 - Move the mouse out of the tab, or into another tab, to make the panel **disappear automatically**. A 150ms fade-out debounce is recommended. Moving into the panel itself keeps it visible.
 - The panel shows resource data for the **session associated with that tab**, not the active session, so it can quickly inspect other sessions.
+
+### 4B.5 Pinned Tabs ★User specified (#521)
+
+> Matches Visual Studio's "Pin Tab". This is **not** the Pin of the old Dock.Avalonia (pinning a panel to the side as auto-hide, see the product red line in [dock-replacement-plan.md](dock-replacement-plan.md)); that one is still out of scope.
+
+- Entry points: "Pin Tab" / "Unpin Tab" in the tab's right-click menu (only the one that applies is shown); the pin at the end of a pinned tab — one click unpins it.
+- Position: pinned tabs always come first in their pane. Pinning moves the tab to the end of the pinned block, unpinning moves it to the start of the unpinned ones (the nearest valid position either way). Dragging and moving between panes keep the same order: a pinned tab lands in the target pane's pinned block, an unpinned tab can only land after it, and the insertion line is drawn where the tab will actually land.
+- Protection: Close Others / All / Left / Right skip pinned tabs, and middle-click does not close them. Closing the tab itself still works: right-click → Close, or `Ctrl+W`.
+- A "connecting" placeholder tab can be pinned too; the real tab that replaces it once connected keeps the pin.
+- The pinned state lasts for the current run only and, like the split layout, is not saved (layout persistence is a separate item in the host repo's `feature-plan.md`).
 
 ---
 

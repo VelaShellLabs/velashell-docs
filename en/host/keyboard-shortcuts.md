@@ -127,7 +127,7 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | Paste with the right button | `Right Click` | Can be turned off in Settings |
 | Zoom the terminal font | `Ctrl+Wheel` | — |
 | Scroll the buffer five times faster | `Alt+Wheel` | — |
-| Close Tab | `Tab+Middle Click` | — |
+| Close Tab | `Tab+Middle Click` | Not on pinned tabs |
 | Scroll the tab strip | `Tab strip+Wheel` | — |
 | Even out panes | `Splitter+Double Click` | Only when the window is split |
 | Open the gutter settings menu | `Gutter+Right Click` | — |
