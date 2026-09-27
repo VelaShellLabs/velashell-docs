@@ -44,6 +44,9 @@ After a repository-wide audit, Dock's integration surface is **highly concentrat
 8. **View retention**: each document's `TerminalTabView` is built only once; switching tabs does not rebuild it
    (previously provided by `ControlRecycling`; critical to smooth multi-tab switching).
 9. **Product boundaries**: floating windows prohibited, Pin prohibited, MDI prohibited, no "+" new-tab button (new tabs use Ctrl+T/session tree).
+   (Note 2026-09-27: Pin here means the old Dock kind that pins a panel to the side as auto-hide, and that is still out.
+   Pinned tabs on the tab strip (Visual Studio style: pinned tabs come first and bulk closes skip them) are a different
+   thing, added with #521; see [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §4B.5.)
 10. **Empty-group collapse**: after the last tab in a split-off group is closed, automatically remove the group and promote its sibling; **the root** never disappears.
     (Corrected 2026-09-10: this used to read "the primary group never disappears". Pinning that exemption to one
     specific instance turns a primary group that was dragged aside and then emptied into a blank nobody can get rid of —

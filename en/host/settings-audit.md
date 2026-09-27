@@ -158,7 +158,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | General | Data Management | Import settings, export settings, clear recent connections, restore defaults | Restore defaults must require confirmation; export scope must be accurate |
 | General | Application Updates | Check for updates at startup, update channel, download automatically | Hide the whole group until the feature is implemented |
 | Appearance | Application Theme | Theme mode, theme color, interface font, interface font size | Keep real-time preview |
-| Appearance | Window and Layout | Window opacity, show menu bar, sidebar position | Hide tab bar position until implemented |
+| Appearance | Window and Layout | Window opacity, show menu bar, sidebar position, show tabs in multiple rows (`Appearance.MultiRowTabs`, off by default) | Hide tab bar position until implemented; multiple rows is the same value as the check item of the same name in the tab right-click menu |
 | Terminal | Font and Display | Terminal font, font size, line height, scrollback buffer, semantic highlighting | Semantic highlighting can be placed in an advanced collapsed section |
 | Terminal | Colors | Color scheme, foreground color, background color, cursor color, selection color, ANSI palette | Collapse the ANSI palette by default; if it cannot be edited, label it as a preview |
 | Terminal | Cursor | Cursor style, blink, blink accessibility settings | Support reduced motion |
@@ -428,3 +428,19 @@ lives in `AppSettings.XServer.Engine`; unrecognized values fall back to built-in
   on Windows something listens on `localhost:0`, elsewhere `DISPLAY` is set; a selected-but-missing VcXsrv is silent too.
 - The former “on non-Windows platforms the page is a single note” is gone: the built-in engine works everywhere, so the page is
   shown on every platform (except the Engine section).
+
+### 2026-09-27 Eighth batch (#521: show tabs in multiple rows)
+
+Appearance → Window gains a switch matching Visual Studio's "Show tabs in multiple rows". Host side in `plan.md` §127,
+interaction in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §4B.3.
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Show Tabs in Multiple Rows | Off | On / off (`Appearance.MultiRowTabs`) | Off: when one row is too narrow, the widest tabs shrink first (120px floor), then the strip scrolls; on: tabs wrap onto more rows and the strip grows |
+
+- **Two entry points, one value**: any tab's right-click menu has a check item of the same name, and toggling it writes this
+  setting back; saving the settings page flows back into the tab strip the same way. Nothing is saved again when the value
+  flowing back is unchanged, so the two sides never bounce writes off each other.
+- One switch for the whole workspace, so every pane changes together; it only applies to tab strips at the top, and the menu
+  item is disabled when the strip is docked left or right.
+- The row label and the menu item use the same localization key (`Dock_MultiRowTabs`), so the two always say the same thing.
