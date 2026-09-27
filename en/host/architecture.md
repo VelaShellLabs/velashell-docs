@@ -524,7 +524,7 @@ sequenceDiagram
     SSH-->>VM: connected (writes audit_log)
     VM->>Br: build the bridge, read loop
     Br->>T: bytes → VT engine → self-drawn rendering
-    T->>Br: PtySizeChanged(cols,rows) → live window resize
+    T->>Br: PtySizeChanged(cols, rows + physical pixels) → live window-change
     VM->>VM: run the profile's post-auth command after its delay
 ```
 
