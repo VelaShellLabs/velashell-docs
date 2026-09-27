@@ -440,7 +440,7 @@ sequenceDiagram
     SSH-->>VM: 连接成功（写 audit_log）
     VM->>Br: 建桥，只读循环
     Br->>T: 字节流 → VT 引擎 → 自绘渲染
-    T->>Br: PtySizeChanged(cols,rows) → 实时改窗
+    T->>Br: PtySizeChanged(行列 + 物理像素) → 实时改窗（window-change）
     VM->>VM: 「认证后执行命令」按 profile 延迟下发
 ```
 
