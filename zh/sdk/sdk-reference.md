@@ -207,7 +207,7 @@ Icon = PluginIcon.Filled(RedisLogoPathData, viewBoxSize: 1030)
 | **2.0.2** | 会话能力的「打开已保存的会话」三件套:`ISessionsApi.ListSavedAsync` / `OpenAsync` / `CloseAsync`,配套 `SavedSessionInfo`、`SessionOpenOptions` 与 `PluginSessionOpenException`。在这之前插件只能操作用户**已经手动连上**的机器,任何无人值守的用法都塌了半边。                                                        | 用到就要(`2.0.2`)                         |
 | **2.0.3** | 标签页图标的第一版:`ProtocolDescriptor` / `WorkspaceDescriptor` 上各一组 `IconPathData` / `IconViewBoxSize` / `IconIsFilled`。⚠️ **这一版的三对字段已被 2.0.4 版的 `Icon` 取代,不要再用** —— 当时面板那条路还漏着,而同一个概念在两处各写三个平行属性本身就是设计错误。发布次日即改,零插件受影响。 | ❌ 已废弃,直接用 2.0.4 版                   |
 | **2.0.4**   | 标签页图标收成一个入口 `PluginIcon`(见 §3.6),三处共用:`ProtocolDescriptor.Icon`、`WorkspaceDescriptor.Icon`,以及**新增的** `PanelOptions.Icon` —— 面板标签走的不是描述符那条路,2.0.3 漏了它。带 `PluginIcon.Stroked` / `PluginIcon.Filled` 两个便捷构造。 | 用到就要(`2.0.4`)                           |
-| **TBD**(发版时替换) | `IProtocolStreamUpload`:`IProtocolFileSystem` 可**选择**兼实现的接口 —— 把一条顺序读的流写成远端文件(覆盖)。宿主据此把文件在两个远程会话之间经内存中转,而不必先落一份临时文件(「远程 + 远程」双栏文件标签)。流归调用方;可能不可 Seek,长度单独给出;不续传。不实现完全合法:宿主就把这个协议当作不支持从流上传。只增不改,`apiLevel` 不变。 | 用到就要(TBD,发版时替换) |
+| **2.0.6** | `IProtocolStreamUpload`:`IProtocolFileSystem` 可**选择**兼实现的接口 —— 把一条顺序读的流写成远端文件(覆盖)。宿主据此把文件在两个远程会话之间经内存中转,而不必先落一份临时文件(「远程 + 远程」双栏文件标签)。流归调用方;可能不可 Seek,长度单独给出;不续传。不实现完全合法:宿主就把这个协议当作不支持从流上传。只增不改,`apiLevel` 不变。 | 用到就要(`2.0.6`) |
 
 ### 2.0 迁移
 

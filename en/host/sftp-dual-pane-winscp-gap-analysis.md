@@ -281,7 +281,7 @@ WinSCP's Commander interface can point both panes at remote servers, and FileZil
 
 ### 8.2 Known limitations
 
-- **Resume only from an SFTP source**: verifying the resume point needs to seek within the source, and an FTP data connection can only be read sequentially, so with an FTP source the file is sent again in full.
+- **Resume only from an SFTP source**: verifying the resume point needs to seek within the source; FTP and plugin read streams are sequential, and the plugin streamed upload does not resume. When it cannot be verified the file goes to the same-name conflict policy instead of being silently sent again in full.
 - **No synchronize window**: "Synchronize…" and "Keep remote up to date" are designed around local ↔ remote and are not offered in these tabs; "Compare directories" is, by size and modification time (no SHA-256).
-- **Plugin protocols are left out**: the plugin file-system contract only has "upload a local file". The SDK adds an optional interface, `IProtocolStreamUpload` (see [../sdk/sdk-reference.md](../sdk/sdk-reference.md) §5); the host wires it up once that SDK release is published. Until then the menu item is disabled when the pair contains a plugin protocol.
+- **Plugin file protocols** (added 2026-09-28): plugin protocols such as S3 and WebDAV can take part. As a source they use the SDK's existing `OpenReadAsync`; as a target the plugin must also implement `IProtocolStreamUpload` (SDK 2.0.6, see [../sdk/sdk-reference.md](../sdk/sdk-reference.md) §5), otherwise that pane is a source only. Workspaces (Redis…) and terminal protocols (Telnet…) cannot take part.
 - Restore-sessions-on-startup does not reopen these tabs (it remembers single profiles).
