@@ -116,6 +116,18 @@ From top to bottom:
        one FTP profile and closing either of them turned the node “disconnected” while the other was still alive.
    - The current session row is highlighted with `bg-active` and a vertical accent bar on the left.
    - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging.
+   - **Ctrl pair selection** (⌘ works too on macOS, #524): Ctrl+click a second connection and both rows light up in the selected
+     state as a "pair"; right-clicking either row opens a single-item menu, "Open in dual-pane SFTP" (§6.2). Rules:
+     - **Exactly two.** Ctrl+clicking a third row while two are selected drops the oldest and shifts the rest along; Ctrl+clicking
+       a row in the pair removes it, and with one left it falls back to an ordinary single selection. **The first one picked goes left.**
+     - The same profile can never be picked twice (a profile has exactly one node in the tree); to copy within one machine use
+       "Copy to" in the single-pane file browser.
+     - Group rows do not take part. A plain click, moving the arrow keys outside the pair, or collapsing a group that hides one
+       of the two ends the pair.
+     - If the pair contains a plugin protocol (S3 and the like) the menu item is disabled, with a line below explaining that only
+       SSH / SFTP / FTP are supported.
+     - The list control itself stays single-select: the tree tracks the pair on its own, **the row's existing context menu is
+       unchanged**, and the pair menu is a separate one.
    - By default, follows the active terminal tab: automatically expands the parent group, selects the corresponding connection, and scrolls to it without taking terminal keyboard focus. This can be disabled under “Settings → General → Behavior”.
    - **Pinned connections** (`pin` icon, “Pin to Top / Unpin” in the context menu): a pinned connection is hoisted to
      **the very top of the tree**, sorted by name, with an accent-colored `pin` badge and the same indent as a group row.
@@ -301,6 +313,22 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
   - **Close Channel**: all tabs in the channel leave together.
 - Forward directly to each target PTY (the bridge’s SendRaw), without passing through input events on the receiving terminal control. This prevents forwarding loops and does not trigger command-completion popups in non-focused tabs. Smart suggestions appear only in the tab where the user is typing.
 - Disconnected tabs do not receive forwarded input, gated by `IsConnected`. Closing a tab automatically leaves its channel. Multi-target dispatch of quick commands no longer goes through a second channel forwarding step, preventing duplicate injection.
+
+### 6.2 Remote + remote dual pane (#524)
+
+Opened from the Ctrl pair selection in §3: one file tab with each pane connected to a different machine. The tab title reads "left ⇄ right", its color bar and icon come from the left profile, and its status dot shows the worse of the two connections.
+
+- **Connecting**: the two connect one after the other (each with its usual credential prompt and host-key / certificate confirmation), under a placeholder tab titled "left ⇄ right". **If either one does not connect, the whole thing is rolled back**: the one already connected is disconnected at once, a failure stays on the placeholder's failure card, and a cancel removes the placeholder; there is never a document with only one pane. Both connections belong to the document and are disconnected together when the tab closes; sessions already open in other tabs are not reused. Any combination of SSH / SFTP / FTP / FTPS works.
+- **The panes**: each is a full remote file browser (everything in §6). The server badge in each header carries that machine's identity color (the same one as the tab color bar) — with both sides remote, the path alone does not tell which pane is which machine.
+- **Moving files between the panes**:
+  - Toolbar "Copy to right ›" and "‹ Copy to left": moves the files and folders selected in one pane into the other pane's current folder;
+  - dragging rows from one pane onto the other (only rows from the other pane of the same document are accepted; dragging within one pane is still not supported, see #474).
+  - The data is **streamed through this computer's memory and never written to local disk**: the source is read sequentially while the target is written, so it takes about as long as the slower leg. The protocols have no server-to-server copy primitive, and running `scp` / `rsync` on A to reach B directly is deliberately not done (it needs B's credentials or a forwarded agent on A, and A must be able to reach B).
+  - It shares the upload pipeline: conflict policy, concurrency limit, bandwidth limit (counted as upload), preserve timestamps, transfer log (direction logged as `RELAY`), and retry from the transfer popup after a failure. The transfer popup shows the direction as `⇄`.
+  - **Resume**: same rules as uploads (Settings → File Transfer → Resume). After a cancel or failure the partial target is kept; on retry, or the next time the same file is transferred, the target is verified to be a prefix of the source (the target's current length, backed off by one in-flight write window, tail compared) and writing continues from there; a mismatch is handled by the same-name conflict policy. Resuming needs to seek within the source, so it **only happens when the source is SFTP**; with an FTP source (a sequential data connection) the file is sent again in full. With resume turned off, a failure midway follows the "clean up partial files" setting. If the source cannot be read before writing starts (deleted / renamed), the target is untouched and an existing file of the same name is **never** deleted as if it were a partial file. A cancel is reported as a cancel, not as "transfer interrupted, can be resumed".
+  - Folders are recursive; links to directories nested inside them are not followed (same rule as downloads).
+- **Compare directories**: compares the current level of both panes (by size and modification time, using the inferred time precision when either side is FTP), selects the newer, unique or different entries in each pane, and shows the summary on the right of the toolbar.
+- **Not provided**: the synchronize window and "keep remote up to date" (they are designed around local ↔ remote); restore-sessions-on-startup does not reopen these tabs.
 
 ---
 
@@ -489,6 +517,8 @@ Right-click a session row in the sidebar to open it (200px, `bg-surface`, corner
 - Move to Group ▸ (submenu)
 - Divider
 - Delete (red)
+
+After Ctrl-selecting a pair of connections (§3), right-clicking one of them opens not the menu above but a single item, "Open in dual-pane SFTP" (`arrow-right-left`, §6.2); right-clicking a row outside the pair opens the menu above as usual and ends the pair.
 
 Tabs and file rows likewise have their own context menus (see the corresponding sections).
 

@@ -268,3 +268,20 @@ Execution rules:
 - **FTP time zones**: LIST times are given in the server's local time and interpreted in the client's time zone. When the server and the client are in different zones, time comparisons are shifted as a whole — compare by file size only in that case. WinSCP offers a "time zone offset" in its session settings; VelaShell does not yet.
 - FTP servers without `MFMT`, and plugin protocols, cannot align the remote time after an upload. One-way Local → Remote is unaffected (a newer remote file is not treated as something to upload), but **two-way sync would download the just-uploaded files back**; the window warns about this.
 - "Keep up to date" is Local → Remote only (as in WinSCP).
+
+## VIII. Appendix: Remote + remote dual pane (2026-09-28, #524)
+
+WinSCP's Commander interface can point both panes at remote servers, and FileZilla can drag between two remote tabs; VelaShell's dual pane used to be fixed at "local + remote", so moving files between two servers meant downloading and uploading again. Now Ctrl-select two connections in the explorer and right-click "Open in dual-pane SFTP" to get a file tab with each pane connected to a different machine. Interaction details are in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §3 (Ctrl pair selection) and §6.2.
+
+### 8.1 Why "streamed through this computer"
+
+- Neither SFTP nor FTP has a server-to-server copy primitive (FTP's FXP is disabled on nearly every server).
+- Running `scp` / `rsync` on A to reach B directly looks cheaper, but it needs B's credentials or a forwarded agent on A (exposing the user's agent to A), A must be able to reach B (not true when B is only reachable through a jump host), and B's host key must already be in A's `known_hosts` or verification has to be turned off; most failures would come from a third machine's configuration that the user cannot diagnose. So it is not done.
+- The relay **never touches disk**: `ISftpService` gains `UploadStreamAsync` (upload from a stream); the stream the source opens with `OpenReadAsync` is fed straight to the target, both legs run at once, and the whole takes about as long as the slower leg. Same-session "Copy to" still downloads to a temporary file and uploads again (outside the scope of this section, unchanged).
+
+### 8.2 Known limitations
+
+- **Resume only from an SFTP source**: verifying the resume point needs to seek within the source, and an FTP data connection can only be read sequentially, so with an FTP source the file is sent again in full.
+- **No synchronize window**: "Synchronize…" and "Keep remote up to date" are designed around local ↔ remote and are not offered in these tabs; "Compare directories" is, by size and modification time (no SHA-256).
+- **Plugin protocols are left out**: the plugin file-system contract only has "upload a local file". The SDK adds an optional interface, `IProtocolStreamUpload` (see [../sdk/sdk-reference.md](../sdk/sdk-reference.md) §5); the host wires it up once that SDK release is published. Until then the menu item is disabled when the pair contains a plugin protocol.
+- Restore-sessions-on-startup does not reopen these tabs (it remembers single profiles).
