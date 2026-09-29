@@ -422,7 +422,7 @@ sequenceDiagram
     participant Auth as InteractiveAuthenticator
     participant HK as IHostKeyPrompt
     participant KI as IKeyboardInteractivePrompt
-    participant SSH as TmdsSshClientWrapper
+    participant SSH as VelaSshClientWrapper
     participant Br as SshTerminalBridge
     participant T as 终端控件
 
@@ -431,7 +431,7 @@ sequenceDiagram
     WF-->>VM: 缺凭据？
     VM->>Auth: 两步验证弹窗（用户名 → 认证方式）
     Auth-->>VM: 凭据
-    VM->>SSH: ConnectAsync（AutoConnect=false）
+    VM->>SSH: ConnectAsync
     SSH->>HK: 主机指纹校验
     alt 首次连接
         HK-->>SSH: TOFU 记录 / 人工三选一
@@ -451,9 +451,9 @@ sequenceDiagram
 
 几处不显然的约定：
 
-- **`AutoConnect = false` 是显式设的。** Tmds.Ssh 的默认值是 `true`，会导致会话掉线后
-  **每一次** SFTP 操作各自静默重连一次 —— 拖入 N 个文件就是 N 次隐式重连 + N 发异常。
-  连接只由 `ConnectAsync` 发起。
+- **连接只由 `ConnectAsync` 发起。** SSH 库（宿主的 `src/VelaShell.Ssh`）没有隐式重连，断线之后要不要重连
+  由上层决定。换库之前的 Tmds.Ssh 默认 `AutoConnect = true`，会话掉线后**每一次** SFTP 操作各自静默重连一次 ——
+  拖入 N 个文件就是 N 次隐式重连 + N 发异常，当时只能显式把它关掉。
 - **桥的读循环不向 shell 预写 `\n`**（修过「末行提示符重复」）。
 - **本地终端标签不自动重连** —— `exit` 是用户意图；远端 `exit` 同理。
 - **关掉「连接中」的标签就该取消后台握手**，而不是让它连完再挂在那儿。
