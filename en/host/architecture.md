@@ -505,7 +505,8 @@ sequenceDiagram
     participant WF as ConnectionWorkflowService
     participant Auth as InteractiveAuthenticator
     participant HK as IHostKeyPrompt
-    participant SSH as TmdsSshClientWrapper
+    participant KI as IKeyboardInteractivePrompt
+    participant SSH as VelaSshClientWrapper
     participant Br as SshTerminalBridge
     participant T as Terminal control
 
@@ -514,12 +515,16 @@ sequenceDiagram
     WF-->>VM: credentials missing?
     VM->>Auth: two-step dialog (username → auth method)
     Auth-->>VM: credentials
-    VM->>SSH: ConnectAsync (AutoConnect=false)
+    VM->>SSH: ConnectAsync
     SSH->>HK: host fingerprint check
     alt first connection
         HK-->>SSH: TOFU record / manual three-way choice
     else fingerprint changed
         HK-->>SSH: manual three-way choice (default) / refuse outright (blocking switch on)
+    end
+    opt server asks for a code over keyboard-interactive
+        SSH->>KI: one-time code dialog (a password prompt is answered once with the saved password, no dialog)
+        KI-->>SSH: the code the user typed / cancel = do not connect
     end
     SSH-->>VM: connected (writes audit_log)
     VM->>Br: build the bridge, read loop
@@ -530,15 +535,26 @@ sequenceDiagram
 
 A few non-obvious conventions:
 
-- **`AutoConnect = false` is set explicitly.** Tmds.Ssh defaults it to `true`, which makes *every*
-  SFTP operation silently reconnect on its own after a session drops — dragging in N files means N
-  implicit reconnects and N exceptions. Connections are initiated only by `ConnectAsync`.
+- **Connections are initiated only by `ConnectAsync`.** The SSH library (the host's `src/VelaShell.Ssh`)
+  never reconnects implicitly; whether to reconnect after a drop is up to the layers above. Tmds.Ssh, used
+  before the library switch, defaulted to `AutoConnect = true`, which made *every* SFTP operation silently
+  reconnect on its own after a session dropped — dragging in N files meant N implicit reconnects and N
+  exceptions — so it had to be turned off explicitly.
 - **The bridge read loop does not pre-write `\n` to the shell** (this fixed a duplicated final
   prompt).
 - **Local terminal tabs never auto-reconnect** — `exit` is the user's intent. The same now applies
   to a remote `exit`.
 - **Closing a "connecting" tab cancels the background handshake** rather than letting it finish and
   linger.
+- **Two-step verification goes through `IKeyboardInteractivePrompt`** (a Core contract in the same pattern as
+  `IHostKeyPrompt`: infrastructure waits on a background thread, the UI layer shows the dialog; interaction in
+  [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §13.2). When there is a UI, `SshConnectionAssembler`
+  follows every authentication method's credential with a keyboard-interactive one answered by
+  `KeyboardInteractiveResponder`, and turns off the password credential's built-in "also answer" — that looks only at
+  the shape (one non-echoed prompt), not the text, and would type the password into the verification-code round. When
+  the user cancels the dialog, the assembler throws `VelaSshAuthenticationCancelledException` after the library reports
+  its failure; it **deliberately does not derive from `OperationCanceledException`**, or it would be treated as a
+  timeout. Without a UI (headless, tests) the assembly is unchanged.
 - Connection failures do not crash: authentication / network / timeout exceptions are mapped to
   readable status-bar messages, and `Program.cs` installs
   `TaskScheduler.UnobservedTaskException` / `AppDomain.UnhandledException` as a backstop.
