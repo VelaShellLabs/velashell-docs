@@ -421,6 +421,7 @@ sequenceDiagram
     participant WF as ConnectionWorkflowService
     participant Auth as InteractiveAuthenticator
     participant HK as IHostKeyPrompt
+    participant KI as IKeyboardInteractivePrompt
     participant SSH as TmdsSshClientWrapper
     participant Br as SshTerminalBridge
     participant T as 终端控件
@@ -437,6 +438,10 @@ sequenceDiagram
     else 指纹变化
         HK-->>SSH: 人工三选一（默认）/ 直接拒绝（开了阻断开关）
     end
+    opt 服务端走 keyboard-interactive 问验证码
+        SSH->>KI: 动态码框（口令提示由已存的密码代答一次，不弹）
+        KI-->>SSH: 用户填的码 / 取消 = 不连了
+    end
     SSH-->>VM: 连接成功（写 audit_log）
     VM->>Br: 建桥，只读循环
     Br->>T: 字节流 → VT 引擎 → 自绘渲染
@@ -452,6 +457,12 @@ sequenceDiagram
 - **桥的读循环不向 shell 预写 `\n`**（修过「末行提示符重复」）。
 - **本地终端标签不自动重连** —— `exit` 是用户意图；远端 `exit` 同理。
 - **关掉「连接中」的标签就该取消后台握手**，而不是让它连完再挂在那儿。
+- **两步验证经 `IKeyboardInteractivePrompt`**（Core 契约，与 `IHostKeyPrompt` 同一模式：基础设施在后台线程等，
+  界面层弹框；交互见[交互与界面规格.md](交互与界面规格.md) §13.2）。`SshConnectionAssembler` 有界面时在每种认证方式的
+  凭据后面各跟一条 keyboard-interactive，由 `KeyboardInteractiveResponder` 应答，同时关掉密码凭据自带的「兼答」——
+  它只看形状（一条不回显提示）不看内容，会把密码填进验证码那一轮。用户在框上点取消，装配器在库报失败之后改抛
+  `VelaSshAuthenticationCancelledException`，**刻意不派生自 `OperationCanceledException`**，否则会被当成超时。
+  没有界面（headless、测试）时装配与原先一样。
 - 连接失败不崩溃：认证 / 网络 / 超时异常映射成可读提示写状态栏，
   `Program.cs` 另装了 `TaskScheduler.UnobservedTaskException` /
   `AppDomain.UnhandledException` 兜底。

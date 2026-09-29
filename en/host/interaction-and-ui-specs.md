@@ -86,7 +86,7 @@ The main window is 1440×900 and can be freely resized. **〔2026-07 final, user
 
 - **The custom title bar spans the full-width first row** (`bg-sidebar` background + bottom divider): left = logo and product name; right = global feature button group `GQQwj` (see §4A; “broadcast” is implemented, “group sync” remains disabled) + minimize/maximize/close window controls (27×27 squares, with system red on close hover; on macOS these three are absent and the system traffic lights on the left take their place).
 - **Dialog and standalone-window frames differ per platform** (every dialog, plus the standalone windows — task manager, resource monitor, route trace, directory sync, plugin manager, plugin panels, recording player, remote editor — including isolated plugins' windows): on Windows it is a card floating in a transparent window (corner radius 8, 1px border, a `VelaShadowWindow` shadow in the 16px margin); on macOS the system draws the corners, border and shadow around an opaque window — dialogs show no traffic lights, standalone windows use them in place of the self-drawn window buttons; on native Linux Wayland Avalonia's decorations layer draws the shadow and border, and the compositor treats the card edge as the window edge; on Linux X11 it is an opaque square rectangle. The visible card is the same size on every platform; a maximised or full-screen standalone window fills the screen with square corners.
-- **Every window's title bar is 28px** (main window, standalone windows and dialogs, since 2026-09-26; previously the main window was 36, dialogs 48 and standalone windows 34–56): the title bar holds only the icon, the title and the window buttons (the × at the top right for dialogs). The two-line headers of the resource monitor, recording player, remote editor and connection diagnostics were split: the subtitle (host information / feature description / remote path / diagnosis target), together with the action buttons that no longer fit (pause, export, refresh, clean up, auto-record, save, export report, re-run), moves to a row below the title bar, with the same background and also draggable. On macOS, windows that show the traffic lights take the system title bar height (28pt today), so the lights and the title share one centre line. Two exceptions have no window buttons in their header, so it is not a title bar and stays 48: the settings window, whose top-left strip is the navigation header doubling as the drag area (no close / minimize buttons); and the message dialog (notice / confirm / prompt), which has no × at the top right and closes only from its button bar or Esc.
+- **Every window's title bar is 28px** (main window, standalone windows and dialogs, since 2026-09-26; previously the main window was 36, dialogs 48 and standalone windows 34–56): the title bar holds the icon, the title, the window-level actions and the window buttons (the × at the top right for dialogs). Window buttons are always 27×27 squares flush with the top-right corner, close hovers system red; the card clips to its rounded corner, so a square's hover fill follows the corner instead of poking out of the window. **Window-level actions live in the title bar** (since 2026-09-29): an icon-only group just left of the window buttons, styled like the main window's global feature button group `GQQwj` — each has a tooltip saying what it does and an automation name, and its icon turns accent while a toggle is on or while something is waiting to be done. Resource monitor: the host badge (green dot when connected / grey when not + host name) and pause / resume (while paused it becomes an accent "resume"); recording player: export / refresh / clean up / auto-record (accent while on); remote editor: save (accent while there are unsaved changes — it used to be an always-accent solid button); connection diagnostics: export report (disabled until there is a report) / re-run. The two-line headers of these four windows now keep only the subtitle in the second row (sampling note / feature description / remote path / diagnosis target), with the same background and also draggable; double-clicking a button in the title bar never maximizes the window. The New Connection, Import Sessions and connection diagnostics dialogs use the same bar as the standalone windows: a 15px line icon (accent) + a 13px title at the left + the × at the top right; dialogs are fixed-size, get no maximize, and keep their × on macOS (dialogs show no traffic lights). On macOS, windows that show the traffic lights take the system title bar height (28pt today), so the lights and the title share one centre line. Two exceptions have no window buttons in their header, so it is not a title bar and stays 48: the settings window, whose top-left strip is the navigation header doubling as the drag area (no close / minimize buttons); and the message dialog (notice / confirm / prompt), which has no × at the top right and closes only from its button bar or Esc.
 - The row below divides directly into “sidebar ‖ right area”; the right area starts with the tab bar (see §4B).
 
 - The sidebar/right boundary and the horizontal dividers within the right area are draggable (VelaDock / GridSplitter), allowing width/height adjustment and full-section collapsing.
@@ -529,7 +529,7 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
 
 ### 13.1 New Connection Dialog (`oAHna`, 500px)
 
-- **Header**: “New Connection” title + `x`.
+- **Title bar** (28, as in §2): a 15px plug line icon (accent) + the 13px title “New Connection” + a 27×27 × at the top right (close hovers system red, clipped to the card's rounded corner). The dialog has a fixed width and a content-driven height (see below), and no maximize.
 - **Tabs (`connTabs`)**: built-in `SSH` / `SFTP` / `FTP` plus plugin-contributed tabs (`S3`, `Telnet`, …)
   declared in each plugin's `contributes.protocols` (drawn without loading the plugin assembly);
   `Serial` remains a disabled placeholder until its own plugin lands.
@@ -593,11 +593,12 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       reconnecting. Changing the profile takes effect on the **next connection**, the same as the keep-alive field next
       to it; a local terminal has no session profile, so not a single byte is ever sent there.
   - **“SSH options” inside “Advanced options”** (`SessionProfile.Ssh` → `SshSessionOptions`): compression, ssh-agent
-    forwarding and X11 forwarding, **all off by default** (same as OpenSSH). Each has one line of muted text saying
-    *when* to turn it on — getting compression wrong only costs CPU, getting a forwarding wrong lends part of this
-    machine to the remote side. With all three off the whole object is stored as `null`, so old profiles need no
-    migration.
-    - **Visibility**: compression shows for both SSH and SFTP (they ride the same SSH connection); the two forwardings
+    forwarding and X11 forwarding, **all off by default** (same as OpenSSH); plus the two algorithm negotiation options
+    (allow legacy algorithms, custom algorithm lists — since 2026-09-29, see below). Each has one line of muted text
+    saying *when* to turn it on — getting compression wrong only costs CPU, getting a forwarding wrong lends part of
+    this machine to the remote side. With everything at its default the whole object is stored as `null`, so old
+    profiles need no migration.
+    - **Visibility**: compression and the two algorithm options show for both SSH and SFTP (they ride the same SSH connection); the two forwardings
       hang off the interactive shell, so they **show for SSH only** and are saved as false on SFTP profiles — the same
       reasoning as “Post-authentication command”.
     - **Compression (high-latency / low-bandwidth links)**: recommended when latency is high (cross-border or
@@ -646,7 +647,9 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
     - **X11 forwarding**: shows remote GUI windows on the local X server. The host **has a built-in X server** (the
       X Server title-bar button and the “X Server” page in §14) that works out of the box on every platform; on Windows
       it can use the VcXsrv the user installed instead, and Xming / X410 users keep bringing their own (no third-party
-      X server binaries are bundled; see “Won't do” in `feature-plan.md`). Turning it on reveals two more fields:
+      X server binaries are bundled; see “Won't do” in `feature-plan.md`). Turning it on reveals two more fields, laid
+      out in two rows: the “Local X display” label on a row of its own, then the input and the “Trusted (`-Y`)” checkbox
+      side by side on the second row, each vertically centred:
       - **Local X display**: when empty, tried in order: ① the local X server managed by VelaShell (its display if it
         is running; if not, and “Start automatically for X11 forwarding” is on, it is started first — unless another X
         server is already in use (on Windows something listens on `localhost:0`; elsewhere `DISPLAY` is set) or VcXsrv
@@ -669,6 +672,30 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       success a **grey** line
       (“X11 forwarding on → local display localhost:0.0”) in the same style as the jump-chain line. Both the first
       connection and in-place reconnects write it.
+    - **Allow legacy algorithms (for old devices)** (`SshSessionOptions.LegacyAlgorithms`, off by default): old network
+      gear and old systems are often down to `diffie-hellman-group14-sha1`, SHA-1 `ssh-rsa` and `hmac-sha1`, and the
+      default lists cannot agree with them. Turning it on **appends these three after the defaults** — a server that
+      also speaks the newer ones still gets those first; the muted text names exactly these three. CBC and the like are
+      not implemented in this version, so a device that only speaks CBC still cannot connect.
+    - **Custom algorithm lists** (four inputs when expanded: key exchange `KexAlgorithms`, host key `HostKeyAlgorithms`,
+      cipher `Ciphers`, MAC `Macs`; monospace, placeholder “default”): written the OpenSSH `ssh_config` way — `+a,b`
+      appends after the defaults, `-a,b` removes from them (`*` / `?` wildcards allowed), `^a,b` moves to the front, and a
+      list without a prefix replaces the defaults. “Defaults” means the list after legacy algorithms are applied, so a
+      line copied from `~/.ssh/config` works as is. Hovering an input shows the current default list and what else can
+      be added (it refreshes with the legacy toggle).
+      - Which names are accepted follows what the SSH library actually implements. An unknown name is reported as
+        unknown; a name OpenSSH knows but this version does not implement (CBC, 3des, group1, group-exchange, ssh-dss,
+        hmac-md5, umac…) is reported as “not implemented in this version” — CBC is the most common thing in a copied
+        config, and the user needs to hear “enabling it will not help”, not “you misspelled it”. Removal entries must be
+        known names too (a misspelled removal removes nothing while the user believes it is off); removing everything, or
+        writing only a prefix, is reported on the spot.
+      - An invalid list shows an error below the field naming the kind and the name, and greys out Save / Connect /
+        Test; switching to a protocol that does not use SSH, such as FTP, drops the check. Collapsed lists are not saved,
+        for the same reason the display address is not saved while X11 is off.
+    - **A negotiation failure gets one more line saying what to do next**: when the server offers algorithms this
+      version implements but has not enabled, the message names them and points here (“Allow legacy algorithms” or the
+      custom lists); when there are none, it says plainly that enabling more will not help (typically an old device
+      that only speaks CBC).
   - **Authentication method “SSH Agent”** (`AuthMethod.Agent`, last item in the dropdown — the enum is persisted by
     ordinal, so new values can only be appended): signs with the keys in the local ssh-agent and **stores no
     credentials** in the profile; selecting it collapses the password and key fields, leaving one muted line saying
@@ -703,6 +730,27 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
 
 - **Step 1 (`oNZIM`, 420px)**: header title + session information bar (`bg-input`: host icon + `user@host`) + password input with visibility toggle + “Remember password” checkbox + `Cancel`/`Connect` footer.
 - **Step 2 (`twD13`)**: second-factor verification (2FA / OTP / key passphrase / host fingerprint verification). Information bar + input + `Previous`/`Verify`.
+- **One-time code dialog (keyboard-interactive, since 2026-09-29, `KeyboardInteractivePromptDialog`)**: shown when a
+  two-step verification server that only allows keyboard-interactive (PAM + TOTP, Duo, bastion MFA) asks for a code.
+  - **When it appears**: a single non-echoed prompt that looks like a password prompt (the word "password" in English,
+    Chinese, Japanese or Korean, and nothing like verification code / OTP / token — those usually want "password + code"
+    typed together) is **answered once** with the saved password, without a dialog; if the password is asked again (a
+    password-change flow, or the previous one was wrong) the user answers. Everything else opens the dialog. An
+    information-only round (the server sends instructions but no prompts) does not open it; its text is carried into
+    the next dialog.
+  - **Private key / certificate / SSH Agent never fall back to the password**: a plain password prompt is answered with
+    an empty string so the server rejects it, and only code-style prompts open the dialog — that is the second step of
+    `AuthenticationMethods publickey,keyboard-interactive` (key + code); a password box popping up after the key was
+    rejected would contradict "only the authentication method the user chose".
+  - **What it looks like**: the title is the name the server sends, or “Two-step verification” when there is none; the
+    first line is the connection target (`user@host:port`, so you can tell hosts apart when several sessions want a code
+    at once), then the server's instructions and one input per prompt, masked when `echo = false`; the first input has
+    focus when it opens. Server text has control characters and bidirectional-text controls removed, line breaks
+    normalized and lengths capped before it reaches the screen. Only one dialog is shown at a time.
+  - **Cancel = do not connect**: no error, and no credential dialog afterwards. On a first connection the tab is
+    removed; on a reconnect it counts as a user disconnect (otherwise auto-reconnect would bring the same dialog back a
+    few seconds later); an SFTP document connection removes its placeholder. Closing the connecting tab or an
+    authentication timeout closes the dialog on the spot and is handled as the usual cancel / timeout.
 - **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
 
 **Connection state machine**: `Idle → Connecting (yellow) → Authenticating → Connected (green)` / any failure `→ Disconnected (red)` with reason and retry.
@@ -716,15 +764,15 @@ The left side contains navigation sections and the right side shows the correspo
 | Page | Frame | Implementation status (2026-07-12) |
 |---|---|---|
 | General | `2BIRD` | Startup/tray/language/connection defaults/session logs/import/export/behavior and automatic reconnect; the unimplemented “Updates” and “Master Password” groups are hidden |
-| Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color, UI font/size, opacity, terminal colors and color schemes (defaults to the active theme's paired scheme, see below) |
+| Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated), UI font/size, opacity, terminal colors and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
 | Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
 | Keyboard Shortcuts | `YQvri` | **Defined as a read-only “Keyboard Shortcut Reference”** (customization is not supported by product decision), with entries checked one by one against actual bindings |
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |
-| Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook) |
+| Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook), audit log (“View” opens the audit log window, see §15; retention days, default 180) |
 | Proxy | — (new) | One proxy shared by every outbound connection: none / follow system (default) / HTTP / SOCKS5, plus “resolve DNS through the proxy” |
 | X Server | — (new, 2026-09-23) | The local X server. The first section is the **Engine**: built-in (default, ships with the app, every platform) or VcXsrv (installed by the user on Windows; **not bundled**); the section only appears on Windows, other platforms only have the built-in one. With built-in selected a note below explains that each X window is a native window and SSH X11 forwarding connects straight into the built-in server without a local port. Shared by both: **Display** (display number: auto or :0–:15) / **Clipboard** (enable, copy on selection) / **Keyboard layout** (auto = follow the system's current layout, or pick one of 27 common XKB layouts) / **Startup** (start with VelaShell, start automatically for X11 forwarding). VcXsrv-only, shown only when VcXsrv is selected: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found), window mode (multiple windows / one large window / no title bar / fullscreen / rootless), **Keyboard** (model, capture special Windows keys), **Extensions** (native OpenGL, disable access control), **Advanced** (additional arguments + a “Help” dialog documenting every VcXsrv command-line argument in five languages, filterable; the command line for the next start is previewed live below), show tray icon. With the keyboard layout on “auto” the built-in engine follows the system's current layout (Windows, macOS, and Linux with a desktop X display; including the AltGr level, which is the Option level on macOS); a chosen layout uses the keymap tables shipped with the app. Changes apply the next time the X server starts |
-| Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, and changing group assignment |
+| Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, and changing group assignment; command text may contain variable placeholders (see §14.2) |
 | Cloud Sync | — (new) | GitHub Gist multi-device sync: token/Gist binding, end-to-end encryption passphrase, sync scope, version history, and restore (see plan.md §13.C) |
 | About | `Nwoks` | Version/runtime environment/dependencies/contributors (clickable GitHub avatars)/dual licensing and authenticity statement; Check for Updates is an honest placeholder |
 | Support and Donations | — (new) | Alipay/WeChat/Wise donation and contribution guidance |
@@ -767,6 +815,33 @@ the terminal and the chrome around it are one plane, and a mismatch shows up as 
   (derivation rules); the token list and rules live in `DESIGN.md` §2 of the VelaShell repository.
 - Plugins still see only `dark` / `light` / `system` — named themes are not part of the plugin contract.
 
+### 14.2 Quick command variable placeholders (2026-09-29)
+
+The command text of a quick command (the sidebar quick commands panel, Settings → Snippets) can contain placeholders,
+and the user is asked what to fill in before it is sent. Commands that differ by one or two arguments each time —
+`kubectl logs -f <pod>`, `journalctl -u <service> -n 200` — no longer have to be saved half-finished.
+
+- **Syntax**: `{{name}}` or `{{name=default}}`. A name used several times is asked once, with the first non-empty
+  default; an empty answer takes the default (an empty string when there is none). The quick command data structure is
+  unchanged, so cloud sync and import / export keep working.
+- **Which double braces are not placeholders**: ops commands are full of `{{…}}` already (`docker inspect -f
+  '{{.State.Status}}'`, kubectl go-templates, Ansible's `{{ inventory_hostname }}`), so placeholders are deliberately
+  narrow: the name must start with a letter or underscore and consist of letters, digits, underscores and hyphens, and
+  **no whitespace is allowed inside the braces** (so anything starting with `.` or containing spaces does not count);
+  the argument-less Go template actions `end` / `else` / `break` / `continue` do not count; a default may not contain
+  braces or line breaks. Anything that is not a placeholder is sent as is, and a command without placeholders is sent
+  straight away with no dialog.
+- **The dialog**: one row per variable (name + input pre-filled with the default, read out by the variable name), with
+  a live “Will send:” preview of the whole command below; the first input has focus, Enter sends, Esc cancels. Cancel
+  sends nothing at all.
+- **Line breaks in a value become spaces**: a quick command sends its text without Enter, so a line break inside a
+  value would press Enter for the user.
+- Target tabs may disconnect while the dialog is open: targets are picked again from the current tabs when sending,
+  and only those still connected receive it.
+- In Settings → Snippets, the new / edit area has a one-line syntax hint under the command input.
+- When terminal command completion offers a quick command as a candidate, it still inserts the raw text with
+  placeholders — completion continues what has already been typed, and substituted text would no longer match it.
+
 ---
 
 ## 15. Advanced Feature Panels (Large Standalone Panels)
@@ -775,7 +850,9 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 
 - **Operations Orchestration Center (`bR5c4`, 920×760)**: header + content area + results panel. Execute scripts/playbooks on multiple hosts in batches: choose a target group → configure steps → execute → summarize live results (success/failure/output).
 - **Host Trust Center (`gPWeC`)**: policy row (trust policy: strict/TOFU/lenient) + host fingerprint table (host, fingerprint, algorithm, first-seen time, status, delete/reset actions). ✅ **Implemented in simplified form (2026-07-12)**: Settings → Security Audit includes “Host Trust Policy” (three first-confirmation options / block changes) + a “Trusted Hosts” list (view/delete, screenshot-safe address redaction); the standalone large panel is not implemented separately for now.
-- **Session Recording and Playback (`NceE6`)**: recording list + player (timeline, speed control, search), asciinema-style playback, and export. ✅ **Implemented (2026-07-12)**: `RecordingPlayerView` is a standalone window, entered through Settings → Security Audit → Playback Center. The left column contains the recording list (name/time/duration/size, delete); the right column contains a read-only terminal + timeline seek + 1x/2x/4x speed + skip idle segments. The top bar provides “Export Recording” (asciicast v2 `.cast`) and an “Auto Recording” toggle (= `Security.RecordProductionSessions`). Storage is described in Architecture Design §4.11 (SonnetDB time series). The “Search” feature in the design has not been implemented.
+- **Session Recording and Playback (`NceE6`)**: recording list + player (timeline, speed control, search), asciinema-style playback, and export. ✅ **Implemented (2026-07-12)**: `RecordingPlayerView` is a standalone window, entered through Settings → Security Audit → Playback Center. The left column contains the recording list (name/time/duration/size, delete); the right column contains a read-only terminal + timeline seek + 1x/2x/4x speed + skip idle segments. The title bar's action group (§2) provides export recording (asciicast v2 `.cast`), refresh, clean up (deletes recordings and actually frees the disk space) and the “Auto Recording” toggle (= `Security.RecordProductionSessions`, its icon turns accent while on). Storage is described in Architecture Design §4.11 (SonnetDB time series). The “Search” feature in the design has not been implemented.
+- **Audit log (2026-09-29)**: `AuditLogView` is a standalone window (frame, title bar and resize grip as in the recording player), entered through Settings → Security Audit → Audit log → “View”. It lists the event kinds in `audit_log` — connection success / failure, host fingerprint decisions, externally launched logins — with the columns time, category, event, session and detail: events are put into words (Connected / Connection failed / Host fingerprint rejected / Host fingerprint trusted once / Changed host fingerprint accepted / External login; unknown ones are shown as stored); session names are looked up from the profile id when loading, and a deleted profile shows — (the `user@host:port` in the detail still tells which machine it was). Connection failures, rejections and accepted fingerprint changes count as “problems”, and their event names are red. The filter bar combines three filters: category (All categories / Connection / Security), “Problems only”, and a keyword (event, category, session name, detail; case-insensitive). Only the latest 2000 entries are loaded, and the summary says so when it is full; a database read failure is reported in the summary. Esc clears the keyword first, then closes the window.
+  - **Retention**: `Security.AuditLogRetentionDays` (default 180 days, 1–3650), shared by the audit log and the connection history (`conn_history`, the ledger behind “Recent connections”) — keeping connection history longer than the audit makes no sense, and keeping it shorter would leave sessions in the audit that the sidebar no longer knows. Older entries are pruned **at startup only**, at the same time as session logs and recordings expire; pruning is a time-based `DELETE`, not the recordings' “stage → rebuild → restore” (a process dying half-way through that would lose entries still within retention, a risk the audit log should take least of all).
 - **Connection Diagnostics Center (`RGXg1`, 920×640)**: run ping / DNS / port probes / traceroute / SSH handshake analysis against a target, and output step-by-step diagnostic conclusions and recommendations.
 
 ---

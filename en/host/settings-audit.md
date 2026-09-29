@@ -157,7 +157,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | General | Behavior | Follow the active terminal tab (`General.FollowActiveTerminalInExplorer`), collapse groups on startup (`General.CollapseGroupsByDefault`, off by default) | The collapse option only decides the initial state **the first time a group is seen in this run**; manual expand/collapse is remembered in-process and a full tree rebuild does not fold it back |
 | General | Data Management | Import settings, export settings, clear recent connections, restore defaults | Restore defaults must require confirmation; export scope must be accurate |
 | General | Application Updates | Check for updates at startup, update channel, download automatically | Hide the whole group until the feature is implemented |
-| Appearance | Application Theme | Theme mode, theme color, interface font, interface font size | Keep real-time preview |
+| Appearance | Application Theme | Theme mode, theme color (`AccentColor`, factory empty = follow theme), interface font, interface font size | Keep real-time preview; "Follow theme" sits in front of the swatches |
 | Appearance | Window and Layout | Window opacity, show menu bar, sidebar position, show tabs in multiple rows (`Appearance.MultiRowTabs`, off by default) | Hide tab bar position until implemented; multiple rows is the same value as the check item of the same name in the tab right-click menu |
 | Terminal | Font and Display | Terminal font, font size, line height, scrollback buffer, semantic highlighting | Semantic highlighting can be placed in an advanced collapsed section |
 | Terminal | Colors | Color scheme, foreground color, background color, cursor color, selection color, ANSI palette | Collapse the ANSI palette by default; if it cannot be edited, label it as a preview |
@@ -179,7 +179,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | Security and Privacy | Clipboard Permissions | OSC 52 write permission | Recommend Deny or Ask every time by default |
 | Security and Privacy | Credentials | Remember password, master password protection | If "Remember password" is placed on the connection page, provide only a link here and do not duplicate the control |
 | Security and Privacy | Security Alerts | In-app notifications, security alert sound, Webhook, Webhook URL | Show the URL only after Webhook is enabled |
-| Security and Privacy | Session Audit | Session recording (✅ Implemented: toggle + Replay Center entry), input redaction (not planned, output-stream recording does not echo passwords) | Shown |
+| Security and Privacy | Session Audit | Session recording (✅ Implemented: toggle + Replay Center entry), audit log (✅ Implemented: viewer window + retention days `Security.AuditLogRetentionDays`), input redaction (not planned, output-stream recording does not echo passwords) | Shown |
 | Shortcuts | Shortcut Reference | Show actual bindings by command | Display-only, no customization (user decision); generate from the runtime registry in the long term |
 | Advanced | Monitoring and Diagnostics | Resource monitoring, refresh interval, latency probing | Collapse by default or label the additional network overhead |
 | About | Application Information | Version, runtime environment, license, configuration directory, update entry | Exclude from Restore defaults |
@@ -444,3 +444,22 @@ interaction in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §4B.3
 - One switch for the whole workspace, so every pane changes together; it only applies to tab strips at the top, and the menu
   item is disabled when the strip is docked left or right.
 - The row label and the menu item use the same localization key (`Dock_MultiRowTabs`), so the two always say the same thing.
+
+### 2026-09-29 Ninth batch (accent follows the theme + audit log viewing and retention)
+
+Host side in `plan.md` §131 / §135, interaction in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §14 and §15.
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Theme color | Empty (follow theme) | Empty / `#RRGGBB` (`AccentColor`) | The factory value used to be `#E91E63`, and an accent override outranks the theme — so every one of the twelve themes had its own accent covered by the same pink. An empty string means no override: the current theme's own accent is used |
+| Audit log retention days | 180 | 1–3650 (`Security.AuditLogRetentionDays`) | Shared by the audit log and the connection history (`conn_history`); older entries are pruned at startup |
+
+- **Saved theme colors are not migrated**: a stored `#E91E63` cannot tell a user's choice from the old factory value, so it
+  stays in effect. A "Follow theme" button now sits in front of the swatches, and the input's placeholder says "Follow
+  theme" too — before, the only way back to the theme's accent was to clear the input.
+- **Audit log retention also governs connection history**: connection history is the ledger behind "Recent connections";
+  keeping it longer than the audit makes no sense, and keeping it shorter would leave sessions in the audit that the
+  sidebar no longer knows. The clamp lives in `Normalize`, and the settings page's `NumericUpDown` uses the same range.
+  Pruning happens **at startup only**, at the same time as session logs and recordings expire, as a time-based `DELETE`
+  rather than the recordings' "stage → rebuild → restore".
+- "View" in the same section opens the audit log window (read-only, not a setting).
