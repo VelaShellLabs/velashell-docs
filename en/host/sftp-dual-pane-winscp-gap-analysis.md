@@ -71,7 +71,7 @@ These are **not "not implemented"; they are "implemented but not connected"**. U
 | Delete, recursive + progress + cancellation | ✅ Both sides | Good quality, with weighted progress on the remote side. **Deleting a folder on an SSH session takes an `rm -rf` fast path** (2026-09-20, `Transfer.UseRecursiveDeleteCommand`, on by default): the SFTP walk costs one round trip per entry while `rm -rf` costs one in total; it falls back to the SFTP walk when the command is unavailable or exits non-zero. The cost is that this path has no per-entry progress (the bar goes indeterminate); the confirmation prompt is unchanged |
 | Move/copy, remote → remote | ⚠️ Requires typing an absolute path | No directory picker and no drag-and-drop move |
 | chmod | ⚠️ Single file only | Has a 9-cell rwx matrix with octal synchronization, but **no batch operation, recursive application, or setuid/sticky bits** |
-| **chown, change owner/group** | ❌ None | `ISftpService` has no interface; Owner/Group in the properties dialog are read-only |
+| chown, change owner/group | ⚠️ Single file only, SFTP only (implemented 2026-09-30) | Owner and Group in the properties dialog are editable drop-downs: suggestions come from the remote passwd / group databases (the same lookup that turns ids into names in the list), and a numeric UID / GID can be typed directly; changing only one keeps the other as it is; combined with a permission change, chown runs before chmod. FTP has no standard command and the plugin SDK has no such contract, so both rows stay read-only there. Like chmod, **no batch operation or recursion** |
 | Create/identify symbolic links | ✅ Implemented (2026-09-12) | Link rows have dedicated icons and a "→ target" tooltip, the permission string starts with `l`, and links to directories can be opened directly; the context menu has "New Symbolic Link". Deleting removes only the link itself, copying produces a link (`cp -P`), and folder downloads do not descend into nested directory links. On FTP, links can be created only on servers that support `SITE SYMLINK`; plugin protocols cannot create them |
 | **Modify remote timestamps** | ❌ None | Timestamps are preserved only during download; uploads do not write back mtime |
 | Local file attributes/permissions | ❌ None | The local pane has only 5 context-menu items |
@@ -180,7 +180,7 @@ Ordered purely by return on investment, for reference:
 10. ~~**Directory comparison + synchronization** (C1), which determines "whether it can replace WinSCP"~~ — completed on 2026-09-12 (SHA-256-first comparison added on 09-13)
 11. Remote recursive search (C2)
 12. Terminal integration (C3)
-13. chown / timestamp modification (symbolic links were completed on 2026-09-12)
+13. Timestamp modification (symbolic links were completed on 2026-09-12, chown on 2026-09-30)
 14. Post-transfer verification
 
 ---
