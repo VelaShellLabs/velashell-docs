@@ -153,7 +153,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | Top-level group | Second-level group | Settings | Display rule |
 |---|---|---|---|
 | General | Startup and Window | Start automatically at system boot, restore last session, startup window state, minimize to tray when closing the window, confirm before exiting the application | The "Exit confirmation" description should explain tray behavior |
-| General | Language | Interface language | The settings page must be localized in sync |
+| General | Language | Interface language (`Language`, empty by default = follow the system: English when the system language is not one of the five UI languages; a language chosen in Settings takes precedence) | The settings page must be localized in sync; the first dropdown item is "Follow system" |
 | General | Behavior | Follow the active terminal tab (`General.FollowActiveTerminalInExplorer`), collapse groups on startup (`General.CollapseGroupsByDefault`, off by default) | The collapse option only decides the initial state **the first time a group is seen in this run**; manual expand/collapse is remembered in-process and a full tree rebuild does not fold it back |
 | General | Data Management | Import settings, export settings, clear recent connections, restore defaults | Restore defaults must require confirmation; export scope must be accurate |
 | General | Application Updates | Check for updates at startup, update channel, download automatically | Hide the whole group until the feature is implemented |
