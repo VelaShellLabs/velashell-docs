@@ -298,7 +298,7 @@ Owner: `VelaShell.Terminal` (rendering augmentation layer).
 | Tunnel panel `fuXS7` | `TunnelPanel` / `TunnelRow` / `TunnelForm` | Local/remote/dynamic forwarding (§10) |
 | Resource monitor `EP3Gd` | `ResourceMonitorFlyout` | Opens after 400 ms hover, with boundary avoidance (§11/§4.7) |
 | Session context menu `e6klM` | `SessionContextMenu` | §12 |
-| New connection `oAHna` | `NewConnectionDialog` (SSH/SFTP/Telnet/serial tabs) | §13.1 |
+| New connection v2 (`KAuJb` and 7 more frames) | `ConnectionProfileView` (protocol rail + paged form) | §13.1 |
 | Password verification `oNZIM`/`twD13` | `AuthDialog` (two-step + host-fingerprint confirmation) | §13.2 |
 | Settings pages | `SettingsWindow` + left navigation + individual pages | General/Appearance/Terminal/Shortcuts/File Transfer/Keys/Audit/Snippets/About (§14) |
 | Advanced panels `bR5c4`/`gPWeC`/`NceE6`/`RGXg1` | Operations orchestration / host trust / recording replay / connection diagnostics | §15 (P2) |

@@ -532,20 +532,66 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
 
 ## 13. New Connection and Password Verification Flow
 
-### 13.1 New Connection Dialog (`oAHna`, 500px)
+### 13.1 New Connection Dialog (design “New Connection v2”, 8 frames; card 760×664)
 
-- **Title bar** (28, as in §2): a 15px plug line icon (accent) + the 13px title “New Connection” + a 27×27 × at the top right (close hovers system red, clipped to the card's rounded corner). The dialog has a fixed width and a content-driven height (see below), and no maximize.
-- **Tabs (`connTabs`)**: built-in `SSH` / `SFTP` / `FTP` plus plugin-contributed tabs (`S3`, `Telnet`, …)
-  declared in each plugin's `contributes.protocols` (drawn without loading the plugin assembly);
-  `Serial` remains a disabled placeholder until its own plugin lands.
-- **Form body (`connBody`)**: name, Host, Port, username, authentication method (password / private key / certificate / SSH Agent), group, color/icon marker, and so on.
-  - The form area **scrolls** (the scrollbar stays visible instead of auto-hiding); header, tabs, and footer are fixed-height rows outside the scroll.
-    The window height is clamped to `min(768 design cap, screen working area − 48)` (`ApplyScreenBounds`; 768 matches the 948×768 settings window).
-    The field count is protocol-dependent (a plugin protocol such as S3 declares a dozen), so without the clamp the dialog grows past the screen and the footer buttons become unreachable.
-  - Plugin fields marked `IsAdvanced` are folded into “Advanced options” by default; the footer button shows a `+N` badge for the folded count,
-    and editing an existing profile auto-expands as soon as any advanced field differs from its declared default.
-  - **Built-in items inside “Advanced options”**: tags, jump host, and **“Run command after authentication” + a delay (0–60 s)**.
-    - The latter is **per profile** (`SessionProfile.PostAuthCommand` / `PostAuthCommandDelaySeconds`), and is a
+Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on the right” instead of “one long form + an
+‘Advanced options’ fold in the footer”: expanded, the SSH form ran to some thirty rows and could only scroll inside the
+768 cap, and the horizontal protocol tabs no longer fit a 500-wide window once a few plugin protocols were installed.
+
+- **Title bar** (28, as in §2): a 15px plug line icon (accent) + the 13px title “New Connection” + a 27×27 × at the top right (close hovers system red, clipped to the card's rounded corner).
+  The dialog has a **fixed size** (card 760×664; the XAML says 792×696 in Windows terms, including the margin outside the card),
+  so it no longer grows and shrinks as you switch pages; no maximize.
+- **Protocol rail on the left (188, `bg-sidebar`)**: a “Built-in” group with `SSH` / `SFTP` / `FTP`, each with a small
+  kind label on the right (terminal / files); a “Plugins” group (with its count next to the heading) listing the
+  plugin-contributed protocols (`S3`, `Telnet`, `Serial`, `Redis`, …) declared in each plugin's
+  `contributes.protocols` — drawn **without loading the plugin assembly**. The manifest does not say what kind a
+  protocol is (file / terminal / workspace is only known after activation), so plugin items carry no kind label and
+  all use the plug icon. With no plugin protocols the group is not shown. The rail only grows downwards and scrolls on
+  its own when it runs out of room.
+  - The selected item is `bg-active` with an accent icon and name; hover is `bg-hover`. Keyboard focus draws an accent
+    border only under `:focus-visible` — a mouse click never leaves a stuck outline.
+  - “Get more protocols…” at the bottom opens the plugin manager (modeless; a protocol enabled there arrives in the
+    rail right away through the registry's `Changed` event, no need to reopen the dialog). It only appears when the
+    main window supplied the callback.
+  - The disabled placeholders are all gone — the last one (Serial) was taken over by the `velashell.serial` plugin;
+    the host no longer knows any concrete protocol.
+- **Section tabs on the right (40 high)**: which pages exist depends on the protocol —
+
+  | Page | Shown for | Contents |
+  |---|---|---|
+  | General | always | destination, authentication, the plugin protocol's everyday fields, organize |
+  | Terminal | SSH only | run command after authentication + delay, session-level terminal overrides |
+  | SSH options | SSH and SFTP (same SSH connection) | compression, allow legacy algorithms, custom algorithm lists |
+  | Forwarding | SSH only (interactive shell) | ssh-agent forwarding (and its two restrictions), X11 forwarding |
+  | Advanced | FTP, or a plugin protocol that declares `IsAdvanced` fields | FTP default remote path; plugin tuning fields |
+
+  - The selected tab's foreground turns `text-primary`; a 2px accent underline slides between tabs (180ms, no motion
+    on first placement).
+  - **An accent dot next to a tab = that page has non-default values.** When editing a saved profile, what was filled
+    in must not hide behind another tab and look lost — this replaces the old “auto-expand Advanced options on edit”;
+    a new connection is all defaults and shows no dots.
+  - The Advanced tab shows the **number** of plugin advanced fields (only those that currently apply: a field whose
+    visibility condition is false cannot be seen on the page, so it is not counted).
+  - Switching protocols falls back to General when the current page no longer exists (SSH's Forwarding page → FTP), and
+    stays put when it does (SSH ↔ SFTP on SSH options).
+- **The General page** is split into sections, each headed by a 10px `text-tertiary` title followed by a hairline:
+  - **Destination**: the Host / Port row, then the jump host (its explanation lives in the ⓘ tooltip next to the label —
+    the jump host decides whether you can connect at all, so it stays on General rather than on some other page).
+  - **Authentication** (hidden entirely for protocols declaring `NoCredentials`): username + an authentication
+    **segmented control** (Password / Key / Certificate / Agent, in `AuthMethod` enum order — all four visible at once,
+    replacing the dropdown); FTP puts its encryption mode in that slot, plugin protocols leave it empty.
+    Below come FTP's anonymous login / passive mode, the plaintext-FTP warning, the password or certificate + private
+    key + passphrase, the Agent explanation, and remember password.
+  - **Plugin protocol fields**: headed “&lt;protocol&gt; settings”; only fields without `IsAdvanced` are drawn here.
+  - **Organize**: display name / session group / tags side by side.
+  - Only the form area **scrolls** (with the app-wide two-state scrollbar: a 2px sliver while idle, never pinned open);
+    title bar, rail, tabs, feedback strip, and footer stay put. Long forms (S3, Redis, certificate auth) scroll within the
+    page; on a short screen the window height is clamped to `min(768 design cap, screen working area − 48)`
+    (`ApplyScreenBounds`; 768 matches the 948×768 settings window), so the footer buttons always stay reachable.
+  - Plugin fields marked `IsAdvanced` live on the Advanced page and General only draws the everyday ones;
+    when editing a saved profile whose advanced fields differ from their declared defaults, the Advanced tab shows the dot.
+  - **Terminal page (SSH only): “Run command after authentication” + a delay (0–60 s)**:
+    - It is **per profile** (`SessionProfile.PostAuthCommand` / `PostAuthCommandDelaySeconds`), and is a
       different thing from the “Run command after connect” under Settings → Terminal → Session, which applies to
       **every** terminal: what you run after logging in differs per machine (`sudo su -` on a bastion, `tmux attach`
       on a dev box), so a single global box forces you to pick one. When both are set, the **global one runs first,
@@ -562,8 +608,8 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       I log into this machine”. When the delay is > 0 it is sent via `DispatcherTimer.RunOnce` rather than blocking the
       handshake, and the callback re-checks identity by session id + connection status — within those seconds the tab
       may have disconnected, been closed, or reconnected as a different session.
-  - **Session-level terminal items inside “Advanced options” (SSH only)**: encoding, terminal type, color scheme, tab
-    color, startup directory, keep-alive interval, and **anti-idle (s)**. There can only be one global setting, but
+  - **Session-level terminal items on the Terminal page (SSH only)**: encoding, terminal type, color scheme, tab
+    color (with a swatch preview at the left of the box; an empty frame when the text is not a color = automatic), startup directory, keep-alive interval, and **anti-idle (s)**. There can only be one global setting, but
     machines are not alike — the bastion host speaks GBK while the dev box speaks UTF-8, and production tabs should be
     red at a glance. Those differences follow the machine; folded into one global switch they become an either/or.
     Every item except anti-idle means “empty / `-1` = follow the global setting”.
@@ -597,15 +643,17 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       reconnect path shows up as “it starts kicking me again after a dropped connection”, and nobody connects that to
       reconnecting. Changing the profile takes effect on the **next connection**, the same as the keep-alive field next
       to it; a local terminal has no session profile, so not a single byte is ever sent there.
-  - **“SSH options” inside “Advanced options”** (`SessionProfile.Ssh` → `SshSessionOptions`): compression, ssh-agent
+  - **The SSH options and Forwarding pages** (`SessionProfile.Ssh` → `SshSessionOptions`): compression, ssh-agent
     forwarding and X11 forwarding, **all off by default** (same as OpenSSH); plus the two algorithm negotiation options
     (allow legacy algorithms, custom algorithm lists — since 2026-09-29, see below). Each has one line of muted text
     saying *when* to turn it on — getting compression wrong only costs CPU, getting a forwarding wrong lends part of
-    this machine to the remote side. With everything at its default the whole object is stored as `null`, so old
-    profiles need no migration.
-    - **Visibility**: compression and the two algorithm options show for both SSH and SFTP (they ride the same SSH connection); the two forwardings
-      hang off the interactive shell, so they **show for SSH only** and are saved as false on SFTP profiles — the same
-      reasoning as “Post-authentication command”.
+    this machine to the remote side. “Allow legacy algorithms” and “ssh-agent forwarding” each carry a warning-colored
+    outline tag next to their title (“Insecure” / “Trusted hosts only”). With everything at its default the whole
+    object is stored as `null`, so old profiles need no migration.
+    - **Visibility**: compression and the two algorithm options are on the SSH options page and show for both SSH and
+      SFTP (they ride the same SSH connection); the two forwardings are on the Forwarding page, hang off the interactive
+      shell, so they **show for SSH only** and are saved as false on SFTP profiles — the same reasoning as
+      “Post-authentication command”.
     - **Compression (high-latency / low-bandwidth links)**: recommended when latency is high (cross-border or
       intercontinental links, round trips above ~100 ms) or bandwidth is scarce — terminal output and text files
       shrink a lot. Not recommended on a LAN or when mostly moving already-compressed data (images, archives): it only
@@ -701,7 +749,7 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       version implements but has not enabled, the message names them and points here (“Allow legacy algorithms” or the
       custom lists); when there are none, it says plainly that enabling more will not help (typically an old device
       that only speaks CBC).
-  - **Authentication method “SSH Agent”** (`AuthMethod.Agent`, last item in the dropdown — the enum is persisted by
+  - **Authentication method “Agent”** (`AuthMethod.Agent`, the last segment of the segmented control — the enum is persisted by
     ordinal, so new values can only be appended): signs with the keys in the local ssh-agent and **stores no
     credentials** in the profile; selecting it collapses the password and key fields, leaving one muted line saying
     where the agent comes from. On Windows that is the named pipe of the “OpenSSH Authentication Agent” service;
@@ -714,8 +762,8 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       all the user would see is a spinner until the whole connection times out. An agent with no keys gets its own
       message (“load one first with ssh-add”) instead of a generic “authentication methods exhausted”.
     - **The agent is only touched when this method is explicitly chosen**; no other method falls back to it implicitly.
-  - **FTP-only item inside “Advanced options”: “Default remote path”** (`FtpSettings.InitialRemotePath`, shown only
-    on the `FTP` tab). After connecting, the remote pane opens that directory instead of the login working directory —
+  - **FTP's Advanced page: “Default remote path”** (`FtpSettings.InitialRemotePath`, shown only
+    when `FTP` is selected in the rail). After connecting, the remote pane opens that directory instead of the login working directory —
     the upload target is the same `/var/www/html` or `/pub/incoming` year after year, while the login directory an FTP
     server hands you is often just the root, so clicking down four or five levels on every connection is pure busywork.
     - **It is the first candidate, not a hard requirement**: if it cannot be opened (typo, directory removed, account
@@ -729,7 +777,14 @@ Tabs and file rows likewise have their own context menus (see the corresponding 
       places across the repo, so every new flat field costs four edits, whereas protocol-specific settings go into their
       own nullable nested object and only need the matching `Clone()` update. SSH / SFTP still start at the login home
       directory, and plugin protocols (S3…) declare their own fields in their descriptor.
-- **Footer**: left = “Advanced options” (with the folded-count badge); right = `Test` / `Save` / `Connect` (accent).
+- **Feedback strip**: the result of Test / Save (one accent line on success; on failure the error text + a copy button)
+  is pinned above the footer, outside the scrolling form — when the user presses Test their eyes are on the footer, and
+  the answer must not land somewhere scrolled out of view.
+- **Footer**: left = a destination preview (monospace 11px `text-tertiary`, after the protocol icon): `user@host:port`
+  for SSH, `sftp://` / `ftp://` / `ftps://` for SFTP / FTP (explicit and implicit FTPS both count as `ftps`), IPv6
+  literals in brackets, no user for anonymous FTP or credential-less plugin protocols, no port for protocols declaring
+  `NoEndpoint`; hidden while the host is empty. It updates as you type, so you can check at a glance where you are about
+  to connect. Right = `Test` / `Save` (outline) / `Connect` (accent pill, DESIGN.md §5.1), all 28 high.
 
 ### 13.2 Password Verification Dialog (Two Steps)
 
