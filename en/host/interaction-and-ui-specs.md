@@ -609,7 +609,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
       handshake, and the callback re-checks identity by session id + connection status — within those seconds the tab
       may have disconnected, been closed, or reconnected as a different session.
   - **Session-level terminal items on the Terminal page (SSH only)**: encoding, terminal type, color scheme, tab
-    color (with a swatch preview at the left of the box; an empty frame when the text is not a color = automatic), startup directory, keep-alive interval, and **anti-idle (s)**. There can only be one global setting, but
+    color (color picker, see §14.3; no color = automatic, with a one-click reset at the bottom of the flyout), startup directory, keep-alive interval, and **anti-idle (s)**. There can only be one global setting, but
     machines are not alike — the bastion host speaks GBK while the dev box speaks UTF-8, and production tabs should be
     red at a glance. Those differences follow the machine; folded into one global switch they become an either/or.
     Every item except anti-idle means “empty / `-1` = follow the global setting”.
@@ -824,7 +824,7 @@ The left side contains navigation sections and the right side shows the correspo
 | Page | Frame | Implementation status (2026-07-12) |
 |---|---|---|
 | General | `2BIRD` | Startup/tray/language/connection defaults/session logs/import/export/behavior and automatic reconnect; the unimplemented “Updates” and “Master Password” groups are hidden |
-| Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated), UI font/size, opacity, terminal colors and color schemes (defaults to the active theme's paired scheme, see below) |
+| Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated; any other color comes from the color picker, see 14.3), UI font/size, opacity, terminal colors (color picker, offering the scheme's 16 ANSI colors as swatches) and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
 | Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
 | Keyboard Shortcuts | `YQvri` | **Defined as a read-only “Keyboard Shortcut Reference”** (customization is not supported by product decision), with entries checked one by one against actual bindings |
@@ -866,8 +866,8 @@ the terminal and the chrome around it are one plane, and a mismatch shows up as 
 - The **first entry** in the terminal color-scheme dropdown is “Follow theme (<paired scheme>)”:
   picking it follows the theme (no color overrides at all, so the terminal changes with the theme).
   Every entry below it pins that scheme; the paired one still carries a “(default)” suffix to show
-  where it comes from. Editing the foreground/background/cursor/selection color while following
-  counts as choosing your own colors, and leaves the following state.
+  where it comes from. Changing the foreground/background/cursor/selection color while following
+  (with the color picker, see 14.3) counts as choosing your own colors, and leaves the following state.
 - Following is recorded **explicitly** in `Appearance.TerminalColorsFollowTheme`, never re-derived by
   comparing colors against the factory values — that comparison could not tell “picked Dracula” from
   “following the theme”, which made picking Dracula under a non-Dracula theme a no-op.
@@ -901,6 +901,39 @@ and the user is asked what to fill in before it is sent. Commands that differ by
 - In Settings → Snippets, the new / edit area has a one-line syntax hint under the command input.
 - When terminal command completion offers a quick command as a candidate, it still inserts the raw text with
   placeholders — completion continues what has already been typed, and substituted text would no longer match it.
+
+### 14.3 Color picker (2026-10-01)
+
+Everywhere a user picks a color is a color picker, no longer a text box for typing `#RRGGBB`: the accent color and the
+terminal foreground / background / cursor / selection on the Appearance page, and the tab color on the Terminal page of
+the new / edit connection dialog (§13.1). The 16 ANSI colors on the Appearance page stay read-only swatches.
+
+- **The field** looks like an input (`bg-input`, 1px border, radius 4, at least 32 high): a 14px chip + the value in
+  monospace + a chevron. With no color it shows an empty chip frame and a line of explanation (“Follow theme” for the
+  accent, “Automatic” for the tab color) in a dimmer foreground and the UI font. The border turns accent while the
+  flyout is open or under keyboard focus.
+- **The flyout** (236 wide, global flyout chrome), top to bottom: saturation / value pad (148 high), hue strip, an old |
+  new comparison chip (left half = the color when it opened) + hex box, swatches, and a clear button.
+  - Pad and strip can be dragged, clicked, or driven by arrow keys: on the pad left / right change saturation and up /
+    down change value, 1% per press; the strip moves 1 degree per press, Home / End jump to the ends; Shift makes every
+    step ten times larger.
+  - The hex box is for precise values (a code copied from a design or another terminal's config): it applies on Enter or
+    blur; an unparsable value is **never written** and the box falls back to the current color — terminal colors that do
+    not parse would drop the whole set back to factory colors. Only hex is accepted, not color names.
+  - Swatches: the terminal colors offer **the current scheme's 16 ANSI colors** (picking from the scheme's own colors
+    keeps a changed foreground or selection in harmony with it); everything else offers **the current theme's palette**
+    (`VelaAccentPalette0..7`, the same family as the automatic tab colors). The swatch matching the current color gets a
+    heavier outline; its tooltip and accessible name are the hex value itself.
+  - The clear button only appears where the value may be empty: “Automatic” for the tab color. The accent goes back to
+    following through the “Follow theme” button at the start of its row, so the flyout does not repeat it; the terminal
+    colors are required and have no clear button.
+- **Written back on release**: while dragging only the flyout's preview changes; the setting is written on release, on
+  each arrow-key step, on a swatch click, and on Enter or blur in the hex box. Changing the accent re-derives the whole
+  token set and changing a terminal color repaints every terminal — writing on every pixel of mouse movement is waste.
+- Output is always uppercase `#RRGGBB`, which all three consumers (accent, terminal colors, tab color) accept; on input
+  `#RGB` and eight-digit values are also understood, so hand-edited configs still display.
+- State is kept as H / S / V: dragging saturation on a gray does not snap the hue back to red, and picking a gray swatch
+  does not send the hue strip wandering.
 
 ---
 
