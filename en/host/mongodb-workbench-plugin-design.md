@@ -110,6 +110,18 @@ Interactions the boards do not draw but daily use depends on (following Navicat'
   bottom-right corner, giving the data the full width; newly opened collection tabs remember the last choice.
 - **Panes**: the object tree, the inspector, every detail side panel, query editor vs results, the explain side panel, each pipeline stage's editor vs preview,
   and the document editor's preview vs command can all be resized. A splitter is drawn as the original 1px line with a grab area 3px wider on each side.
+  The split between the query editor and the results below follows only that splitter: switching to the Explain page no longer shrinks the editor to
+  board 14's 230px — results and explain are two tabs of the same panel and keep the same height.
+- **Creating objects from the tree**: right-clicking the Collections / Views / GridFS buckets groups offers "New collection… / New view… / New bucket…";
+  a collection row also offers "New collection…" and "New view…" with itself as the source, and a database row offers all three. A bucket row's menu
+  has "Upload files… / Upload folder…" (it opens that bucket's tab and takes the same upload path) and "Drop bucket…" (drops `.files` and `.chunks`
+  together; typing the name is required when it holds files).
+- **The inspector (right of the grid)**: clicking anywhere on an object / array row (chevron, key or value) expands or collapses it, and a double-click
+  does not flip it back; while editing, moving focus away (back to the grid, to another field) writes the value to the staging area and closes the
+  editor — a value that does not parse keeps its red frame instead of being dropped; the selected row is only painted while the inspector has focus,
+  so after switching documents the highlight does not land on the new document's field of the same name.
+- **Dates**: when a date field is edited inline in the grid, the tree view or the inspector, a calendar button sits at the right of the editor: a month
+  calendar, a time box and "Now" / "Apply"; clicking a day writes it with the time from the time box (local time throughout, stored as UTC).
 
 ## 4. Editing and write guards
 
