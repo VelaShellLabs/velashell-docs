@@ -323,7 +323,7 @@ macOS 上主窗口、设置窗口与消息框已实机验收（2026-09-26）；�
 
 ```mermaid
 graph TD
-    I1["<b>Core（契约）</b><br/>ISessionRepository · ISettingsService<br/>IRecentConnectionService · IAuditLogService<br/>IAppDataStore · ISessionRecordingStore<br/>IQuickCommandRepository · ISecretProtector"]
+    I1["<b>Core（契约）</b><br/>ISessionRepository · ISettingsService<br/>IRecentConnectionService · IAuditLogService<br/>IAppDataStore · ISessionRecordingStore<br/>IQuickCommandRepository · ISecretProtector<br/>ISharedCredentialRepository"]
     E["<b>Infrastructure/Persistence</b><br/>SonnetDbEngine（单例）<br/>退出时 Dispose 刷 WAL"]
 
     subgraph Doc["文档集合（业务 / 配置）"]
@@ -334,6 +334,7 @@ graph TD
         D5["quick_commands（schema v2）"]
         D6["tunnels（每 profile 一份）"]
         D7["recordings（录制元数据）"]
+        D8["shared_credentials（共享凭据，#550）"]
     end
 
     subgraph TS["时序 measurement（时间序列）"]
@@ -351,7 +352,9 @@ graph TD
 ```
 
 **敏感字段静态加密**：密码、私钥口令、同步令牌经 `ISecretProtector`（AES-256-GCM + 本地密钥文件
-`~/.velashell/secret.key`，密文前缀 `enc1:`）落盘。
+`~/.velashell/secret.key`，密文前缀 `enc1:`）落盘。共享凭据（`shared_credentials`）的密码与私钥口令同样如此；
+引用了共享凭据的连接配置（`CredentialSource` 非空），会话仓储在落盘那一刻把它的认证材料（密码、私钥路径、口令、
+证书路径）一律清掉 —— 放在仓储而不是各个保存点，是因为保存点有七八处，逐个防守迟早漏一个。
 
 > ⚠️ **仓储加密必须写副本，不可原地改传入的 profile** —— 内存里那份明文正被活动连接使用，
 > 原地加密会把它改成密文，表现是「重连突然认证失败」。
@@ -429,8 +432,9 @@ sequenceDiagram
     U->>VM: 双击会话 / 命令面板
     VM->>WF: 解析 profile（含跳板链 ≤5 跳、环检测）
     WF-->>VM: 缺凭据？
+    Note over VM,WF: 引用共享凭据的配置不先问：连接那一刻由 ICredentialResolver<br/>按引用取（跳板每一跳各取各的），取不到或被拒才退回下面的弹窗
     VM->>Auth: 两步验证弹窗（用户名 → 认证方式）
-    Auth-->>VM: 凭据
+    Auth-->>VM: 凭据（交回副本，不改传入的 profile）
     VM->>SSH: ConnectAsync
     SSH->>HK: 主机指纹校验
     alt 首次连接

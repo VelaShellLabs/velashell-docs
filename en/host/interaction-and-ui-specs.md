@@ -175,7 +175,7 @@ Order: **Session / Edit / Actions / Search / Tools / Help** (Inter 12, `text-sec
 | **Edit** | Copy, Paste, Select All, Find, Clear Screen, Preferences (Settings) |
 | **Actions** | Connect/Disconnect, Reconnect, Split Pane, Duplicate Session, Group Sync Toggle, Broadcast Input, Record Session |
 | **Search** | Find in Terminal, Find in Files, Go to Line, Command Palette (Ctrl+P) |
-| **Tools** | Tunnel Manager, SFTP File Manager, Operations Orchestration Center, Connection Diagnostics, Host Trust Center, Snippets, Key Management |
+| **Tools** | Tunnel Manager, SFTP File Manager, Operations Orchestration Center, Connection Diagnostics, Host Trust Center, Snippets, Key Management, Shared Credentials |
 | **Help** | Keyboard Shortcuts, Documentation, Check for Updates, About VelaShell |
 
 > Menu items, the command palette (§8), and keyboard shortcuts (§16) should share one “command registry” to keep entry points consistent and names uniform.
@@ -588,6 +588,25 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     replacing the dropdown); FTP puts its encryption mode in that slot, plugin protocols leave it empty.
     Below come FTP's anonymous login / passive mode, the plaintext-FTP warning, the password or certificate + private
     key + passphrase, the Agent explanation, and remember password.
+  - **Credential source** (#550, since 2026-10-03; the first row of the Authentication section; hidden for anonymous FTP
+    and for protocols without credentials): a dropdown whose first item is “Enter in this connection”, followed by every
+    shared credential (“name (username)”); next to it a “New…” outline button that carries the username and password /
+    private key already in the form into the shared-credential editor (without the “Connections using this credential”
+    list) and selects the new credential once it is created.
+    - **With a shared credential selected**: the authentication segmented control, the password / key / certificate fields,
+      the Agent explanation and “Remember password” all collapse; a `text-tertiary` summary under the dropdown reads
+      “Shared credential: user X · method” and points to Settings → Shared Credentials. **The username stays editable**:
+      filled in, it overrides the credential's; left empty, the connection follows the credential, and the placeholder says
+      which name will be used (“Leave empty to use admin from the credential”); when the credential carries a username the
+      field is no longer required. If the selected credential's username equals the one in the form, the form's copy is
+      cleared — otherwise the connection would stay pinned to the old name when the credential is renamed later.
+    - **Saving**: the profile stores only the reference (`CredentialSource`), never the authentication material; leftovers in
+      the collapsed fields are cleared as well, so “Test” does not connect with an invisible old password.
+    - **Two errors block saving**: the referenced credential no longer exists (the dropdown shows and selects
+      “(shared credential no longer exists)” so the user sees it and picks again, rather than silently falling back to
+      “Enter in this connection”); FTP or a plugin protocol was given a non-password credential (they only take passwords).
+    - **Switching back to “Enter in this connection”** copies the credential's username (if the form's is empty), method and
+      password / key into the form instead of leaving a row of empty boxes.
   - **Plugin protocol fields**: headed “&lt;protocol&gt; settings”; only fields without `IsAdvanced` are drawn here.
   - **Organize**: display name / session group / tags side by side, with a full-width **Notes** row below
     (#549, `SessionProfile.Notes`).
@@ -826,6 +845,30 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     removed; on a reconnect it counts as a user disconnect (otherwise auto-reconnect would bring the same dialog back a
     few seconds later); an SFTP document connection removes its placeholder. Closing the connecting tab or an
     authentication timeout closes the dialog on the spot and is handled as the usual cancel / timeout.
+- **Connections that use a shared credential (#550, since 2026-10-03)**: they **never prompt up front** — the username and
+  authentication material come from the credential. Only when the credential cannot be resolved (deleted, no password on
+  this device) or the server rejects it does the flow fall back to the credential dialog, with a notice under the
+  information bar (`VelaBgActive` background + `triangle-alert` icon + `text-secondary` text):
+  - **Rejected**: “Signing in with the shared credential “X” was rejected. If the password was just changed…”;
+    **incomplete**: the credential lacks a username, password or key on this device (what a credential pulled by cloud sync
+    without an end-to-end passphrase looks like); **missing**: what is entered is used for this sign-in only — to keep it,
+    edit the connection and choose another source. When the user's own one-off entry is rejected again, no reason is repeated.
+  - Step 2 gains a checkbox “Also update the shared credential “X” (used by N connections)”: ticked, the entry is saved back
+    to the credential and every connection referencing it picks it up on its next connect — the one step that turns
+    “change the server password” into a single entry. **Ticked by default when incomplete, unticked when rejected** (it may
+    be just this one host with a different password, and a wrong tick breaks the other few dozen); absent when the
+    credential no longer exists.
+  - “Remember password” and the AES badge are hidden: such a connection stores no password of its own; to keep one, save it
+    back to the credential.
+  - The username is prefilled with the connection's own, or else the credential's; for a connection that follows the
+    credential's username, an entry equal to the credential's (or one saved back to it) is not written onto the connection —
+    otherwise saving the profile after connecting would silently turn “follow the credential” into an override.
+  - **The dialog returns a copy** (for every connection, not only these): the instance passed in is the one cached by the
+    session tree or the command palette, and editing it in place let a password the user chose not to remember be persisted
+    by later saves such as moving the session to another group or duplicating it. “Reconnect” on a failure card uses the
+    copy from the latest attempt, so a retry does not ask again.
+  - A jump host whose credential cannot be resolved does **not** prompt (the dialog asks for the target's credentials); the
+    connection ends with a “Jump host X: reason” error.
 - **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
 
 **Connection state machine**: `Idle → Connecting (yellow) → Authenticating → Connected (green)` / any failure `→ Disconnected (red)` with reason and retry.
@@ -834,7 +877,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
 
 ## 14. Settings Panel (implemented as an 840×740 dialog, 200px left navigation + right content)
 
-The left side contains navigation sections and the right side shows the corresponding content. **The current implementation has 13 pages** (Proxy, X Server, Cloud Sync and Support and Donations were added beyond the design; see the itemized remediation ledger in [settings-audit.md](settings-audit.md)):
+The left side contains navigation sections and the right side shows the corresponding content. **The current implementation has 14 pages** (Shared Credentials, Proxy, X Server, Cloud Sync and Support and Donations were added beyond the design; see the itemized remediation ledger in [settings-audit.md](settings-audit.md)):
 
 | Page | Frame | Implementation status (2026-07-12) |
 |---|---|---|
@@ -842,6 +885,7 @@ The left side contains navigation sections and the right side shows the correspo
 | Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated; any other color comes from the color picker, see 14.3), UI font/size, opacity, terminal colors (color picker, offering the scheme's 16 ANSI colors as swatches) and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
 | Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
+| Shared Credentials | — (new, 2026-10-03, #550) | One set of username + password / private key / certificate / Agent shared by many connections; change it here once and every connection referencing it uses the new value on its next connect. Toolbar: search (name, username, notes) + “New Credential”; table columns: name (with a warning icon when this device has no password or key for it) / username (“From connection” when it carries none) / method / in use (N connections) / actions (edit, delete). **Editor** (`SharedCredentialEditorView`): a “Copy from a connection” dropdown, name, username (optional), the method segmented control and its fields, notes; below, a checklist “Connections using this credential” (filterable; connections the current method cannot serve are greyed out — FTP and plugin protocols only take passwords) and “Select matching connections” (ticks the connections that still store exactly the same username and material on their own, for moving existing connections over). Saving takes effect at once, without the settings window's Save: newly ticked connections switch to it (a username equal to the credential's is cleared so it follows the credential), unticked ones get the credential copied back onto themselves. **Delete** asks first; every connection using the credential keeps its own copy of it and still connects afterwards. Footer note: passwords and key passphrases are stored AES-256-encrypted on this device; cloud sync carries names and usernames, and passwords and passphrases only with an end-to-end passphrase |
 | Keyboard Shortcuts | `YQvri` | Every key binding; the global and tab bindings can be changed, unbound or reset (2026-10, joesdu/VelaShell#551; rules under “Customizing shortcuts” in [Keyboard Shortcuts](keyboard-shortcuts.md)). Entries are checked one by one against actual bindings |
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |
 | Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook), audit log (“View” opens the audit log window, see §15; retention days, default 180) |

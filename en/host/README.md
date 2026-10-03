@@ -46,7 +46,7 @@ Five documents have no English translation yet:
 | [S3协议插件化设计.md](../../zh/host/S3协议插件化设计.md) | Design of the S3 object-storage plugin |
 | [S3协议完整支持-实施报告-2026-08.md](../../zh/host/S3协议完整支持-实施报告-2026-08.md) | Implementation log for full S3 support |
 | [系统密钥链与sudo凭据填充可行性调研.md](../../zh/host/系统密钥链与sudo凭据填充可行性调研.md) | Feasibility of the three platforms' system keychains and sudo autofill |
-| [凭据管理器集成设计.md](../../zh/host/凭据管理器集成设计.md) | Password-manager integration (1Password / Bitwarden / KeePassXC / system keychain): the `ICredentialProvider` contract, wiring, unlock cache, CLI hardening and phasing |
+| [凭据管理器集成设计.md](../../zh/host/凭据管理器集成设计.md) | Password-manager integration (1Password / Bitwarden / KeePassXC / system keychain): the `ICredentialProvider` contract, wiring, unlock cache, CLI hardening and phasing; its first source, the built-in shared credentials, shipped with #550 (see §0.1) |
 
 ## Kept in the code repository
 
