@@ -396,7 +396,7 @@ Everything persists through **[SonnetDB](https://github.com/IoTSharp/SonnetDB)**
 
 ```mermaid
 graph TD
-    I1["<b>Core (contracts)</b><br/>ISessionRepository · ISettingsService<br/>IRecentConnectionService · IAuditLogService<br/>IAppDataStore · ISessionRecordingStore<br/>IQuickCommandRepository · ISecretProtector"]
+    I1["<b>Core (contracts)</b><br/>ISessionRepository · ISettingsService<br/>IRecentConnectionService · IAuditLogService<br/>IAppDataStore · ISessionRecordingStore<br/>IQuickCommandRepository · ISecretProtector<br/>ISharedCredentialRepository"]
     E["<b>Infrastructure/Persistence</b><br/>SonnetDbEngine (singleton)<br/>disposed on exit to flush the WAL"]
 
     subgraph Doc["Document collections (business / config)"]
@@ -407,6 +407,7 @@ graph TD
         D5["quick_commands (schema v2)"]
         D6["tunnels (one doc per profile)"]
         D7["recordings (recording metadata)"]
+        D8["shared_credentials (shared credentials, #550)"]
     end
 
     subgraph TS["Time-series measurements"]
@@ -425,7 +426,11 @@ graph TD
 
 **Sensitive fields are encrypted at rest**: passwords, key passphrases and sync tokens go through
 `ISecretProtector` (AES-256-GCM plus the local key file `~/.velashell/secret.key`, ciphertext
-prefixed `enc1:`).
+prefixed `enc1:`). The passwords and key passphrases of shared credentials (`shared_credentials`) are treated the same
+way; for a connection profile that references a shared credential (`CredentialSource` set), the session repository
+clears its authentication material (password, private-key path, passphrase, certificate path) at the moment it is
+written — enforced in the repository rather than at each save site, because there are seven or eight of them and
+guarding each one separately is bound to miss one.
 
 > ⚠️ **Repository encryption must write a copy, never mutate the profile it was handed** — the
 > in-memory plaintext is in use by the live connection, and encrypting in place turns it into
@@ -513,8 +518,9 @@ sequenceDiagram
     U->>VM: double-click a session / command palette
     VM->>WF: resolve the profile (jump chain ≤5 hops, cycle-checked)
     WF-->>VM: credentials missing?
+    Note over VM,WF: Profiles that reference a shared credential are not asked up front: ICredentialResolver<br/>fetches it at connect time (each jump hop resolves its own), and only a failure or rejection falls back to the dialog below
     VM->>Auth: two-step dialog (username → auth method)
-    Auth-->>VM: credentials
+    Auth-->>VM: credentials (returns a copy, never edits the profile passed in)
     VM->>SSH: ConnectAsync
     SSH->>HK: host fingerprint check
     alt first connection
