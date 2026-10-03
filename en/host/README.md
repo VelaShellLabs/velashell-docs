@@ -27,6 +27,7 @@ Architecture, design specs and research for the VelaShell main application.
 | [sftp-dual-pane-winscp-gap-analysis.md](sftp-dual-pane-winscp-gap-analysis.md) | Dual-pane SFTP vs WinSCP, item by item |
 | [ftp-client-feasibility-research.md](ftp-client-feasibility-research.md) | Trade-offs behind FTP / FTPS support |
 | [telnet-and-serial-feasibility-research.md](telnet-and-serial-feasibility-research.md) | Feasibility and work list for Telnet / serial sessions |
+| [mongodb-workbench-plugin-design.md](mongodb-workbench-plugin-design.md) | MongoDB workbench: opened from the command palette, connections managed by the plugin (saved connections at the tree root, the board-10 connection dialog, SSH jump through a host SSH session), where each of the 23 boards landed, staging and write guards |
 
 ## Engineering logs
 
