@@ -442,6 +442,14 @@ and is **excluded from Gist sync**.
 Quick commands load through `IQuickCommandRepository`, which owns v1 SonnetDB and legacy JSON
 migration, backups, schema validation and the Gist-compatible v1/v2 snapshots — the UI and the sync
 service **never touch** the SonnetDB document directly.
+Built-in commands come from `QuickCommandCatalog` and are **not stored**; the user's changes to them are
+an overlay in the same document (joesdu/VelaShell#555): deleted ones are listed in `HiddenBuiltInIds`,
+edited ones are stored as custom commands with the same id, and `QuickCommandCatalog.VisibleBuiltIns`
+combines the two for display. The order inside a group lives in the group's `CommandOrder` (a list of
+command ids that may include built-ins; empty = default order), and the order of the built-in groups
+keeps the stored `SortOrder`. In the Gist snapshot these are added fields as well and the schema stays
+v2: older clients ignore them, and pushing again from one wipes them (only preferences are lost, never
+commands).
 
 ### ⚠️ SonnetDB dialect traps
 
