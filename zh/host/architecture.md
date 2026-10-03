@@ -363,6 +363,10 @@ graph TD
 
 快捷命令经 `IQuickCommandRepository` 装载，它自己负责 v1 SonnetDB 与遗留 JSON 的迁移、
 备份、schema 校验与 Gist 兼容的 v1/v2 快照 —— UI 与同步服务**从不直接碰** SonnetDB 文档。
+内置命令由 `QuickCommandCatalog` 提供、**不落盘**；用户对它们的改动是同一份文档里的一层覆盖（joesdu/VelaShell#555）：
+删掉的记在 `HiddenBuiltInIds`，改过的存成同标识的自定义命令，显示时由 `QuickCommandCatalog.VisibleBuiltIns` 合成。
+组内顺序存在分组的 `CommandOrder`（命令标识表，可含内置命令；空表 = 默认顺序），内置分组之间的先后沿用存档的 `SortOrder`。
+这几样在 Gist 快照里同样只是加出来的字段，schema 仍是 v2：旧客户端读到时忽略，再推一次会把它们抹掉（只丢偏好，不丢命令）。
 
 ### ⚠️ SonnetDB 的几处方言坑
 

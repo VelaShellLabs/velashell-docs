@@ -891,7 +891,7 @@ The left side contains navigation sections and the right side shows the correspo
 | Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook), audit log (“View” opens the audit log window, see §15; retention days, default 180) |
 | Proxy | — (new) | One proxy shared by every outbound connection: none / follow system (default) / HTTP / SOCKS5, plus “resolve DNS through the proxy” |
 | X Server | — (new, 2026-09-23) | The local X server. The first section is the **Engine**: built-in (default, ships with the app, every platform) or VcXsrv (installed by the user on Windows; **not bundled**); the section only appears on Windows, other platforms only have the built-in one. With built-in selected a note below explains that each X window is a native window and SSH X11 forwarding connects straight into the built-in server without a local port. Shared by both: **Display** (display number: auto or :0–:15) / **Clipboard** (enable, copy on selection) / **Keyboard layout** (auto = follow the system's current layout, or pick one of 27 common XKB layouts) / **Startup** (start with VelaShell, start automatically for X11 forwarding). VcXsrv-only, shown only when VcXsrv is selected: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found), window mode (multiple windows / one large window / no title bar / fullscreen / rootless), **Keyboard** (model, capture special Windows keys), **Extensions** (native OpenGL, disable access control), **Advanced** (additional arguments + a “Help” dialog documenting every VcXsrv command-line argument in five languages, filterable; the command line for the next start is previewed live below), show tray icon. With the keyboard layout on “auto” the built-in engine follows the system's current layout (Windows, macOS, and Linux with a desktop X display; including the AltGr level, which is the Option level on macOS); a chosen layout uses the keymap tables shipped with the app. Changes apply the next time the X server starts |
-| Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, and changing group assignment; command text may contain variable placeholders (see §14.2) |
+| Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, deleting, and changing group assignment, built-in commands included (with restore to default); groups and commands can be reordered by dragging; command text may contain variable placeholders (see §14.2) and span several lines (see §14.4) |
 | Cloud Sync | — (new) | GitHub Gist multi-device sync: token/Gist binding, end-to-end encryption passphrase, sync scope, version history, and restore (see plan.md §13.C) |
 | About | `Nwoks` | Version/runtime environment/dependencies/contributors (clickable GitHub avatars)/dual licensing and authenticity statement; Check for Updates is an honest placeholder |
 | Support and Donations | — (new) | Alipay/WeChat/Wise donation and contribution guidance |
@@ -993,6 +993,62 @@ the new / edit connection dialog (§13.1). The 16 ANSI colors on the Appearance 
   `#RGB` and eight-digit values are also understood, so hand-edited configs still display.
 - State is kept as H / S / V: dragging saturation on a gray does not snap the hue back to red, and picking a gray swatch
   does not send the hue strip wandering.
+
+### 14.4 Quick commands: editable built-ins, multiline commands, drag to reorder (2026-10-03, joesdu/VelaShell#555)
+
+Applies to Settings → Snippets and the sidebar quick commands panel (both share one set of data, so the order arranged on
+the settings page shows up in the sidebar right away).
+
+**Built-in commands**
+
+- Built-in commands have “Edit” and “Delete” just like the user's own. The built-in catalog itself never changes; edits
+  are a layer on top of it: a deleted one is recorded as “no longer shown”, an edited one is stored as a custom command
+  with the same id that takes the catalog entry's place. Untouched built-ins still follow the UI language for their
+  descriptions, and built-ins added in later versions still appear.
+- Deleting an edited built-in deletes it; it does not fall back to the original. Opening the editor and saving without
+  any change leaves it an untouched built-in.
+- An edited row (moving it to another group counts) gets a “Restore Defaults” button: the catalog original comes back to
+  its original group and position.
+- “Restore built-in commands” above the list only appears once a built-in has been deleted or edited, and asks first:
+  deleted ones come back, edited ones are reverted, the user's own commands are not affected.
+
+**Multiline commands**
+
+- The command input accepts Enter for new lines (wraps, monospace, scrolls inside the box beyond roughly ten lines).
+  Line breaks are saved as `\n`, with leading and trailing whitespace trimmed.
+- The sidebar shows only the first line followed by “+N lines”; the whole command is in the tooltip.
+- A multiline command is sent as a bracketed paste: when the remote side has bracketed paste on (bash 5.1+ by default,
+  zsh, fish) the shell puts the whole block on the command line and waits for Enter instead of running it line by line.
+  If any target terminal does not have bracketed paste on (sh, older bash, network device CLIs and the like), each line
+  would run there as soon as it arrives, so a “Send multiline command” confirmation (previewing the first five lines)
+  comes first. It follows the “Confirm multi-line paste” switch under Settings → Terminal; with that switch off there is
+  no question.
+- A command whose only line break is at the end is not multiline and is still typed in as before.
+- Multiline commands are not offered by terminal command completion: completion continues the typed line, and accepting
+  a multiline candidate would press Enter for the user.
+- Variable placeholders (§14.2) can be combined with multiple lines: the values are asked for first, then the rendered
+  block is sent by the rules above.
+- A quick command is **not** executed automatically on click (maintainer decision, #555): many commands need their
+  arguments adjusted in the terminal first, and pressing Enter yourself is a confirmation in its own right.
+
+**Drag to reorder** (Settings → Snippets)
+
+- Group headers and every row have a six-dot handle on the left; press and drag it, a drag starts after 5px of movement.
+  The row / group being dragged fades, and an accent-colored insertion line marks where it will land (a command's line
+  starts after the handles, a group's line spans the full width).
+- The drop position is the insertion point closest to the pointer: a command can go between any two rows, right under a
+  group header (= the top of that group), or into another group; dragging onto the header of a collapsed group puts it
+  at the top of that group. Dragging a built-in into another group counts as an edit and can be restored.
+- Groups go between groups. “Ungrouped” always stays last: it has no handle, and no group can be placed after it.
+- Dropping it back where it was, or releasing more than 40px away from the list, cancels. Dragging to the top or bottom
+  edge of the settings page's scroll area scrolls automatically, faster the closer to the edge.
+- Reordering is mouse-only for now; there is no keyboard alternative. The sidebar panel has no drag handles (a click
+  there sends the command).
+
+**Sync and older versions**: deleted built-ins, each group's command order and the order of the built-in groups travel
+with cloud sync as added fields, without a schema bump. A device that has not been updated ignores them; if it pushes
+again, deleted built-ins reappear and the order falls back to the default, but none of the user's own commands are lost
+(an edited built-in shows next to its original there).
 
 ---
 
