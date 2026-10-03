@@ -6,7 +6,7 @@
 > the Docker panel's `README.md` in the plugins repository (the precedent for opening from the command palette and managing its own connection targets),
 > and [`VelaShell/DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) (design tokens and components).
 >
-> Design file: `velashell-plugin-mongo.pen` at the root of the plugins repository (23 boards: 00 cover … 22 states, feedback and confirmations).
+> Design file: `velashell-plugin-mongo.pen` at the root of the plugins repository (24 boards: 00 cover … 22 states, feedback and confirmations, plus 07b new index).
 > This document records **why** things are built the way they are; what you need to know to change the code lives in the plugin's `README.md`.
 
 ---
@@ -84,11 +84,11 @@ Two easy mistakes:
 | Board | Implementation |
 | --- | --- |
 | 01 grid · 02 JSON view · 13 tree view | Collection workbench: typed column headers, BSON colouring, inline editing, inspector (fields / JSON / collection info, per-field type menu), staging and paging; tree view with its context menu; inline JSON-card editing with value-distribution suggestions |
-| 03 query editor · 14 explain | Parsing and running a mongosh subset, context-aware completion (including the fields a preceding `$group` outputs), diagnostics with quick fixes, code lenses, several result tabs; explain output flattened into a stage flow with candidate plans, ESR advice and hint comparison |
+| 03 query editor · 14 explain | A Navicat-style two-row toolbar (the lower row is "Connection ▾ Database ▾" plus Run, deciding where statements run); parsing and running a mongosh subset, context-aware completion (including the fields a preceding `$group` outputs), diagnostics with quick fixes, code lenses, several result tabs; explain output flattened into a stage flow with candidate plans, ESR advice and hint comparison |
 | 04 aggregation pipeline | Stage cards (enable/disable, drag to reorder, per-stage output preview), two-way text mode, code export in five languages, create view, `$out` / `$merge` |
 | 05 document editor | Form / JSON / diff modes, minimal `$set` / `$unset`, client-side `$jsonSchema` pre-check, "redo on the latest version" after an optimistic-concurrency conflict |
-| 06 GridFS | Virtual directories, revisions of the same file name, streaming upload and download, drag and drop, orphan-chunk check, metadata editing |
-| 07 indexes · 08 schema · 16 validation | `$indexStats` usage and build progress, ESR suggestions from slow queries in `system.profile`; `$sample`-based analysis and a generated `$jsonSchema`; server-side rule pre-check (`$nor`), trial documents, version history |
+| 06 GridFS | Virtual directories, revisions of the same file name (restore, download; old revisions can be deleted one at a time, a ticked few at once, or all but the latest — the latest is never among them), streaming upload and download, drag and drop or clicking the drop zone to choose files / a folder, orphan-chunk check, metadata editing |
+| 07 indexes · 07b new index · 08 schema · 16 validation | `$indexStats` usage and build progress, ESR suggestions from slow queries in `system.profile`, a full-width new-index editor (see below); `$sample`-based analysis and a generated `$jsonSchema`; server-side rule pre-check (`$nor`), trial documents, version history |
 | 10 new connection | See section 2 (the plugin's own dialog) |
 | 11 server monitor · 15 slow queries | Delta sampling of `serverStatus` / `replSetGetStatus`, stacked bar charts, member cards, storage top list, inferred events; `$currentOp` with killOp, profiler level, slow queries grouped by query shape |
 | 12 object list · 17 new collection | Navicat-style object page (stats, DDL, privileges); five collection kinds with a live command preview |
@@ -106,12 +106,38 @@ Interactions the boards do not draw but daily use depends on (following Navicat'
   delete array elements. Filter-by-value drops array indexes (`items.sku`) — an indexed filter is almost never what was meant.
 - **Column widths**: every table's header dividers can be dragged, and double-clicking one fits the column to its content (measuring the header and the realized
   rows; rows a virtualized list has not created are not measured).
+- **The server monitor scales with the window**: the two chart rows (ops/sec + replica set; connections + storage top + events) share the remaining
+  height 1 : 1 with a draggable divider — exactly board 11's 282px at 900 high, and no longer a fixed top row over a bottom row stretched into a wall.
+  While sampling has not filled a window yet, bars already have their final width and line up on the right (the newest next to "now") instead of a few
+  bars stretched across the whole chart; x-axis labels that would collide are skipped. Storage top lists ten collections (scrolling inside the panel when
+  it is short); the name column fits the longest name by default, its header divider can be dragged, and a double-click fits it again; across databases
+  the database part is dimmed and the collection name bright, and hovering a row shows the full namespace and the data / index split.
 - **Collapsing the right-hand panel**: the collection grid's document inspector and the JSON view's outline can be collapsed with a button at the
   bottom-right corner, giving the data the full width; newly opened collection tabs remember the last choice.
 - **Panes**: the object tree, the inspector, every detail side panel, query editor vs results, the explain side panel, each pipeline stage's editor vs preview,
   and the document editor's preview vs command can all be resized. A splitter is drawn as the original 1px line with a grab area 3px wider on each side.
   The split between the query editor and the results below follows only that splitter: switching to the Explain page no longer shrinks the editor to
-  board 14's 230px — results and explain are two tabs of the same panel and keep the same height.
+  board 14's 194px — results and explain are two tabs of the same panel and keep the same height.
+- **New index (board 07b, the way Navicat's table designer does it)**: index creation used to live in a 340px panel at the right of the Indexes page,
+  where narrow field rows invited misclicks. Now "New index" (or an advice card's "Create this index") swaps the lower half of the page from the advice
+  cards to a full-width editor: a "new" draft row is pinned to the bottom of the index table (accent tint and a left bar; its key, type, properties and
+  estimated size follow the form live, and it stays visible when the table has to scroll), and the editor has three columns — the field table
+  (number / field / order or type / ESR role / sampled type / move up, move down, remove; rows can also be dragged by the number column, and key order
+  is the index prefix order), type and options (each option says what it does on its right), and the command preview with the estimate. The name sits
+  in the editor header, and the footer says "Runs createIndexes on db.collection". While the editor is open the index table shows at most five rows
+  and scrolls the rest.
+- **Where a query runs (Connection ▾ Database ▾)**: the query toolbar has two rows — editing on top (Save / Format / History / Export as code), and
+  "where" next to "run" below: the connection picker, the database picker, Run / Run current statement / Stop / Explain, then "Runs on connection / db"
+  and maxTimeMS on the right. The connection picker lists every connection saved in the plugin; picking another one **replaces the query tab in place**
+  with one on that connection (a tab's connection is fixed when it is built, and the tab closes when its connection disconnects), carrying the text, the
+  unsaved state, the caret and maxTimeMS over; the database name is kept when the other server has it, otherwise that connection's default database is
+  used and the toast says so. A connection that is not connected yet is connected quietly first — no "Connecting" placeholder tab, no change to the
+  object tree, no object list. The database picker only picks the database, not a collection: `db.name` always resolves in the **effective database**
+  (the last `use` before the statement, otherwise the picker's). When that database has no such collection the name gets an orange squiggle (except for
+  inserts — inserting into a missing collection creates it), and the Fields panel's title reads "orders @shop" with the same hint, so a query does not
+  come back empty from the wrong database.
+- **The GridFS drop zone is clickable**: clicking anywhere in the drop zone opens "Choose files to upload" (the same path as the toolbar's "Upload
+  files"), and two links inside it read "Choose files… · Choose a folder…". On hover the border brightens and a faint tint shows it can be clicked.
 - **Creating objects from the tree**: right-clicking the Collections / Views / GridFS buckets groups offers "New collection… / New view… / New bucket…";
   a collection row also offers "New collection…" and "New view…" with itself as the source, and a database row offers all three. A bucket row's menu
   has "Upload files… / Upload folder…" (it opens that bucket's tab and takes the same upload path) and "Drop bucket…" (drops `.files` and `.chunks`
