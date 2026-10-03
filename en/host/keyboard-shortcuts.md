@@ -53,8 +53,9 @@ Tab switching (`Ctrl+Tab` / `Ctrl+Shift+Tab`) uses `Ctrl` everywhere, matching t
 | New Tab (same as New Connection) | `Ctrl+T` | — |
 | Clone Current Session | `Ctrl+Shift+N` | — |
 | Open Settings | `Ctrl+,` | — |
-| Command Palette | `Ctrl+K` | — |
-| Command Palette (alternate) | `Ctrl+P` | — |
+| Command Palette | `Ctrl+P` | — |
+
+> `Ctrl+K` is not bound ([joesdu/VelaShell#551](https://github.com/joesdu/VelaShell/issues/551)). Window-level bindings consume the key before the terminal control sees it, and `^K` is kill-to-end-of-line in bash / zsh and cut-line in nano, so the old command-palette alias was dropped; only `Ctrl+P` remains.
 
 ### Tabs &amp; Panels
 

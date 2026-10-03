@@ -161,7 +161,7 @@ From top to bottom:
 
 ## 4A. Menu Bar (Full-width 36px, `bg-sidebar` background + bottom divider) ★Refactored
 
-> ⚠️ **Implementation change (2026-07, plan §6)**: **The left text menu (Session/Edit/Action/Search/Tools/Help, `DaZfB` in §4A.1 below) has been removed entirely** because it duplicated the command palette (`Ctrl+P`/`Ctrl+K`) by product decision. The “Show menu bar” setting has also been removed (`ShowMenuBar` is retained for compatibility). This row now retains only the **right global feature button group** (§4A.2). §4A.1 remains as historical design reference.
+> ⚠️ **Implementation change (2026-07, plan §6)**: **The left text menu (Session/Edit/Action/Search/Tools/Help, `DaZfB` in §4A.1 below) has been removed entirely** because it duplicated the command palette (`Ctrl+P`) by product decision. The “Show menu bar” setting has also been removed (`ShowMenuBar` is retained for compatibility). This row now retains only the **right global feature button group** (§4A.2). §4A.1 remains as historical design reference.
 
 > A separate row below the native title bar and above the sidebar/right area. ~~**Left = text menu**~~ (removed), **right = global feature button group (formerly `GQQwj`, moved here from the terminal toolbar)**. Design nodes: menu bar `TSiDh`, right-side feature container `Menu Bar Actions` (containing `GQQwj`).
 
@@ -426,12 +426,12 @@ for work the host cannot see.
 
 ---
 
-## 8. Command Palette ★User specified (`Ctrl+P` / `Ctrl+K`)
+## 8. Command Palette ★User specified (`Ctrl+P`)
 
 **Trigger**: global `Ctrl+P` opens the palette. The `zap` button does the same. It appears above center, is 560px wide, uses `bg-surface` + a large shadow, and has an overlay. Click the overlay or press `Esc` to close.
 
 **Structure, from top to bottom**:
-1. **Search field (48px)**: `search` icon + input (JetBrains Mono 14) + blinking caret + `Ctrl+K` mode hint on the right. Filter with fuzzy matching as the user types.
+1. **Search field (48px)**: `search` icon + input (JetBrains Mono 14) + blinking caret + `Ctrl+P` mode hint on the right. Filter with fuzzy matching as the user types.
 2. **“Sessions” group**: 10px muted uppercase group heading + session result rows, each with status dot + session name + environment label (`Production` on `accent-dim`) + `Enter Connect` hint on the right. The first item is highlighted with `bg-active` by default.
 3. **Divider**.
 4. **“Commands” group**: command result rows with icon + command name (Inter 12) + keyboard shortcut on the right. Examples:
@@ -976,7 +976,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 
 | Shortcut | Function | Status |
 |---|---|---|
-| `Ctrl+P` / `Ctrl+K` | Command palette | ✅ |
+| `Ctrl+P` | Command palette | ✅ |
 | `Ctrl+N` | New SSH connection | ✅ |
 | `Ctrl+T` | New tab (same as New Connection) | ✅ |
 | `Ctrl+Shift+N` | Clone current session | ✅ |
