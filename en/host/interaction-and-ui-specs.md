@@ -115,6 +115,11 @@ From top to bottom:
        session and closing it mid-handshake left the node stuck on “connecting” forever (#321); and opening two tabs on
        one FTP profile and closing either of them turned the node “disconnected” while the other was still alive.
    - The current session row is highlighted with `bg-active` and a vertical accent bar on the left.
+   - **Hovering shows the notes** (#549): resting the pointer on a connection that has notes (§13.1 “Organize”) pops
+     them up; anywhere on the row works. Connections without notes and group rows show nothing. The tooltip wraps at
+     its maximum width, and notes longer than 12 lines or 500 characters are cut and end with `…` — a tooltip limits
+     its width but not its height, so a long pasted note would otherwise cover the very rows you are about to click;
+     the full text is in the edit dialog.
    - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging.
    - **Ctrl pair selection** (⌘ works too on macOS, #524): Ctrl+click a second connection and both rows light up in the selected
      state as a "pair"; right-clicking either row opens a single-item menu, "Open in dual-pane SFTP" (§6.2). Rules:
@@ -584,7 +589,16 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     Below come FTP's anonymous login / passive mode, the plaintext-FTP warning, the password or certificate + private
     key + passphrase, the Agent explanation, and remember password.
   - **Plugin protocol fields**: headed “&lt;protocol&gt; settings”; only fields without `IsAdvanced` are drawn here.
-  - **Organize**: display name / session group / tags side by side.
+  - **Organize**: display name / session group / tags side by side, with a full-width **Notes** row below
+    (#549, `SessionProfile.Notes`).
+    - A multi-line text box: Enter starts a new line (the dialog has no default button, so Enter never saves by
+      accident), Tab still moves to the next control; at most about five lines tall, longer text scrolls inside the
+      box instead of stretching the page.
+    - Every connection type has it. Saving trims leading/trailing blank lines and spaces and stores whitespace-only
+      text as null; line breaks inside the text are kept as typed.
+    - Stored as plain text (it does not go through `ISecretProtector`) and uploaded as-is by cloud sync when no
+      end-to-end passphrase is set — the hint under the box says so; passwords belong in Authentication.
+    - Shown when you hover the connection in the explorer (§4).
   - Only the form area **scrolls** (with the app-wide two-state scrollbar: a 2px sliver while idle, never pinned open);
     title bar, rail, tabs, feedback strip, and footer stay put. Long forms (S3, Redis, certificate auth) scroll within the
     page; on a short screen the window height is clamped to `min(768 design cap, screen working area − 48)`
