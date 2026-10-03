@@ -38,7 +38,7 @@ The current Settings Center contains 9 top-level entries and approximately 80 vi
 | C-07 | P1 | Cursor style | Inconsistent default value | The settings model uses `bar`, while the terminal control internally defaults to `block` | Apply the default from the settings model in the terminal control instead of declaring a business default independently | `AppSettings.cs:218`;`VelaTerminalControl.cs:145` | ✅ Done: the control default now matches the model (`bar`), with a comment explaining that the runtime value is supplied by `ApplyLiveTerminalSettings` |
 | C-08 | P1 | Settings import/export | Description and scope are inconsistent | The text promises to back up "all connections and settings", but `BuildExportJson()` serializes only `AppSettings` | In the short term, revise the description; in the long term, explicitly support selective export of connections, groups, known hosts, snippets, and other data | `SettingsViewModel.cs:474-482`;`GeneralSettingsPage.axaml:106-107` | ✅ Done (short term): renamed "Settings import/export"; description changed to "Back up or migrate application settings only; connections, groups, keys, and snippets are not included"; selective export remains a future enhancement |
 | C-09 | P1 | Interface language | Incomplete localization | Much of the settings page text is hardcoded in Chinese, so the Settings Center may remain partly Chinese after switching to English | Move settings titles, labels, descriptions, and options to `.resx` | Approximately 148 Chinese text instances in `Views/Settings/*.axaml` | ⏳ Pending: the localization infrastructure is already available (`LocalizeExtension` + `Strings.resx/zh-CN.resx`), but migrating and translating approximately 150 strings is a large focused effort. It should be handled as a separate batch to avoid mixing it with this structural remediation |
-| C-10 | P1 | Shortcut reference | Display may not match actual bindings | The page uses a separately maintained hardcoded table, and "New connection Ctrl+N" appears twice | Generate the page from the actual shortcut registry; until then, rename it to "Shortcut reference" | `SettingsViewModel.cs:318-355`, especially `:322,336` | 🔶 Partial: the page was renamed "Shortcut reference"; entries were rebuilt and checked one by one against the actual bindings (`MainWindow KeyBindings`, `KeyboardShortcutService`, `TerminalTabView`, `RemoteFileEditorView`), all fabricated and duplicate entries were removed, and the actual `Ctrl+N` binding, which had been labeled but missing from the menu/command palette, was added. Automatic generation remains pending because bindings are spread across XAML and multiple views and must first be consolidated |
+| C-10 | P1 | Shortcut reference | Display may not match actual bindings | The page uses a separately maintained hardcoded table, and "New connection Ctrl+N" appears twice | Generate the page from the actual shortcut registry; until then, rename it to "Shortcut reference" | `SettingsViewModel.cs:318-355`, especially `:322,336` | ✅ Finished 2026-10-03 (joesdu/VelaShell#551): the global and tab bindings were consolidated into one factory table, `ShortcutBindings`; the main window generates its KeyBindings from it under the current keymap (nothing is hardcoded in `MainWindow.axaml` any more, and a test enforces that), and the shortcuts page and the command palette hints read from it too. The remaining fixed shortcuts are still listed one by one in `ShortcutCatalog`, also test-guarded. Before that: the page was renamed "Shortcut reference"; entries were rebuilt and checked one by one against the actual bindings (`MainWindow KeyBindings`, `KeyboardShortcutService`, `TerminalTabView`, `RemoteFileEditorView`), all fabricated and duplicate entries were removed, and the actual `Ctrl+N` binding, which had been labeled but missing from the menu/command palette, was added. |
 | C-11 | P1 | Restore defaults | Destructive operation lacks confirmation | Clicking it immediately resets settings for every page | Add a confirmation dialog and consider adding "Restore defaults for current page" | `SettingsView.axaml:246`;`SettingsViewModel.cs:562-567` | ✅ Done: both Restore defaults and "Clear history" now show a dangerous-action confirmation dialog; "Restore defaults for current page" is an optional enhancement and has not been implemented |
 
 ## 3. Settings That Can Be Merged
@@ -109,7 +109,7 @@ The following settings were reviewed against their runtime consumers, are effect
 | A-05 | P1 | Enable network latency probing | Currently probed approximately every 3 seconds | On/Off | Advanced > Monitoring and Diagnostics | `MainWindowViewModel.cs:725` | Pending evaluation |
 | A-06 | P2 | Semantic highlighting | URLs, IP addresses, and error words are always highlighted on the client | On/Off | Terminal > Display > Advanced | `VelaTerminalControl.cs:126` | Pending evaluation |
 | A-07 | P2 | Cursor blink accessibility settings | There is only a toggle, with no rate or reduced-motion strategy | Follow system / Standard / Slow / No blinking | Terminal > Cursor | `VelaTerminalControl.cs` cursor timer | Pending evaluation |
-| A-08 | P2 | Editable shortcuts | There is currently only a static reference table | Edit, conflict detection, restore individual default | Shortcuts | `SettingsViewModel.cs:318-355` | ❌ Not planned (2026-07-12 user decision): custom shortcuts are not supported; this page is positioned as a display-only "Shortcut reference"; the notice saying that customization would be available in a later version has been removed |
+| A-08 | P2 | Editable shortcuts | There is currently only a static reference table | Edit, conflict detection, restore individual default | Shortcuts | `SettingsViewModel.cs:318-355` | ✅ Done 2026-10-03 (joesdu/VelaShell#551, reversing the 07-12 "not planned"): the global and tab bindings can be changed, unbound, and reset one by one or all at once; a clash asks before replacing; bindings that take a key away from the terminal are flagged on the spot. See the tenth batch |
 
 ### 7.1 Internal Parameters Not Recommended as Ordinary User Settings
 
@@ -127,7 +127,7 @@ The following settings were reviewed against their runtime consumers, are effect
 |---|---|---|---|
 | Key Management | Generating, importing, deleting, and copying keys are credential management tools | A standalone "Credentials and Keys" entry; provide a link from the connection editor | Preferences such as default authentication key |
 | Snippets | Snippets are user data and a productivity tool, not a preference | Main navigation, command palette, or terminal context menu | If snippet behavior preferences exist in the future, retain only those preferences |
-| Shortcuts | This belongs in settings, but is currently only a static reference | Retain in the Settings Center | Renamed "Shortcut reference" and checked against actual bindings (C-10); it must eventually be generated from the actual binding source |
+| Shortcuts | This belongs in settings | Retain in the Settings Center | Renamed back to "Shortcuts": the global and tab bindings are customizable (A-08), and the page is generated from the factory table plus the current changes (C-10) |
 | About | An information page, not a setting | It can remain the final entry or be placed at the bottom of settings | Version, license, diagnostic information, and update entry ("Check for updates" now honestly says it is not connected) |
 
 ## 9. Recommended Information Architecture
@@ -180,7 +180,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | Security and Privacy | Credentials | Remember password, master password protection | If "Remember password" is placed on the connection page, provide only a link here and do not duplicate the control |
 | Security and Privacy | Security Alerts | In-app notifications, security alert sound, Webhook, Webhook URL | Show the URL only after Webhook is enabled |
 | Security and Privacy | Session Audit | Session recording (✅ Implemented: toggle + Replay Center entry), audit log (✅ Implemented: viewer window + retention days `Security.AuditLogRetentionDays`), input redaction (not planned, output-stream recording does not echo passwords) | Shown |
-| Shortcuts | Shortcut Reference | Show actual bindings by command | Display-only, no customization (user decision); generate from the runtime registry in the long term |
+| Shortcuts | Shortcuts | Show actual bindings by command | The global and tab bindings can be changed, unbound and reset (A-08); everything else is a fixed, read-only shortcut |
 | Advanced | Monitoring and Diagnostics | Resource monitoring, refresh interval, latency probing | Collapse by default or label the additional network overhead |
 | About | Application Information | Version, runtime environment, license, configuration directory, update entry | Exclude from Restore defaults |
 
@@ -212,7 +212,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 
 - [x] Correct the import/export scope description
 - [x] Migrate localization text on settings pages (C-09, recommended as a separate batch)
-- [x] Generate the shortcuts page from actual runtime bindings (manual verification and rebuilding completed, including the `Ctrl+N` binding; automatic generation remains pending until binding registration points are consolidated)
+- [x] Generate the shortcuts page from actual runtime bindings (manual verification and rebuilding completed, including the `Ctrl+N` binding; automatic generation remains pending until binding registration points are consolidated); since 2026-10-03 the global and tab bindings are consolidated into the factory table and generated from it, see C-10
 - [x] Delete duplicate shortcut entries
 - [x] Rename settings related to sounds, notifications, retries, and logs
 
@@ -241,7 +241,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 - [x] Add resource monitoring and latency probing controls
 - [x] Add a semantic highlighting toggle
 - [x] Add cursor blink accessibility settings
-- [x] Evaluate editable shortcuts (conclusion: do not implement. Custom key bindings are not supported; the shortcuts page is display-only, see A-08)
+- [x] Evaluate editable shortcuts (concluded "do not implement" on 2026-07-12; reversed and implemented on 2026-10-03 because of joesdu/VelaShell#551, see A-08)
 
 ## 12. Acceptance Criteria
 
@@ -250,7 +250,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 - [x] Every visible setting produces the actual effect described by its text (including changing "Check for updates" to an honest status message)
 - [x] Unimplemented features no longer pretend to be configurable items
 - [x] The settings UI can switch completely with the interface language (pending C-09)
-- [x] The shortcuts page matches runtime bindings (currently manually checked; this item can be maintenance-free only after automatic generation)
+- [x] The shortcuts page matches runtime bindings (currently manually checked; this item can be maintenance-free only after automatic generation); the global and tab bindings are generated from the factory table since 2026-10-03
 - [x] All destructive operations have confirmation mechanisms (Restore defaults, Clear history)
 - [x] Subordinate settings are shown only when the parent feature is enabled (except terminal color scheme collapsing, to be handled in Phase 4)
 - [x] User data management such as keys and snippets is no longer mixed with preference settings (Phase 4)
@@ -463,3 +463,26 @@ Host side in `plan.md` §131 / §135, interaction in [interaction-and-ui-specs.m
   Pruning happens **at startup only**, at the same time as session logs and recordings expire, as a time-based `DELETE`
   rather than the recordings' "stage → rebuild → restore".
 - "View" in the same section opens the audit log window (read-only, not a setting).
+
+### 2026-10-03 Tenth batch (joesdu/VelaShell#551: customizable shortcuts)
+
+Host side in `plan.md` §155; the rules are under "Customizing shortcuts" in [Keyboard Shortcuts](keyboard-shortcuts.md).
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Custom shortcuts | Empty (every binding at its factory default) | Binding id → gesture (`Shortcuts.Overrides`); empty string = unbound | Only the changed entries are stored; an unrecognized gesture falls back to the factory default |
+
+- **Reverses A-08's "not planned"**: #551 reported nano's `^K` (cut line) being swallowed by the command palette.
+  Window-level bindings consume keys before the terminal control sees them, so any set of factory bindings collides with
+  some remote program (bash's `^W`, tmux's `^B`, vim's `^F`…); letting users unbind them is the only answer that holds.
+- **What can be changed**: the "Global" and "Tabs & Panels" groups (except pane focus `Alt+arrows`, which is only
+  intercepted while split anyway), plus search, clear screen and the three zoom bindings in the "Terminal" group. Everything
+  else (copy/paste, scrolling, the completion popup, each dialog's Esc / Enter, mouse gestures) stays fixed.
+- **Rules for a new binding**: it needs Ctrl or Alt (or Win / Cmd); without a modifier only F1–F24 are allowed; fixed
+  shortcuts cannot be taken; if another action already has the gesture you are asked first, and replacing it leaves that
+  one unbound; recording the factory default again counts as no change and leaves no entry.
+- **Staged until saved**: like every other setting, changes are written when you click "Save settings"; the main window
+  then rebuilds its KeyBindings and the command palette hints follow. Settings export / import carries it, and cloud sync
+  includes it when app settings are synced (it is not a device-local field).
+- The page title went back from "Shortcut reference" to "Shortcuts", and the subtitle no longer says "read-only" (those
+  words are what put off the reporter of #551).

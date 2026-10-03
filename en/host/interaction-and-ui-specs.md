@@ -161,7 +161,7 @@ From top to bottom:
 
 ## 4A. Menu Bar (Full-width 36px, `bg-sidebar` background + bottom divider) ★Refactored
 
-> ⚠️ **Implementation change (2026-07, plan §6)**: **The left text menu (Session/Edit/Action/Search/Tools/Help, `DaZfB` in §4A.1 below) has been removed entirely** because it duplicated the command palette (`Ctrl+P`/`Ctrl+K`) by product decision. The “Show menu bar” setting has also been removed (`ShowMenuBar` is retained for compatibility). This row now retains only the **right global feature button group** (§4A.2). §4A.1 remains as historical design reference.
+> ⚠️ **Implementation change (2026-07, plan §6)**: **The left text menu (Session/Edit/Action/Search/Tools/Help, `DaZfB` in §4A.1 below) has been removed entirely** because it duplicated the command palette (`Ctrl+P`) by product decision. The “Show menu bar” setting has also been removed (`ShowMenuBar` is retained for compatibility). This row now retains only the **right global feature button group** (§4A.2). §4A.1 remains as historical design reference.
 
 > A separate row below the native title bar and above the sidebar/right area. ~~**Left = text menu**~~ (removed), **right = global feature button group (formerly `GQQwj`, moved here from the terminal toolbar)**. Design nodes: menu bar `TSiDh`, right-side feature container `Menu Bar Actions` (containing `GQQwj`).
 
@@ -426,15 +426,15 @@ for work the host cannot see.
 
 ---
 
-## 8. Command Palette ★User specified (`Ctrl+P` / `Ctrl+K`)
+## 8. Command Palette ★User specified (`Ctrl+P`)
 
 **Trigger**: global `Ctrl+P` opens the palette. The `zap` button does the same. It appears above center, is 560px wide, uses `bg-surface` + a large shadow, and has an overlay. Click the overlay or press `Esc` to close.
 
 **Structure, from top to bottom**:
-1. **Search field (48px)**: `search` icon + input (JetBrains Mono 14) + blinking caret + `Ctrl+K` mode hint on the right. Filter with fuzzy matching as the user types.
+1. **Search field (48px)**: `search` icon + input (JetBrains Mono 14) + blinking caret + `Ctrl+P` mode hint on the right. Filter with fuzzy matching as the user types.
 2. **“Sessions” group**: 10px muted uppercase group heading + session result rows, each with status dot + session name + environment label (`Production` on `accent-dim`) + `Enter Connect` hint on the right. The first item is highlighted with `bg-active` by default.
 3. **Divider**.
-4. **“Commands” group**: command result rows with icon + command name (Inter 12) + keyboard shortcut on the right. Examples:
+4. **“Commands” group**: command result rows with icon + command name (Inter 12) + keyboard shortcut on the right (it follows the current bindings: a changed shortcut shows the new keys, an unbound one shows nothing). Examples:
    - `New SSH Connection` … `Ctrl+N`
    - `Open SFTP File Manager` … `Ctrl+Shift+F`
    - `Open Settings` … `Ctrl+,`
@@ -842,7 +842,7 @@ The left side contains navigation sections and the right side shows the correspo
 | Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated; any other color comes from the color picker, see 14.3), UI font/size, opacity, terminal colors (color picker, offering the scheme's 16 ANSI colors as swatches) and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
 | Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
-| Keyboard Shortcuts | `YQvri` | **Defined as a read-only “Keyboard Shortcut Reference”** (customization is not supported by product decision), with entries checked one by one against actual bindings |
+| Keyboard Shortcuts | `YQvri` | Every key binding; the global and tab bindings can be changed, unbound or reset (2026-10, joesdu/VelaShell#551; rules under “Customizing shortcuts” in [Keyboard Shortcuts](keyboard-shortcuts.md)). Entries are checked one by one against actual bindings |
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |
 | Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook), audit log (“View” opens the audit log window, see §15; retention days, default 180) |
 | Proxy | — (new) | One proxy shared by every outbound connection: none / follow system (default) / HTTP / SOCKS5, plus “resolve DNS through the proxy” |
@@ -965,7 +965,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 
 ---
 
-## 16. Global Keyboard Shortcuts (**Customization not supported**, by product decision; the “Keyboard Shortcut Reference” page in Settings is read-only)
+## 16. Global Keyboard Shortcuts (factory defaults; the global and tab bindings can be changed or unbound in Settings → Shortcuts)
 
 > Current state after checking against actual bindings on 2026-07-12. Items marked “Not implemented” were concepts in the initial design and have no current binding.
 >
@@ -976,7 +976,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 
 | Shortcut | Function | Status |
 |---|---|---|
-| `Ctrl+P` / `Ctrl+K` | Command palette | ✅ |
+| `Ctrl+P` | Command palette | ✅ |
 | `Ctrl+N` | New SSH connection | ✅ |
 | `Ctrl+T` | New tab (same as New Connection) | ✅ |
 | `Ctrl+Shift+N` | Clone current session | ✅ |
@@ -992,7 +992,7 @@ Open these as tabs or standalone floating windows. All can also be entered from 
 | `Enter` / `Ctrl+R` | Reconnect after disconnection | ✅ |
 | `Ctrl+S` | Save in the remote editor | ✅ |
 | `Esc` | Close the current floating panel/panel | ✅ |
-| `Ctrl+1..9` | Jump to the Nth tab | Not implemented |
+| `Ctrl+Alt+1..8` / `Ctrl+Alt+9` | Jump to the Nth / last tab (`Ctrl+digit` would take control characters, hence `Ctrl+Alt`) | ✅ |
 | `Ctrl+\` | Split pane | Not implemented (splitting is completed by dragging) |
 
 ---

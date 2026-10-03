@@ -363,7 +363,7 @@ on real hardware (2026-09-26); the other windows use the same mechanism, and the
 traffic lights, the traffic-light alignment after the move to 28, and native Linux Wayland desktops
 await the next round of on-device checks.
 
-The text menu bar was removed entirely; the command palette (`Ctrl+P` / `Ctrl+K`) took over.
+The text menu bar was removed entirely; the command palette (`Ctrl+P`) took over.
 
 ## 6. Themes and design tokens
 

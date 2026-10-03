@@ -506,7 +506,7 @@ context.Commands.Register(new(
 ```
 
 - id 必须以 `<pluginId>.` 为前缀(宿主强制,防插件间冒名)。
-- 注册后出现在命令面板(Ctrl+P / Ctrl+K);标题本地化由插件自理
+- 注册后出现在命令面板(Ctrl+P);标题本地化由插件自理
   (可按 `context.Host.Locale` 取词,并订阅 `LocaleChanged` 重注册)。
 - 命令体在**后台线程**执行,不要触碰 UI;慢操作不会冻结界面。
 - 插件停用时自动全部注销;`Register` 返回的句柄用于提前注销。

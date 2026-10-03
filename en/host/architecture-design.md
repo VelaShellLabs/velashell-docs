@@ -414,10 +414,9 @@ src/
 | Terminal ligatures | The custom renderer lays out one cell at a time; cross-character ligatures require shaping the entire line, which conflicts with grid alignment and has high cost |
 | Adaptive window-title-bar color | The application uses the native system title bar, whose color is managed by the OS with the theme; the application layer has no stable control mechanism |
 | System notifications (Windows Toast) | Requires AppUserModelID/notification framework; replaced with status-bar messages + system notification sounds (General page “Sound notifications”, Security Audit page “Notification sound”) |
-| Custom shortcuts | Product decision (2026-07-12): the “Shortcuts” settings page is for reference display only; its entries are maintained against the real bindings |
 | Redaction of recorded input | No longer needed: session recording captures only the terminal output stream, and password input has no echo by default (settings-audit R-12) |
 
-> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup. (Automatic loading of keys into the Agent was implemented on 2026-09-23, Settings → Key Management.) Session recording was implemented on 2026-07-12 (§4.11 / §8-17).
+> Still planned (since 2026-07-11, unimplemented items have been **hidden** from the settings UI rather than disabled; fields are retained): automatically check for updates/download at startup (the update pipeline is ready and only needs a background switch; the stable/preview update channels are integrated), master-password protection, resumable transfers/automatic resume/transfer retries/temporary-file cleanup. (Automatic loading of keys into the Agent was implemented on 2026-09-23, Settings → Key Management.) Session recording was implemented on 2026-07-12 (§4.11 / §8-17). Custom shortcuts used to be listed above; they were implemented on 2026-10-03 because of joesdu/VelaShell#551, see “Customizing shortcuts” in [Keyboard Shortcuts](keyboard-shortcuts.md).
 
 ---
 

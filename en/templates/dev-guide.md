@@ -337,7 +337,7 @@ context.Commands.Register(new(
 ```
 
 - The id must be prefixed with `<pluginId>.` (enforced by the host to prevent plugins from impersonating one another).
-- After registration, the command appears in the command palette (Ctrl+P / Ctrl+K); the plugin is responsible for title localization (it can retrieve translations through `context.Host.Locale` and re-register on `LocaleChanged`).
+- After registration, the command appears in the command palette (Ctrl+P); the plugin is responsible for title localization (it can retrieve translations through `context.Host.Locale` and re-register on `LocaleChanged`).
 - The command body runs on a **background thread**. Do not touch the UI; slow operations will not freeze the interface.
 - All commands are automatically unregistered when the plugin is deactivated; the handle returned by `Register` can be used for early unregistration.
 
