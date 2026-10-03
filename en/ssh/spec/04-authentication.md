@@ -247,6 +247,11 @@ for a key the server does not even accept is unacceptable.
 
 This distinction is expressed by `ISshSigner.IsLocalAndCheap`.
 
+〔Decision〕**When the key is held in ssh-agent, bind the session with the agent before signing** (`session-bind@openssh.com`, `is_forwarding = false`,
+`07-forwarding.md` §7.4). The agent relies on it to enforce the destination constraints that `ssh-add -h` puts on a key — without the binding, the real OpenSSH agent
+refuses to sign with a constrained key. The binding is sent only once per agent connection (and only when a signature is actually needed: a key that failed the query does not need it);
+when the agent does not support binding, signing goes ahead as usual, and this step on its own never makes authentication fail. The same binding is required when a certificate signer is backed by a key in the agent.
+
 ### 4.2 Request fields
 
 | # | Type | Field |
@@ -530,7 +535,7 @@ Both positions must be accepted. **Received at any other position → protocol e
 | `delay-compression` | 〔Decision〕**Not implemented.** `zlib@openssh.com` already solves the same problem |
 | `no-flow-control` | 〔Decision〕**Not implemented.** Our window management depends on flow control |
 | `elevation` | 〔Decision〕**Not implemented** (Windows-server specific) |
-| `publickey-hostbound@openssh.com` | 〔Decision〕Revisit in M5. Related to the security of agent forwarding |
+| `publickey-hostbound@openssh.com` | 〔Decision〕**Not implemented.** Its purpose is to let the agent's destination constraints be checked on the hops **forwarded onward**; for the first hop, the destination is handed to the agent by the session binding (`07-forwarding.md` §7.4), and this library is always the first hop — when going through jump hosts, every hop is also authenticated directly from the local machine |
 
 **Unknown extensions are always ignored**, with no error.
 

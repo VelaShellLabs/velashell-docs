@@ -304,6 +304,11 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 }, ct);
 ```
 
+转发没开成（本机没有 X 显示 / agent、服务端拒绝）时怎么办，由选项上的 `FailureMode` 决定：
+默认 `ForwardFailureMode.Fail` 抛 `SshForwardException`、shell 不启动；`ForwardFailureMode.Continue`
+不带这项转发照常启动，原因在 `shell.X11SetupFailure` / `shell.AgentSetupFailure` 上 ——
+连接级的开关（`ssh_config` 的 `ForwardX11 yes`、界面上的勾选框）该用后者。
+
 `SshCommandOptions`（一次性命令）有同样的三项 —— 它们定义在两者共同的基类 `SshSessionRequestOptions` 上。
 
 ---
@@ -504,21 +509,26 @@ await using SshChannel tunnel = await conn.OpenUnixSocketTunnelAsync("/var/run/d
 
 ### Agent 转发（`ssh -A`）
 
-**默认是关的，而且没有「全局打开」的开关** —— 它是逐连接、逐通道的决定：
+**默认是关的，而且没有「全局打开」的开关** —— 它是逐会话的决定，写在开 shell / 跑命令的选项上：
 
 ```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
-
-await using AgentForwarder fwd = await AgentForwarder.RequestAsync(
-    conn, session,
-    new AgentForwardOptions
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // 只转发这一把，其余的对远端不可见
         ConfirmEachSignature = AskUserAsync,    // 每次签名都问一下人
         MaxConnections = 4,
     },
-    cancellationToken: ct);
+}, ct);
+
+AgentForwarder fwd = shell.Agent!;              // 随 shell 一起释放
 ```
+
+请求之前库会先试连一次本机 agent，连不上就不宣告转发（按 `FailureMode` 抛出或照常启动，见上一节）；
+服务端开回 agent 通道时，本机 agent 连不上就当场回 `CHANNEL_OPEN_FAILURE`。每条转发出去的 agent 连接都先向本机 agent
+做会话声明（`session-bind@openssh.com`），远端那一跳自己的声明也照转 —— `ssh-add -h` 给钥加的目的地约束因此照样生效
+（`spec/07-forwarding.md` §7.4）。
 
 `ssh -A` 的名声不好是有原因的：**远端 root 能借你的 agent 以你的身份登录
 任何地方**，而你看不见。所以这里不是把 agent 通道当字节管子对接过去，
@@ -646,7 +656,7 @@ Console.WriteLine(conn.LastRekeyReason);   // 上次是哪条阈值触发的
 | `SshAuthenticationException` | 认证失败 | `Attempts`、`ServerOffered`、`PartialSuccessAchieved` |
 | `SshPrivateKeyException` | 私钥读不出、解不开 | `Reason`：`KeyFileUnreadable` / `KeyFormatInvalid` / `KeyPassphraseRequired` / `KeyPassphraseIncorrect`；`NeedsPassphrase` |
 | `SshCertificateException` | 证书不对 | `Reason`：`KeyFormatInvalid` / `KeyMismatch`（与私钥不是一对、拿主机证书去登录） |
-| `SshAgentException` | ssh-agent 出错 | `Reason`：`AgentUnavailable` / `AgentRefused` |
+| `SshAgentException` | ssh-agent 出错 | `Reason`：`AgentNotRunning`（没在跑）/ `AgentUnavailable` / `AgentRefused` |
 | `SshChannelException` | 通道打不开，或通道上的请求被拒 | 打不开：`ChannelOpenFailed` + `OpenFailureReason` + 可操作的提示；exec / pty-req / shell / subsystem 被拒：`ChannelRequestRejected` |
 | `SftpException` | SFTP 操作失败 | **`ServerMessage`（服务端原话）**、`Operation`（`SftpOperation`）、`Path` |
 | `SftpTransferInterruptedException` | 传输中断 | `DurableLength` |

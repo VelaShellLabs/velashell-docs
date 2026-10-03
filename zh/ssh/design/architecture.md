@@ -513,7 +513,7 @@ enum SshFailureReason {
     NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
     AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
-    AgentUnavailable, AgentRefused,
+    AgentUnavailable, AgentNotRunning, AgentRefused,
     Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
     ChannelOpenFailed, ChannelRequestRejected,
     ForwardRejected, ForwardBindFailed, ForwardSetupFailed, LimitExceeded,
@@ -2520,6 +2520,31 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 | `KnownHostsPolicy(askUser: …)` | `KnownHostsPolicy(askUnknownHost: …)` |
 | `SshConnection.SendGlobalRequestWithReplyAsync` | 与 `SendGlobalRequestAsync` 合并，改为库内部方法 |
 | `SshPrivateKeyFile.LoadAsync` → `ISshSigner` | → `InMemorySshSigner`（可释放，释放时清零私钥） |
+
+### 11.2.25 agent 转发的几处修补：会话声明、连不上不挂死、没开成就不开（2026-10-03）
+
+起因：把 agent 转发、`zlib@openssh.com` 压缩、端口转发的搬运、X11、终端尺寸这几块按规范与实测重新过了一遍。
+
+**核对过、不动的**：压缩只做 `zlib@openssh.com`、认证成功后才启用、重协商时换新上下文、解压上限在写出前判、
+解压出空载荷按协议错误、严格校验开关的豁免只给「已解出数据」的情形；本地 / 远程转发目标端连不上时关掉源端，
+搬运按方向半关闭（§2.2）；agent 通道按转发器登记，释放即摘；SFTP 不请求任何转发；Windows agent 管道核对属主；
+X11 见 §11.2.23；终端尺寸见 §11.2.16（行列为 0 合法，照 RFC 4254 §6.2）。
+
+**做了的：**
+
+| 问题 | 决定 |
+| --- | --- |
+| agent 转发连本机 agent **没有时限**：Windows 上 agent 服务没起时命名管道不存在，不带时限的连接一直重试 —— 远端的 `ssh` / `git` 一碰 agent 就挂到 shell 关掉。宿主给认证那一路套了 3 秒，转发这一路漏了 | 时限挪进库里（3 秒，认证、加钥、转发共用），到点报新的 `AgentNotRunning`（`SSH_AUTH_SOCK` 没设、套接字不在也归它）；宿主删掉自己那一层，按原因码本地化（[`spec/07`](../spec/07-forwarding.md) §7.1、[`spec/08`](../spec/08-failures.md) §3） |
+| 本机 agent 不在时照样宣告转发；agent 通道先确认、再在后台连 | 请求前先试连，连不上不宣告；通道在**确认之前**连好本机 agent，连不上回 `CHANNEL_OPEN_FAILURE`（§7.1） |
+| **不做会话声明**（`session-bind@openssh.com`）：`ssh-add -h` 的约束在本库手里不成立 —— 认证时，真实的 OpenSSH agent（9.9p2 实测）拒绝替没声明的连接用受约束的钥签名，这种钥根本用不了；转发时，agent 把远端当成源头机器，约束形同虚设 | 认证、转发两路都声明（`is_forwarding` 分别为 false / true），三样取自首次交换；远端那一跳的声明照转，别的扩展照旧拒；agent 不支持或因此断开时照常工作（§7.4）。`publickey-hostbound` 决定不做（[`spec/04`](../spec/04-authentication.md) §7.2）。互操作用例让真 agent 验：声明被接受、篡改的签名被拒、声明成别的主机时受约束的钥拒签 |
+| agent 转发没有「没开成就不开」：连接级开关打开的转发被拒时，宿主要去掉 agent 把整个 shell 重开一遍（X11 的请求与 `xauth` 也跟着再跑）；`ssh_config` 的 `ForwardAgent yes` 遇到 `AllowAgentForwarding no` 会让 shell 起不来 | 与 X11 同一套：`AgentForwardOptions.FailureMode`，原因在 `AgentSetupFailure` 上；宿主一次开成（§7.5.8） |
+| X11 的失败策略是布尔 `BestEffort` | 换成枚举 `ForwardFailureMode { Fail, Continue }`，零值 `Fail`，X11 与 agent 共用；错误计数的原因改叫 `SetupSkipped`（看 `ForwardKind` 分是哪一项）。**没有「关」这一档、也不做连接级的转发默认值** —— 理由见 §7.5.8 |
+| `ForwardAgent` 只认 `yes`，写了 agent 套接字路径的配置被当成 `no` | 照 `ssh_config(5)` 认四种写法（[`spec/09`](../spec/09-dialing.md) §7） |
+| `.Xauthority` 里 cookie 为空的条目会被当成真 cookie，挡住后面有效的那条 | 跳过（§7.5.7） |
+
+**考虑过、不做的：**给失败策略加一档「关」、做「可空即跟随连接默认」的转发开关 —— 本库没有连接级的转发开关
+（§7.5.1：同一条连接上的探测命令与 SFTP 不该继承某个 shell 的转发），`null` 已经表示不请求，再加一档只会多出一种重复的写法；
+「没开成就不开」时只记日志、不交出原因 —— 调用方看不到就没法提示使用者，原因一直放在结果对象上。
 
 ### 11.3 与 VelaShell 的切换策略
 

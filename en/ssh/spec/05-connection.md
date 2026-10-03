@@ -339,7 +339,8 @@ replies come back in sending order. The request ledger (L6) uses a **queue**, no
 | Interactive shell | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `shell` |
 | One-shot command | `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `exec` |
 
-`x11-req` and `auth-agent-req` are sent only when the caller **explicitly requests** them; if requested and the server refuses, an exception is thrown — no silent downgrade.
+`x11-req` and `auth-agent-req` are sent only when the caller **explicitly requests** them; when one cannot be set up (a preparation failure on the local side, or the server refuses), it is handled per the options'
+`FailureMode` (`07-forwarding.md` §7.5.8): by default an exception is thrown — no silent downgrade; one turned on by a connection-level switch starts normally and hands over the reason.
 The "caller hook" (`BeforeStart`) leaves room for channel requests the library does not have built in; if it throws, the session is abandoned.
 〔History〕Early versions placed `env` before `pty-req`, and the shell had no point at which to insert `x11-req` at all —
 so the most common use of `ssh -X` (an interactive shell) could not open X11 forwarding.

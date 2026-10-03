@@ -337,7 +337,8 @@ EOF 只发一次：谁先把通道推进到「本端 EOF」谁发；通道正在
 | 交互 shell | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → （使用者钩子）→ `shell` |
 | 一次性命令 | `x11-req` → `auth-agent-req@openssh.com` → `env` → （使用者钩子）→ `exec` |
 
-`x11-req` 与 `auth-agent-req` 只在使用者**显式要求**时才发；要求了而服务端拒绝时抛出，不静默降级。
+`x11-req` 与 `auth-agent-req` 只在使用者**显式要求**时才发；没开成（本机这一侧准备失败、服务端拒绝）时按选项的
+`FailureMode` 处理（`07-forwarding.md` §7.5.8）：默认抛出、不静默降级，连接级开关打开的照常启动并交出原因。
 「使用者钩子」给库没有内置的通道请求留位置（`BeforeStart`），它抛异常等于放弃这个会话。
 〔历史〕早期版本把 `env` 放在 `pty-req` 之前，且 shell 根本没有插入 `x11-req` 的时机 ——
 `ssh -X` 最常见的用法（交互 shell）因此开不了 X11 转发。

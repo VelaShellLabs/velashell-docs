@@ -73,9 +73,9 @@ The types below have a fixed `Phase`, and their `Reason` is **reported as it act
 | `SshPublicKeyException` | `KeyFormatInvalid`, `Unsupported` (type not supported) | `None` |
 | `SshPrivateKeyException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyPassphraseRequired`, `KeyPassphraseIncorrect`, `Unsupported` | `None` |
 | `SshCertificateException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyMismatch`, `Unsupported` | `None` |
-| `SshAgentException` | `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
+| `SshAgentException` | `AgentNotRunning`, `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
 | `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected` | `Open` |
-| `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError` | `Open` |
+| `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError`; when agent forwarding cannot be set up because the local agent cannot be reached, the agent side's `AgentNotRunning` / `AgentUnavailable` is carried over | `Open` |
 
 Reading a private key, reading a certificate and parsing a public key happen outside any connection (there may be no connection at all), so `Phase` is `None`.
 When parsing the peer's host key fails during key exchange, the key exchange wraps it into an `SshConnectException` with `Reason` `HostKeyRejected`.
@@ -164,7 +164,8 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `KeyPassphraseRequired` | An encrypted private key needs a passphrase, and none was given | ✘ | Show a passphrase prompt (`SshPrivateKeyException.NeedsPassphrase`) |
 | `KeyPassphraseIncorrect` | A passphrase was given, but it does not decrypt this private key | ✘ | Ask for the passphrase again |
 | `KeyMismatch` | The credential material does not match: the public key in the certificate does not pair with the private key, or a host certificate was used to log in | ✘ | A certificate must be used together with the private key it was issued for |
-| `AgentUnavailable` | ssh-agent cannot be found or reached, or its endpoint is not trusted | ✘ | Check whether the agent is running |
+| `AgentNotRunning` | No ssh-agent is running locally: `SSH_AUTH_SOCK` is not set, the socket does not exist or nobody is listening on it, or the Windows named pipe did not appear within 3 seconds (`07-forwarding.md` §7.1). When agent forwarding cannot be set up, `SshForwardException` carries this reason code over | ✘ | Start the agent (Windows: `Start-Service ssh-agent`) |
+| `AgentUnavailable` | All other cases where ssh-agent cannot be reached: the endpoint is not trusted (wrong owner on the named pipe), or communication failed midway | ✘ | See `Message` |
 | `AgentRefused` | ssh-agent refused the request (the `ssh-add -c` confirmation was declined, the agent is locked, the key is no longer there) | ✘ | |
 | `Timeout` | A phase timed out | ✔ | |
 | `KeepAliveTimeout` | Declared dead by keep-alive | ✔ | **Automatic reconnect should apply only to this category** |

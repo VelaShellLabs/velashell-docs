@@ -240,6 +240,11 @@ sequenceDiagram
 
 这条区分由 `ISshSigner.IsLocalAndCheap` 表达。
 
+〔决策〕**钥在 ssh-agent 里时，签名之前先向 agent 声明会话**（`session-bind@openssh.com`，`is_forwarding = false`，
+`07-forwarding.md` §7.4）。agent 靠它执行 `ssh-add -h` 给钥加的目的地约束 —— 不声明的话，真实的 OpenSSH agent
+拒绝用受约束的钥签名。同一条 agent 连接上只声明一次（只在真要签名时才发：探测没过的钥用不着）；
+agent 不支持声明时照常签名，这一步本身不会让认证失败。证书签名器背后是 agent 的钥时同样要声明。
+
 ### 4.2 请求字段
 
 | # | 类型 | 字段 |
@@ -519,7 +524,7 @@ sequenceDiagram
 | `delay-compression` | 〔决策〕**不实现**。`zlib@openssh.com` 已经解决同一问题 |
 | `no-flow-control` | 〔决策〕**不实现**。我们的窗口管理依赖流控 |
 | `elevation` | 〔决策〕**不实现**（Windows 服务端专用） |
-| `publickey-hostbound@openssh.com` | 〔决策〕M5 再看。与 agent 转发的安全性相关 |
+| `publickey-hostbound@openssh.com` | 〔决策〕**不做**。它为的是 agent 的目的地约束能在**转发出去的**那几跳上核对；第一跳的目的地由会话声明交给 agent（`07-forwarding.md` §7.4），而本库永远是第一跳 —— 经跳板时每一跳也都是本机直接认证 |
 
 **未知扩展一律忽略**，不报错。
 

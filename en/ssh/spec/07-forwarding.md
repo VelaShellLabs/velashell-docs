@@ -355,15 +355,53 @@ Same order of magnitude as an SSH channel's max packet, without making every con
 
 ## 7. Agent forwarding
 
-> Basis: OpenSSH `PROTOCOL`'s `auth-agent-req@openssh.com`, and `PROTOCOL.agent`.
+> Basis: OpenSSH `PROTOCOL`'s `auth-agent-req@openssh.com`, and `PROTOCOL.agent` (including `session-bind@openssh.com`).
 
 ### 7.1 Mechanism
 
-1. Send `CHANNEL_REQUEST "auth-agent-req@openssh.com"` (`want_reply = true`) on the **session channel**.
-2. The server may then open `CHANNEL_OPEN "auth-agent@openssh.com"` channels.
-3. We bridge such a channel to the local ssh-agent (Unix socket / Windows named pipe).
+```mermaid
+sequenceDiagram
+    participant A as Local agent
+    participant C as Client
+    participant S as SSH server
+
+    C->>A: Probe connection (closed as soon as it connects)
+    alt Cannot connect
+        Note over C: Do not send auth-agent-req; handle per FailureMode (§7.5.8)
+    else Connected
+        C->>S: CHANNEL_REQUEST "auth-agent-req@openssh.com" (want_reply = true)
+        S->>C: CHANNEL_SUCCESS
+        S->>C: CHANNEL_OPEN "auth-agent@openssh.com"
+        C->>A: Connect to the local agent ‖ session binding (§7.4)
+        alt Connected
+            C->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over C,A: Parse each message, filter, then forward (§7.2)
+        else Cannot connect
+            C->>S: CHANNEL_OPEN_FAILURE(2) "local ssh-agent unavailable"
+        end
+    end
+```
+
+1. **Probe the local agent once first** (closing the connection as soon as it succeeds). If it cannot be reached, **do not send** the request; handle it per `FailureMode` (§7.5.8 — the same rule as X11).
+2. Send `CHANNEL_REQUEST "auth-agent-req@openssh.com"` (`want_reply = true`) on the **session channel**.
+3. The server may then open `CHANNEL_OPEN "auth-agent@openssh.com"` channels.
+4. **Before confirming the channel**, connect to the local agent (Unix socket / Windows named pipe) and send it the session binding (§7.4).
+5. Confirm the channel and bridge it to that local agent connection.
 
 Handled by `IIncomingChannelHandler` (architecture §8, item 8).
+
+〔Decision〕**If the local agent cannot be reached, forwarding is not announced.** Once announced, the remote `SSH_AUTH_SOCK` points at an agent that can never be reached:
+every remote program that wants it makes a wasted trip, and the user cannot tell that the actual problem is that no agent is running locally.
+
+〔Decision〕**The local agent is connected before the channel is confirmed; if it cannot be reached, reply `CHANNEL_OPEN_FAILURE`** (reason code 2, with the description saying only "local ssh-agent unavailable" —
+local paths and pipe names are not sent out). The remote program learns on the spot that the agent is unusable. It used to confirm first and then connect in the background.
+This step is not on the receive loop (the connection asks handlers in the background, 05 §8.1), so waiting on one local IPC call does no harm.
+The local connection made before confirmation is taken over by the step that subsequently takes over the channel; if the channel ultimately does not open (the local channel count or window budget is exhausted), it is closed on the spot.
+
+〔Decision〕**On Windows, the time limit for waiting for the agent's named pipe to appear is 3 seconds**; when it runs out, the failure is reported as `AgentNotRunning` (08 §3).
+When the pipe does not exist, a connection attempt without a time limit **keeps retrying** until the pipe appears: the agent forwarding path used to carry only a cancellation token,
+so when the agent service was not running, the remote `ssh` / `git` hung until the shell was closed. A file system existence check cannot judge a named pipe
+(it reports "does not exist" even for a pipe that does exist), so a time limit is the only option. Authentication, adding keys and forwarding all share this one time limit in the library.
 
 〔Decision〕**Not a byte-level pass-through**: each agent message (4-byte length + contents) is collected in full and decoded before it is handled —
 only that way can §7.2's "forward only the specified keys" and "confirm each signature" be done.
@@ -460,6 +498,56 @@ the agent is locked (`ssh-add -x`), or the agent does not support this key type.
 5. **The library never adds keys on its own.** When to put something into the user's agent is the user's decision —
    the same principle as "never connect to the agent implicitly" in 04 §2.2. How long an added key lives is up to the agent
    (the Windows OpenSSH agent stores it in the registry, so it survives a reboot).
+
+### 7.4 Session binding (`session-bind@openssh.com`)
+
+> Basis: OpenSSH `PROTOCOL.agent` §1; `SSH_AGENTC_EXTENSION` in draft-miller-ssh-agent; the session identifier in RFC 4253 §7.2;
+> the semantics of the constraints in OpenSSH's "SSH agent restriction" design note (openssh.com/agent-restrict.html).
+
+`ssh-add -h` adds **destination constraints** to a key (usable only for certain hosts, forwardable only along certain paths). To enforce them, the agent has to know
+"which SSH session this agent connection is serving" — and that is what session binding tells it.
+
+**Request message**:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| Message number | byte | `27` `SSH_AGENTC_EXTENSION` |
+| Extension name | string | `session-bind@openssh.com` |
+| Host public key | string | Wire encoding of the server's host public key (`K_S` from the first exchange) |
+| Session identifier | string | `H` from the first exchange (03 §4.3) |
+| Signature | string | The signature blob over `H` that the server sent in its reply to the first exchange |
+| `is_forwarding` | boolean | false for a connection used for authentication, true for one used for forwarding |
+
+**Response**: `6` `SSH_AGENT_SUCCESS` means accepted; `5` `SSH_AGENT_FAILURE` or `28` `SSH_AGENT_EXTENSION_FAILURE` means not supported or refused.
+
+〔Decision〕**All three come from the first key exchange.** The session identifier never changes afterwards, and the agent verifies this signature with the host public key —
+a signature from rekeying signs that round's own `H`, which does not match the session identifier.
+
+〔Decision〕**When to send it**:
+
+| Purpose | Timing | `is_forwarding` |
+| --- | --- | :-: |
+| Authentication (`publickey`, key held in the agent) | Before a key on this agent connection is asked to sign for the first time; sent only once per connection and session | false |
+| Forwarding | After each `auth-agent@openssh.com` channel has connected to the local agent, before the channel is confirmed (§7.1) | true |
+
+〔Decision〕**The remote hop's own session binding is passed through**, and it is the only extension let through. Each hop along a forwarding chain appends its own binding after the previous hop's,
+and that is how the agent recognizes the whole path; a binding can only make the agent **stricter** with this connection, so letting it through does not widen the remote's powers.
+For any other extension inside `SSH_AGENTC_EXTENSION` we cannot be sure what it might do, so it still gets `FAILURE` and never reaches the local agent.
+The binding must travel over the **same** local agent connection — each agent channel gets a connection of its own, which satisfies this exactly.
+
+〔Decision〕**A failed binding is not an error.** When the agent replies `FAILURE` / `EXTENSION_FAILURE` (old agents, non-OpenSSH agents), listing keys and signing go on as usual;
+the constraints simply do not take effect — consistent with the OpenSSH client. A few agents **drop the connection** when they receive a message they do not recognize:
+in that case reconnect once without binding, and the subsequent listing, signing and forwarding carry on as usual. The signer on the authentication path holds this very client connection, so it must not be broken along with it.
+
+〔Decision〕**`publickey-hostbound-v00@openssh.com` is not implemented** (04 §7.2). According to OpenSSH's design note, the first hop does not need it —
+the destination is handed to the agent by the session binding. This library is always the first hop: when going through jump hosts, every hop is also authenticated directly from the local machine.
+
+Why it is required (not just "nice to have"):
+
+- **Authentication**: the real OpenSSH agent (tested with 9.9p2) refuses to sign with keys constrained by `ssh-add -h` on a connection that has **not been bound** —
+  such keys used to be completely unusable with this library.
+- **Forwarding**: a forwarder that does not take part in binding is exactly the case OpenSSH's design note describes as not degrading gracefully —
+  the agent cannot tell that this connection has been forwarded and treats the remote as the origin machine itself, so the constraints are as good as absent.
 
 ---
 
@@ -608,6 +696,8 @@ For cookie selection it still counts as a local display (the local host name's F
 means one less attack surface.
 〔Decision〕When no matching entry is found in `.Xauthority`, use random data (consistent with OpenSSH):
 letting the X server reject it is better than us guessing a cookie that is "probably right".
+〔Decision〕**Entries with an empty cookie are skipped and the search continues** (the same goes for the temporary file generated by `xauth`):
+an empty cookie opens no doors, and substituting it into the setup message as the real cookie would shut out the valid entry that follows it.
 〔Decision〕Invoking `xauth` must have a **timeout** (30 seconds) — it can hang on an unresponsive X server.
 On timeout or cancellation, **terminate its process tree** and leave no hanging child process; read its standard output and standard error **concurrently** —
 waiting for exit without reading will fill the pipe once output grows, and the process will never exit.
@@ -636,16 +726,24 @@ so neither side has a time limit.
 
 ### 7.5.8 What to do on failure
 
-〔Decision〕**Two cases, because the user intent differs:**
+This section applies **equally to X11 and agent forwarding (§7)**.
 
-| Who enabled it | On failure |
-| --- | --- |
-| The caller **explicitly** requested it on this execution | **Throw** — they explicitly want X11; silently degrading would be lying to them |
-| Only a connection-level switch (e.g. `ForwardX11 yes` in `ssh_config`) | **Log and start normally** — otherwise an existing configuration would make every command fail to run |
+〔Decision〕**Two cases, because the user intent differs**, expressed by `FailureMode` (`ForwardFailureMode`) on the options:
 
-〔Decision〕**"X11 could not be set up" covers any preparation failure on the local side**: no display, `xauth` missing or not runnable,
-the temporary directory for `xauth` cannot be created, and the server refusing `x11-req`. **The connection itself breaking and the caller cancelling are still thrown as-is** —
-they are not swallowed as an X11 failure: once swallowed, the next request fails on the same dead channel anyway and the real cause is lost.
+| Who enabled it | `FailureMode` | On failure |
+| --- | --- | --- |
+| The caller **explicitly** requested it on this execution | `Fail` (default) | **Throw `SshForwardException`**, and the channel is closed with it — they explicitly want this forwarding; silently degrading would be lying to them |
+| Only a connection-level switch (`ForwardX11 yes` / `ForwardAgent` in `ssh_config`, the host's connection settings) | `Continue` | **Start normally without this forwarding**; the reason is put on the result object's `X11SetupFailure` / `AgentSetupFailure` and counted in the forwarding error count (`reason = SetupSkipped`) — otherwise an existing configuration would make every command fail to run |
+
+〔Decision〕**The failure policy is an enum, not a boolean.** It used to be `X11ForwardOptions.BestEffort`: a boolean's meaning cannot be read at the call site, and there is no room to add a third behavior.
+The enum has **no "off" value**: whether to request at all is expressed by whether the option itself is given (`X11Forwarding` / `AgentForwarding` being null means no request);
+adding an "off" as well would give two contradictory ways of saying the same thing. The zero value is `Fail`.
+This library also **has no connection-level forwarding switch** (§7.5.1): probe commands and SFTP running on the same connection should not inherit some shell's forwarding, so a value like "follow the connection default" is not needed.
+
+〔Decision〕**"Could not be set up" covers any preparation failure on the local side, as well as a refusal from the server**: for X11, no display, `xauth` missing or not runnable,
+the temporary directory for `xauth` cannot be created, the server refusing `x11-req`; for the agent, the local agent cannot be reached (§7.1), the server refusing `auth-agent-req`.
+**The connection itself breaking and the caller cancelling are still thrown as-is** — they are not swallowed as a forwarding failure: once swallowed, the next request fails on the same dead channel anyway and the real cause is lost.
+The two are each handled by their own `FailureMode`; one failing to be set up does not drag down the other.
 
 ### 7.5.9 Reaching the local display through a connector
 
@@ -701,6 +799,10 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
 | Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
+| The local agent cannot be reached when agent forwarding is requested | Do not send `auth-agent-req`; throw or start normally per `FailureMode` (§7.1, §7.5.8); the reason code is carried over from the agent side (`AgentNotRunning` / `AgentUnavailable`) |
+| The local agent cannot be reached when an `auth-agent@openssh.com` channel arrives | Reply `CHANNEL_OPEN_FAILURE(2)`, with the description saying only "local ssh-agent unavailable"; the session and the forwarder are unaffected (§7.1) |
+| The local agent does not support session binding / drops the connection because of it | Forward as usual; on a drop, reconnect once without binding (§7.4) |
+| The remote sends an agent extension other than `session-bind@openssh.com` | Reply `FAILURE`; it never reaches the local agent (§7.4) |
 
 〔Decision〕**A single connection's failure must never affect the forwarder itself.**
 A tunnel has to be able to run for days, during which unreachable targets and reset connections are inevitable.
