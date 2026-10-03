@@ -322,7 +322,8 @@ sequenceDiagram
 | `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝 |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。跳板拿到哪些调用方凭据见下 |
 | `ProxyCommand` | 代理命令拨号器；`none` 表示不用 |
-| `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数 |
+| `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数。由它们打开的转发按 `Continue` 请求（`07-forwarding.md` §7.5.8）：本机没有 agent / 显示、服务端拒绝时 shell 照常启动 |
+| `ForwardAgent` 的取值 | 四种写法（`ssh_config(5)`）：`yes` → 转发默认的 agent；`no`（缺省）→ 不转发；agent 套接字路径（展开 `~` 与 `%d` `%u` `%h` `%r`）→ 转发那一个；`$环境变量名` → 转发变量值指的那一个，变量没设或为空时不转发。`yes` / `no` 不分大小写。〔历史〕曾经只认 `yes`：写了路径的配置被当成 `no`，转发悄悄没开 |
 | `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。

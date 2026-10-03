@@ -751,14 +751,16 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
         display) is in the tooltip.
       - Forwarding **lasts for the whole session** with no expiry — “new windows stop opening after half an hour” only
         makes people think forwarding is broken.
-    - **A refusal does not take the session down**: `X11Forwarding no`, a missing xauth and `AllowAgentForwarding no`
-      are all common, and failing the whole session over an add-on would be backwards. X11 is requested **best-effort**
-      (the SSH library's `X11ForwardOptions.BestEffort`): when setup fails the library does not throw, the shell opens
-      in one go, and the reason comes back on `SshShell.X11SetupFailure`; when agent forwarding is refused the shell is
-      reopened once without it (keeping X11). Either way a **yellow** line at the top of the terminal says why; on
-      success a **grey** line
+    - **A refusal does not take the session down**: `X11Forwarding no`, a missing xauth, no local agent running and
+      `AllowAgentForwarding no` are all common, and failing the whole session over an add-on would be backwards. Both X11
+      and agent forwarding are requested as “skip it if it can't be set up” (the SSH library's
+      `ForwardFailureMode.Continue`): when setup fails the library does not throw, the shell opens in one go, and the
+      reason comes back on `SshShell.X11SetupFailure` / `SshShell.AgentSetupFailure`; each gets a **yellow** line at the
+      top of the terminal saying why (when no local agent is running, a localized hint is chosen by reason code, and on
+      Windows it names the service to start); on success a **grey** line
       (“X11 forwarding on → local display localhost:0.0”) in the same style as the jump-chain line. Both the first
-      connection and in-place reconnects write it.
+      connection and in-place reconnects write it. 〔History〕Agent forwarding used to be dropped after a refusal, and
+      the whole shell reopened.
     - **Allow legacy algorithms (for old devices)** (`SshSessionOptions.LegacyAlgorithms`, off by default): old network
       gear and old systems are often down to `diffie-hellman-group14-sha1`, SHA-1 `ssh-rsa` and `hmac-sha1`, and the
       default lists cannot agree with them. Turning it on **appends these three after the defaults** — a server that

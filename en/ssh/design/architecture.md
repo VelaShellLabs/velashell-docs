@@ -514,7 +514,7 @@ enum SshFailureReason {
     NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
     AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
-    AgentUnavailable, AgentRefused,
+    AgentUnavailable, AgentNotRunning, AgentRefused,
     Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
     ChannelOpenFailed, ChannelRequestRejected,
     ForwardRejected, ForwardBindFailed, ForwardSetupFailed, LimitExceeded,
@@ -2583,6 +2583,31 @@ only the conclusions relevant to this document are recorded here:
 | `KnownHostsPolicy(askUser: …)` | `KnownHostsPolicy(askUnknownHost: …)` |
 | `SshConnection.SendGlobalRequestWithReplyAsync` | Merged with `SendGlobalRequestAsync` and made an internal library method |
 | `SshPrivateKeyFile.LoadAsync` → `ISshSigner` | → `InMemorySshSigner` (disposable; zeroes the private key on disposal) |
+
+### 11.2.25 Fixes to agent forwarding: session binding, no hang when the agent is missing, go on without it (2026-10-03)
+
+Background: agent forwarding, `zlib@openssh.com` compression, port-forward relaying, X11 and terminal size were reviewed again against the specs and real-world tests.
+
+**Checked, left alone**: compression only does `zlib@openssh.com`, is enabled only after authentication succeeds, gets a fresh context on rekeying, the decompression limit is checked before writing out,
+an empty decompressed payload is a protocol error, and the exemption from the strict-checking switch is given only to the "data already decompressed" case; when the target end of a local / remote forward cannot be reached, the source end is closed,
+and relaying half-closes per direction (§2.2); agent channels are registered per forwarder and removed on release; SFTP requests no forwarding at all; the Windows agent pipe's owner is checked;
+X11 see §11.2.23; terminal size see §11.2.16 (0 rows / columns are legal, per RFC 4254 §6.2).
+
+**Done:**
+
+| Problem | Decision |
+| --- | --- |
+| Connecting to the local agent for agent forwarding had **no time limit**: on Windows, when the agent service is not running the named pipe does not exist, and a connection attempt without a time limit keeps retrying — as soon as the remote `ssh` / `git` touched the agent it hung until the shell was closed. The host had wrapped the authentication path in a 3-second limit but missed the forwarding path | The time limit moved into the library (3 seconds, shared by authentication, adding keys and forwarding); when it runs out the new `AgentNotRunning` is reported (an unset `SSH_AUTH_SOCK` or a missing socket also falls under it); the host dropped its own layer and localizes by reason code ([`spec/07`](../spec/07-forwarding.md) §7.1, [`spec/08`](../spec/08-failures.md) §3) |
+| Forwarding was announced even when there was no local agent; agent channels were confirmed first and connected in the background | Probe before requesting, and do not announce if the agent cannot be reached; the channel connects to the local agent **before confirmation**, and replies `CHANNEL_OPEN_FAILURE` if it cannot be reached (§7.1) |
+| **No session binding** (`session-bind@openssh.com`): `ssh-add -h` constraints did not hold in this library's hands — during authentication, the real OpenSSH agent (tested with 9.9p2) refused to sign with a constrained key for an unbound connection, so such keys were completely unusable; during forwarding, the agent treated the remote as the origin machine, so the constraints were as good as absent | Both authentication and forwarding bind (`is_forwarding` false / true respectively), with the three values taken from the first exchange; the remote hop's binding is passed through, other extensions are still refused; when the agent does not support it or drops the connection over it, things work as usual (§7.4). `publickey-hostbound` is decided against ([`spec/04`](../spec/04-authentication.md) §7.2). Interop cases let a real agent verify it: the binding is accepted, a tampered signature is rejected, and a constrained key refuses to sign when bound to a different host |
+| Agent forwarding had no "go without it if it cannot be set up": when forwarding turned on by a connection-level switch was refused, the host had to drop the agent and reopen the whole shell (rerunning the X11 request and `xauth` along with it); `ForwardAgent yes` in `ssh_config` meeting `AllowAgentForwarding no` kept the shell from starting | The same scheme as X11: `AgentForwardOptions.FailureMode`, with the reason on `AgentSetupFailure`; the host opens the shell in one go (§7.5.8) |
+| X11's failure policy was the boolean `BestEffort` | Replaced by the enum `ForwardFailureMode { Fail, Continue }`, zero value `Fail`, shared by X11 and the agent; the error count's reason is renamed `SetupSkipped` (`ForwardKind` tells which forwarding it was). **There is no "off" value, and no connection-level forwarding default** — see §7.5.8 for why |
+| `ForwardAgent` accepted only `yes`; a configuration giving an agent socket path was treated as `no` | Accepts the four forms per `ssh_config(5)` ([`spec/09`](../spec/09-dialing.md) §7) |
+| An `.Xauthority` entry with an empty cookie was taken as the real cookie, shutting out the valid entry after it | Skipped (§7.5.7) |
+
+**Considered, not done:** an "off" value in the failure policy, and a forwarding switch where "nullable means follow the connection default" — this library has no connection-level forwarding switch
+(§7.5.1: probe commands and SFTP on the same connection should not inherit some shell's forwarding), `null` already means "not requested", and another value would only add a duplicate way of writing it;
+only logging when forwarding is skipped, without handing the reason over — a caller that cannot see it cannot tell the user, so the reason stays on the result object.
 
 ### 11.3 Switch-over strategy with VelaShell
 

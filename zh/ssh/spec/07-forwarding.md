@@ -353,15 +353,53 @@ Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者�
 
 ## 七 Agent 转发
 
-> 依据：OpenSSH `PROTOCOL` 的 `auth-agent-req@openssh.com`、`PROTOCOL.agent`。
+> 依据：OpenSSH `PROTOCOL` 的 `auth-agent-req@openssh.com`、`PROTOCOL.agent`（含 `session-bind@openssh.com`）。
 
 ### 7.1 机制
 
-1. 在 **session 通道**上发 `CHANNEL_REQUEST "auth-agent-req@openssh.com"`（`want_reply = true`）。
-2. 服务端随后可以发起 `CHANNEL_OPEN "auth-agent@openssh.com"` 通道。
-3. 我们把这条通道桥到本机的 ssh-agent（Unix 套接字 / Windows 命名管道）。
+```mermaid
+sequenceDiagram
+    participant A as 本机 agent
+    participant C as 客户端
+    participant S as SSH 服务端
+
+    C->>A: 试连（连上即关）
+    alt 连不上
+        Note over C: 不发 auth-agent-req，按 FailureMode 处理（§7.5.8）
+    else 连上了
+        C->>S: CHANNEL_REQUEST "auth-agent-req@openssh.com"（want_reply = true）
+        S->>C: CHANNEL_SUCCESS
+        S->>C: CHANNEL_OPEN "auth-agent@openssh.com"
+        C->>A: 连本机 agent ‖ 会话声明（§7.4）
+        alt 连上了
+            C->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over C,A: 逐条解析、过滤后转发（§7.2）
+        else 连不上
+            C->>S: CHANNEL_OPEN_FAILURE(2)「本机 ssh-agent 不可用」
+        end
+    end
+```
+
+1. **先试连一次本机 agent**（连上就关）。连不上就**不发**请求，按 `FailureMode` 处理（§7.5.8，与 X11 同一条规矩）。
+2. 在 **session 通道**上发 `CHANNEL_REQUEST "auth-agent-req@openssh.com"`（`want_reply = true`）。
+3. 服务端随后可以发起 `CHANNEL_OPEN "auth-agent@openssh.com"` 通道。
+4. **确认通道之前**连本机 agent（Unix 套接字 / Windows 命名管道），并向它做会话声明（§7.4）。
+5. 确认通道，把它桥到那条本机 agent 连接上。
 
 由 `IIncomingChannelHandler` 处理（架构 §8 第 8 项）。
+
+〔决策〕**连不上本机 agent 就不宣告转发。**宣告了，远端的 `SSH_AUTH_SOCK` 就指向一个永远连不通的 agent：
+远端每个想用它的程序都要白走一遍，使用者却看不出是本机这边没开 agent。
+
+〔决策〕**本机 agent 在确认通道之前连好，连不上就回 `CHANNEL_OPEN_FAILURE`**（原因码 2，描述只写「本机 ssh-agent 不可用」——
+本机的路径、管道名不往外送）。远端的程序当场就知道 agent 用不了。曾经是先确认、再在后台连。
+这一步不在接收循环上（连接把「问处理器」放在后台做，05 §8.1），等一次本机 IPC 不碍事。
+确认之前连好的那条本机连接，由随后接管通道的那一步取走；通道最终没开成（本端通道数或窗口预算用尽）就当场关掉。
+
+〔决策〕**Windows 上等 agent 命名管道出现的时限是 3 秒**，到点以 `AgentNotRunning` 报出（08 §3）。
+管道不存在时不带时限的连接会**一直重试**到管道出现：曾经 agent 转发这一路只带取消令牌，
+agent 服务没起时远端的 `ssh` / `git` 一直挂到 shell 关掉。文件系统的存在性检查判断不了命名管道
+（对一个存在的管道也返回「不存在」），只能靠时限。认证、加钥与转发三处共用库里这一个时限。
 
 〔决策〕**不是字节级直通**：每条 agent 报文（4 字节长度 + 内容）收齐、解出来看过之后才处理 ——
 只有这样才能做 §7.2 的「只转发指定的密钥」与「逐次签名确认」。
@@ -458,6 +496,56 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 5. **库从不自动加钥**。什么时候往使用者的 agent 里放东西是使用者的决定 ——
    与 04 §2.2「不自动连 agent」是同一条原则。加进去的钥活多久由 agent 决定
    （Windows 的 OpenSSH agent 会把它存进注册表，重启后仍在）。
+
+### 7.4 会话声明（`session-bind@openssh.com`）
+
+> 依据：OpenSSH `PROTOCOL.agent` §1；`SSH_AGENTC_EXTENSION` 见 draft-miller-ssh-agent；会话标识见 RFC 4253 §7.2；
+> 约束的语义见 OpenSSH 的「SSH agent restriction」设计说明（openssh.com/agent-restrict.html）。
+
+`ssh-add -h` 给钥加**目的地约束**（只许用于某几台主机、只许经某条路径转发）。agent 要执行它，就得知道
+「这条 agent 连接是为哪个 SSH 会话服务的」—— 这就是会话声明。
+
+**请求报文**：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| 消息号 | byte | `27` `SSH_AGENTC_EXTENSION` |
+| 扩展名 | string | `session-bind@openssh.com` |
+| 主机公钥 | string | 服务端主机公钥的 wire 编码（首次交换的 `K_S`） |
+| 会话标识 | string | 首次交换的 `H`（03 §4.3） |
+| 签名 | string | 服务端在首次交换的应答里对 `H` 的签名 blob |
+| `is_forwarding` | boolean | 认证用的连接为 false，转发用的为 true |
+
+**应答**：`6` `SSH_AGENT_SUCCESS` 为接受；`5` `SSH_AGENT_FAILURE` 或 `28` `SSH_AGENT_EXTENSION_FAILURE` 为不支持或拒绝。
+
+〔决策〕**三样都取自首次密钥交换。**会话标识此后不变，agent 拿主机公钥验这个签名 ——
+重协商的签名签的是那一轮自己的 `H`，与会话标识对不上。
+
+〔决策〕**什么时候发**：
+
+| 用途 | 时机 | `is_forwarding` |
+| --- | --- | :-: |
+| 认证（`publickey`，钥在 agent 里） | 第一次让这条 agent 连接上的钥签名之前；同一条连接、同一个会话只发一次 | false |
+| 转发 | 每条 `auth-agent@openssh.com` 通道连上本机 agent 之后、确认通道之前（§7.1） | true |
+
+〔决策〕**远端那一跳自己的会话声明照转**，而且只放行这一个扩展。转发链上的每一跳都把自己的声明接在前一跳后面，
+agent 才认得出整条路径；声明只会让 agent 对这条连接**更严**，放行它不放大远端的权限。
+`SSH_AGENTC_EXTENSION` 里别的扩展我们说不准它能做什么，照旧回 `FAILURE`、不到本机 agent。
+它必须走**同一条**本机 agent 连接 —— 每条 agent 通道各连一条，正好满足。
+
+〔决策〕**声明失败不是错误。**agent 回 `FAILURE` / `EXTENSION_FAILURE`（老 agent、非 OpenSSH 的 agent）时照常列钥、签名，
+只是约束不生效 —— 与 OpenSSH 的客户端一致。个别 agent 收到不认识的报文就**断开连接**：
+这时重连一次、不再声明，后面的列钥、签名、转发照常。认证那一路的签名器拿的就是这一条客户端连接，它不能跟着失效。
+
+〔决策〕**不做 `publickey-hostbound-v00@openssh.com`**（04 §7.2）。按 OpenSSH 的设计说明，第一跳不需要它 ——
+目的地由会话声明交给 agent。本库永远是第一跳：经跳板时，每一跳也都是本机直接认证。
+
+为什么必须做（不只是「锦上添花」）：
+
+- **认证**：真实的 OpenSSH agent（9.9p2 实测）对**没声明过**的连接，拒绝用 `ssh-add -h` 约束过的钥签名 ——
+  曾经这种钥在本库里根本用不了。
+- **转发**：不参与声明的转发方，正是 OpenSSH 设计说明里「降级不够平滑」的那种情形 ——
+  agent 看不出这条连接是被转发出去的，会把远端当成源头机器本身，约束形同虚设。
 
 ---
 
@@ -606,6 +694,8 @@ byte[d] auth_protocol_data           // 补齐到 4 的倍数
 就少一条攻击面。
 〔决策〕`.Xauthority` 里找不到对应条目时，用随机数据（与 OpenSSH 一致）：
 让 X server 去拒绝，比我们在这里猜一个「大概对」的 cookie 好。
+〔决策〕**cookie 为空的条目跳过、接着往下找**（`xauth` 生成的临时文件同样如此）：
+空 cookie 开不了任何门，拿它当真 cookie 换进建立报文，排在它后面的那条有效条目就被挡住了。
 〔决策〕调用 `xauth` 要有**超时**（30 秒）—— 它可能卡在一个没响应的 X server 上。
 超时或取消时**结束它的进程树**，不留挂着的子进程；它的标准输出与标准错误**同时读**，
 只等退出不读的话输出一多就会写满管道、进程永远不退出。
@@ -633,16 +723,24 @@ X 的 SECURITY 扩展规定：受限授权在「没有任何连接在用它」�
 
 ### 7.5.8 失败了怎么办
 
-〔决策〕**分两种情况，因为它们的用户意图不同：**
+这一节对 **X11 与 agent 转发（§七）同样适用**。
 
-| 谁开的 | 失败时 |
-| --- | --- |
-| 调用方在这一次执行上**显式**要求 | **抛异常** —— 他明确要 X11，静默降级等于骗他 |
-| 只是连接级开关（比如 `ssh_config` 里的 `ForwardX11 yes`） | **记日志，照常启动** —— 否则一份存量配置会让所有命令都跑不起来 |
+〔决策〕**分两种情况，因为它们的用户意图不同**，由选项上的 `FailureMode`（`ForwardFailureMode`）表达：
 
-〔决策〕**「X11 没开成」包括本机这一侧的任何准备失败**：拿不到显示、找不到或跑不起 `xauth`、
-给 `xauth` 用的临时目录建不了，以及服务端拒绝 `x11-req`。**连接本身断了、调用方取消，照常抛出** ——
-不当成 X11 的失败吞掉：吞掉之后下一个请求照样在这条死掉的通道上失败，而真正的原因反而丢了。
+| 谁开的 | `FailureMode` | 失败时 |
+| --- | --- | --- |
+| 调用方在这一次执行上**显式**要求 | `Fail`（默认） | **抛 `SshForwardException`**，通道随之关掉 —— 他明确要这项转发，静默降级等于骗他 |
+| 只是连接级开关（`ssh_config` 的 `ForwardX11 yes` / `ForwardAgent`、宿主的连接配置） | `Continue` | **不带这项转发、照常启动**，原因放在结果对象的 `X11SetupFailure` / `AgentSetupFailure` 上，并计入转发的错误计数（`reason = SetupSkipped`）—— 否则一份存量配置会让所有命令都跑不起来 |
+
+〔决策〕**失败策略是枚举，不是布尔。**曾经是 `X11ForwardOptions.BestEffort`：布尔在调用点上读不出含义，也没法再加第三种做法。
+枚举里**没有「关」这一档**：「请求不请求」由选项本身给没给出来表达（`X11Forwarding` / `AgentForwarding` 为空就是不请求），
+再加一个「关」就有两种互相矛盾的写法表达同一件事。零值是 `Fail`。
+本库也**没有连接级的转发开关**（§7.5.1）：同一条连接上跑的探测命令、SFTP 不该继承某个 shell 的转发，所以不需要「跟随连接默认」这种取值。
+
+〔决策〕**「没开成」包括本机这一侧的任何准备失败，以及服务端拒绝**：X11 是拿不到显示、找不到或跑不起 `xauth`、
+给 `xauth` 用的临时目录建不了、服务端拒绝 `x11-req`；agent 是本机 agent 连不上（§7.1）、服务端拒绝 `auth-agent-req`。
+**连接本身断了、调用方取消，照常抛出** —— 不当成转发的失败吞掉：吞掉之后下一个请求照样在这条死掉的通道上失败，而真正的原因反而丢了。
+两项各按各的 `FailureMode` 处理，一项没开成不连累另一项。
 
 ### 7.5.9 本机显示经连接器接入
 
@@ -691,6 +789,10 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
 | 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(1)`；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |
+| 请求 agent 转发时本机 agent 连不上 | 不发 `auth-agent-req`；按 `FailureMode` 抛出或照常启动（§7.1、§7.5.8），原因码沿用 agent 那边的（`AgentNotRunning` / `AgentUnavailable`） |
+| `auth-agent@openssh.com` 通道到来时本机 agent 连不上 | 回 `CHANNEL_OPEN_FAILURE(2)`，描述只写「本机 ssh-agent 不可用」；会话与转发器不受影响（§7.1） |
+| 本机 agent 不支持会话声明 / 因为它断开 | 照常转发；断开时重连一次、不再声明（§7.4） |
+| 远端发来 `session-bind@openssh.com` 以外的 agent 扩展 | 回 `FAILURE`，不到本机 agent（§7.4） |
 
 〔决策〕**单条连接的失败绝不影响转发器本身。**
 一条隧道要能跑几天，期间必然有连不上的目标、被重置的连接。

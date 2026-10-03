@@ -71,9 +71,9 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 | `SshPublicKeyException` | `KeyFormatInvalid`、`Unsupported`（类型不支持） | `None` |
 | `SshPrivateKeyException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyPassphraseRequired`、`KeyPassphraseIncorrect`、`Unsupported` | `None` |
 | `SshCertificateException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyMismatch`、`Unsupported` | `None` |
-| `SshAgentException` | `AgentUnavailable`、`AgentRefused`、`LimitExceeded`（要加的钥超出报文上限）、`ProtocolError` | `Authenticating` |
+| `SshAgentException` | `AgentNotRunning`、`AgentUnavailable`、`AgentRefused`、`LimitExceeded`（要加的钥超出报文上限）、`ProtocolError` | `Authenticating` |
 | `SshChannelException` | `ChannelOpenFailed`（带 `OpenFailureReason`）、`ChannelRequestRejected` | `Open` |
-| `SshForwardException` | `ForwardRejected`、`ForwardBindFailed`、`ForwardSetupFailed`、`LimitExceeded`、`ProtocolError` | `Open` |
+| `SshForwardException` | `ForwardRejected`、`ForwardBindFailed`、`ForwardSetupFailed`、`LimitExceeded`、`ProtocolError`；agent 转发因本机 agent 连不上而没开成时沿用 agent 那边的 `AgentNotRunning` / `AgentUnavailable` | `Open` |
 
 读私钥、读证书、解析公钥发生在连接之外（也可能根本没有连接），所以 `Phase` 是 `None`。
 密钥交换里解析对端的主机密钥失败时，由密钥交换把它包成 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`。
@@ -162,7 +162,8 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `KeyPassphraseRequired` | 加密的私钥需要口令，而没有给 | ✘ | 弹口令输入框（`SshPrivateKeyException.NeedsPassphrase`） |
 | `KeyPassphraseIncorrect` | 给了口令，但解不开这把私钥 | ✘ | 再问一次口令 |
 | `KeyMismatch` | 凭据材料对不上：证书里的公钥与私钥不是一对、拿主机证书去登录 | ✘ | 证书要与签发时用的那把私钥一起用 |
-| `AgentUnavailable` | 找不到或连不上 ssh-agent，或它的端点不可信 | ✘ | 检查 agent 是否在跑 |
+| `AgentNotRunning` | 本机没在跑 ssh-agent：`SSH_AUTH_SOCK` 没设、套接字不存在或没人监听、Windows 的命名管道在 3 秒内没出现（`07-forwarding.md` §7.1）。agent 转发没开成时 `SshForwardException` 沿用这个原因码 | ✘ | 把 agent 起来（Windows：`Start-Service ssh-agent`） |
+| `AgentUnavailable` | 连不上 ssh-agent 的其余情形：端点不可信（命名管道属主不对）、通信中途出错 | ✘ | 看 `Message` |
 | `AgentRefused` | ssh-agent 拒绝了请求（`ssh-add -c` 的确认被拒、agent 被锁、钥已不在） | ✘ | |
 | `Timeout` | 某阶段超时 | ✔ | |
 | `KeepAliveTimeout` | 保活判死 | ✔ | **自动重连只该对这一类生效** |

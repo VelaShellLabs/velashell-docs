@@ -306,6 +306,11 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
 }, ct);
 ```
 
+What happens when a forwarding cannot be set up (no local X display / agent, or the server refuses) is decided by `FailureMode` on the options:
+the default `ForwardFailureMode.Fail` throws `SshForwardException` and the shell does not start; `ForwardFailureMode.Continue`
+starts normally without that forwarding, with the reason in `shell.X11SetupFailure` / `shell.AgentSetupFailure` —
+connection-level switches (`ForwardX11 yes` in `ssh_config`, a checkbox in the UI) should use the latter.
+
 `SshCommandOptions` (one-shot commands) has the same three options — they live on the shared base class `SshSessionRequestOptions`.
 
 ---
@@ -506,21 +511,26 @@ this difference is not an optimization but a prerequisite.
 
 ### Agent forwarding (`ssh -A`)
 
-**Off by default, and there is no "turn it on globally" switch** — it is a per-connection, per-channel decision:
+**Off by default, and there is no "turn it on globally" switch** — it is a per-session decision, written in the options for opening a shell / running a command:
 
 ```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
-
-await using AgentForwarder fwd = await AgentForwarder.RequestAsync(
-    conn, session,
-    new AgentForwardOptions
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // forward only this one; the rest are invisible to the remote
         ConfirmEachSignature = AskUserAsync,    // ask a human for every signature
         MaxConnections = 4,
     },
-    cancellationToken: ct);
+}, ct);
+
+AgentForwarder fwd = shell.Agent!;              // disposed together with the shell
 ```
+
+Before making the request, the library probes the local agent once; if it cannot be reached, forwarding is not announced (it throws or starts normally per `FailureMode`, see the previous section);
+when the server opens an agent channel back, and the local agent cannot be reached, it replies `CHANNEL_OPEN_FAILURE` on the spot. Every forwarded agent connection first sends the
+session binding (`session-bind@openssh.com`) to the local agent, and the remote hop's own binding is passed through as well — so the destination constraints that `ssh-add -h` puts on keys still take effect
+(`spec/07-forwarding.md` §7.4).
 
 `ssh -A` has a bad reputation for a reason: **remote root can borrow your agent to log in anywhere as you**,
 and you cannot see it. So here the agent channel is not simply wired through as a byte pipe;
@@ -648,7 +658,7 @@ All exceptions derive from `SshException` and carry `Reason` (a decidable reason
 | `SshAuthenticationException` | Authentication failed | `Attempts`, `ServerOffered`, `PartialSuccessAchieved` |
 | `SshPrivateKeyException` | Private key unreadable or cannot be decrypted | `Reason`: `KeyFileUnreadable` / `KeyFormatInvalid` / `KeyPassphraseRequired` / `KeyPassphraseIncorrect`; `NeedsPassphrase` |
 | `SshCertificateException` | Certificate is wrong | `Reason`: `KeyFormatInvalid` / `KeyMismatch` (not a pair with the private key, or a host certificate used to log in) |
-| `SshAgentException` | ssh-agent error | `Reason`: `AgentUnavailable` / `AgentRefused` |
+| `SshAgentException` | ssh-agent error | `Reason`: `AgentNotRunning` (not running) / `AgentUnavailable` / `AgentRefused` |
 | `SshChannelException` | Channel could not be opened, or a request on it was refused | not opened: `ChannelOpenFailed` + `OpenFailureReason` + an actionable hint; exec / pty-req / shell / subsystem refused: `ChannelRequestRejected` |
 | `SftpException` | SFTP operation failed | **`ServerMessage` (the server's own words)**, `Operation` (`SftpOperation`), `Path` |
 | `SftpTransferInterruptedException` | Transfer interrupted | `DurableLength` |
