@@ -242,6 +242,8 @@ and reading must loop until enough is obtained or `EOF` is encountered.
 - Each call returns **a batch** of directory entries, not all of them.
 - A return of `STATUS = EOF` means reading is complete.
   〔Decision〕A batch has at least one entry or is EOF; **16 empty batches in a row** (count = 0) are a protocol error — the listing used to keep reading until the caller cancelled.
+- 〔Decision〕**An entry whose attributes lack permission bits gets one `LSTAT`** (if that fails, nothing changes). Without permission bits there is no telling a directory from a link or a file (the type lives only in the high bits of the permissions, §4.2) —
+  such entries used to be treated as files, and the host could not open those directories.
 - `longname` is a line of text in `ls -l` style, **with a non-standardized format**.
   〔Decision〕**Do not parse `longname`**; all information is taken from ATTRS.
   Parsing it is a classic source of bugs in SFTP clients (time format, locale, column alignment all vary by server).
