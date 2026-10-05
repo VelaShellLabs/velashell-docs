@@ -93,6 +93,11 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 
 主机密钥被拒没有专门的类型：它是 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`，策略给的原因就是它的 `Message`（§3）。
 
+〔决策〕**公开 API 只抛上面这一层的异常。**对端发来的东西解不开（KEXINIT 的名单被截断、收到空载荷的帧）在握手、认证期间与会话期间
+同一个口径：`SshProtocolException`（`ProtocolError`，`Phase` 是出事的那一步）；对端在一个报文中途断开是 `SshConnectionClosedException`
+（`ClosedByPeer`）。解析层的异常是 internal 的，挂在内层。曾经握手期没有这层归类，它们原样漏出 `ConnectAsync` —— 调用方 `catch (SshException)` 接不住。
+空载荷的帧在帧层就拒收（spec/01 §5），不交给上层。
+
 〔决策〕**通道级失败不派生自连接级失败。** 一条通道打不开
 （服务端 `MaxSessions` 满了）与整条连接断了是两件事，
 上层的重连策略只该对后者生效。把它们放进同一条继承链，

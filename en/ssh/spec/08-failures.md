@@ -95,6 +95,11 @@ If no suitable value exists, add one instead of borrowing a similar one; only wh
 
 A rejected host key has no dedicated type: it is an `SshConnectException` with `Reason` `HostKeyRejected`, and the policy's reason is its `Message` (§3).
 
+〔Decision〕**Public APIs throw only the exceptions of this hierarchy.** Something from the peer that cannot be parsed (a truncated name list in KEXINIT, a frame with an empty payload) is handled the same way during the handshake and authentication
+as during the session: `SshProtocolException` (`ProtocolError`, with `Phase` set to the step where it happened); a peer that disconnects in the middle of a packet is an `SshConnectionClosedException`
+(`ClosedByPeer`). The parsing layer's exceptions are internal and kept as the inner exception. The handshake used to lack this mapping, and they leaked out of `ConnectAsync` as they were — callers' `catch (SshException)` could not catch them.
+A frame with an empty payload is rejected at the frame layer (spec/01 §5) instead of being passed up.
+
 〔Decision〕**Channel-level failures do not derive from connection-level failures.** A channel failing to open
 (the server's `MaxSessions` is full) and the whole connection dropping are two different things,
 and the upper layer's reconnect policy should apply only to the latter. Put them in the same inheritance chain,
