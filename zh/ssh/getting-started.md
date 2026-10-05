@@ -106,6 +106,9 @@ HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
   要接受新密钥，得先手动把 `known_hosts` 里旧的那一行删掉 ——
   那一下手动操作正是让人停下来想一想的地方。异常消息里会指出是第几行。
 
+「信任并记住」时 `known_hosts` 写不进去（没有权限、磁盘满）**不会**让连接失败 —— 信任已经给了，只是没记下来。
+原因在 `connection.HostKeyPersistFailure` 里，提醒用户一声：下次连接还会再问。
+
 自动化场景用指纹钉死，连第一次都不盲信：
 
 ```csharp

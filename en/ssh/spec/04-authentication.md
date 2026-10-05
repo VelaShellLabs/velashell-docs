@@ -208,7 +208,7 @@ All of these calls happen while **no request is in flight** (before a request is
 so skipping the credential and sending the next credential's request cannot misalign replies.
 
 **Everything else propagates as-is and is never treated as a skip**: a dropped connection (wrapped as `ClosedByPeer`),
-a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback.
+a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback (returned as-is, not classified as a dropped connection; see [08 §2.1](08-failures.md)).
 When these happen the request has usually been sent and its reply not yet read. Treating them as a skip would make the
 next credential read the previous credential's reply; the server may already have accepted the user while the client
 reports "all methods failed". Cancellation (`OperationCanceledException`) also propagates as-is.

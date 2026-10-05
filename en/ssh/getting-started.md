@@ -108,6 +108,9 @@ HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
   To accept the new key, first manually delete the old line from `known_hosts` —
   that manual step is exactly the point that makes people stop and think. The exception message tells you which line it is.
 
+If `known_hosts` cannot be written on "trust and remember" (no permission, disk full), the connection does **not** fail — the trust has been granted, it just was not recorded.
+The reason is in `connection.HostKeyPersistFailure`; tell the user that they will be asked again next time.
+
 For automation, pin the fingerprint so that not even the first connection is trusted blindly:
 
 ```csharp

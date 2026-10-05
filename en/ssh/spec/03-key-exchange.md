@@ -455,6 +455,12 @@ the key type preference stops protecting as well, and hashed lines this library 
 control characters, and a leading `@` or `|`. The host field is itself a pattern list; with `x,*` written into it, the key becomes valid for every host, and host names can come from external launch links
 or `HostName` in `ssh_config`. `FormatEntry` / `AppendAsync` throw `ArgumentException`; when `KnownHostsPolicy` meets such a name on "trust and remember",
 **the connection is not allowed either** (`InvalidConfiguration`) — if it cannot be remembered, it must not silently become "trust just this once". Hashed lines are refused too: such a name is not a host anyway.
+〔Decision〕**Failures to read or write `known_hosts` are reported as `HostKeyStoreFailed`** (`KnownHostsFile.LoadAsync` / `AppendAsync` throw `SshConnectException`, with the original exception in `InnerException`).
+When the file cannot be read there is no way to tell whether this host is known, so the connection is not allowed — treating it as "never seen" and asking would, when a record really exists, hand the user a key of unknown origin to click "trust" on.
+〔Decision〕**When "trust and remember" cannot write the record, this connection goes ahead** (only a warning, as in OpenSSH): the trust has been granted, it just was not recorded.
+Among the exceptions thrown by `PersistAsync`, cancellation propagates as-is; any other library reason (the `InvalidConfiguration` of the previous rule) means the policy deliberately refuses, and also propagates as-is;
+the rest — `HostKeyStoreFailed` and exceptions from the caller's own policy — are recorded in `SshConnection.HostKeyPersistFailure` (through a jump host, on that hop's own connection), and the next connection asks again.
+This used to fail the whole connection, reported as "the peer closed the connection" and marked retryable.
 
 ### 5.5 Host certificates (`*-cert-v01@openssh.com`)
 

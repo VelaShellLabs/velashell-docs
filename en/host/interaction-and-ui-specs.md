@@ -884,6 +884,8 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   - A jump host whose credential cannot be resolved does **not** prompt (the dialog asks for the target's credentials); the
     connection ends with a “Jump host X: reason” error.
 - **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
+  If “Accept and Save” is chosen but the trust store cannot be written, **this connection goes ahead**, the fingerprint is not asked about again for the rest of this run, and a security alert is raised (the audit log records “Host fingerprint could not be saved”) —
+  without it, the user would be asked again after a restart and would not know why.
 
 **Connection state machine**: `Idle → Connecting (yellow) → Authenticating → Connected (green)` / any failure `→ Disconnected (red)` with reason and retry.
 

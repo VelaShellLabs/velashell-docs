@@ -454,6 +454,12 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 控制字符，以及开头的 `@` `|`。主机名那一栏本身是一张模式表，`x,*` 写进去这把钥就对所有主机生效；而主机名可能来自外部启动链接、
 `ssh_config` 的 `HostName`。`FormatEntry` / `AppendAsync` 抛 `ArgumentException`；`KnownHostsPolicy` 在「信任并记住」时遇到这样的名字，
 **这次连接也不放行**（`InvalidConfiguration`）—— 记不下来就不该悄悄当成「只信这一次」。散列行同样拒绝：这样的名字本来就不是一台主机。
+〔决策〕**读写 `known_hosts` 失败报 `HostKeyStoreFailed`**（`KnownHostsFile.LoadAsync` / `AppendAsync` 抛 `SshConnectException`，原异常在 `InnerException` 里）。
+读不出来时没法判断认不认识这台主机，连接不放行 —— 当成「没见过」去问，等于在真有记录的时候把一把来路不明的钥递给用户去点「信任」。
+〔决策〕**「信任并记住」时写不进去，这次连接照常进行**（与 OpenSSH 一样只是提醒）：信任已经给了，只是没记下来。
+`PersistAsync` 抛出的异常里，取消照实抛出；本库别的原因（上一条的 `InvalidConfiguration`）是策略有意不放行，也照实抛出；
+其余 —— `HostKeyStoreFailed` 与调用方策略自己的异常 —— 记在 `SshConnection.HostKeyPersistFailure` 上（经跳板时记在那一跳自己的连接上），下次连接还会再问。
+曾经整条连接因此失败，报的还是「对端关闭了连接」、判为可重试。
 
 ### 5.5 主机证书（`*-cert-v01@openssh.com`）
 

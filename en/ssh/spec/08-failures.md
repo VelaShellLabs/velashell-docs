@@ -143,10 +143,13 @@ raw socket exceptions bypassed `Reason`, so a reconnect policy could not tell it
 | The peer closed the connection during the version exchange | `SshConnectException` | `ClosedByPeer` |
 | Frame format or integrity check failure (during key exchange or authentication) | `SshProtocolException` | `ProtocolError` |
 | Key exchange computation failed (invalid public value from the peer) | `SshKeyExchangeException` | `ProtocolError` |
+| An exception thrown by a caller's own callback (host key policy, `IHostKeyTypePreference`, banner handler) | Returned as-is — it is not a library failure, so it is not classified as a dropped connection | — |
 
 Depending on the step and on who notices it, the same "the connection dropped" can be an `SshConnectException` or an `SshConnectionClosedException`,
 but `Reason` is always `ClosedByPeer` — to tell whether the connection dropped, look at `Reason`, not the type.
 〔Decision〕A mid-packet close during key exchange used to be reported as `ProtocolError`, which made callers think reconnecting was pointless, and socket exceptions after dialing leaked out as-is. Both now match the rules for an established connection.
+〔Decision〕IO errors inside callbacks (the host's trust store failing, the host unable to write its own files) used to be rewritten by the first row above into a retryable `ClosedByPeer` — retrying only fails again;
+an `UnauthorizedAccessException` from the library's own read of `known_hosts` leaked out as-is. Now callback exceptions are returned as-is, and the library's own `known_hosts` read and write failures are reported as `HostKeyStoreFailed` (§3).
 
 The dialing phase is not covered here: each dialer maps its own failures to an `SshConnectException` with a reason (`DnsFailure`, `TcpRefused`, `ProxyRefused`… in §3; see `09-dialing.md`).
 Timeouts, negotiation failures and rejected host keys during setup are likewise reported by each step itself (§3).
@@ -168,6 +171,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `NegotiationFailed` | No algorithm in common | ✘ | **See §5.1** |
 | `HostKeyRejected` | Host key rejected (`SshConnectException`, `Phase` `KeyExchange`): by policy (`SshHostKeyVerdict.Reject`) — unseen and not allowed to ask, declined by the user, `@revoked`, fingerprint not on the allow-list; `K_S` unparsable, signature does not verify, RSA too short, or not matching the negotiated algorithm (including a certificate algorithm negotiated while `K_S` is not a certificate, or vice versa); a CA-vouched host certificate that is invalid (`03-key-exchange.md` §5.5) | ✘ | Read `Message`: the policy's reason (`SshHostKeyVerdict.Message`) is placed there as-is, with fingerprints and `known_hosts` line numbers |
 | `HostKeyChanged` | The host key **has changed**, in two situations: ① at the initial exchange the policy rejects with `SshHostKeyVerdict.RejectChanged` —— `KnownHostsPolicy` reports this when the recorded key has changed, or only other types are recorded (`SshConnectException`, `Phase` `KeyExchange`; the message carries the old and new fingerprints and line numbers); ② on rekey the host key the peer presents differs from the one pinned at the initial exchange (`03-key-exchange.md` §8.4), and the connection drops with `SshConnectionClosedException` (`Phase` `Rekeying`) | ✘ | Possibly a man-in-the-middle: do not reconnect automatically, and do not offer a "trust and remember" shortcut —— if the server really was reinstalled, have a person delete the old line from `known_hosts` |
+| `HostKeyStoreFailed` | The host key records cannot be read or written: no permission on `known_hosts`, held by another process, disk full (`SshConnectException`, `Phase` is `KeyExchange`). When they cannot be read the connection is not allowed; when "trust and remember" cannot write them the connection does **not** fail, and the reason is recorded in `SshConnection.HostKeyPersistFailure` (`03-key-exchange.md` §5.4) | ✘ | See `Message`: it contains the file path and the IO error |
 | `AuthenticationFailed` | An authentication attempt failed | ✔ | |
 | `AuthenticationMethodExhausted` | All methods tried | ✘ | **See §5.3** |
 | `TwoFactorRequired` | Server wants keyboard-interactive but we have none configured | ✘ | Prompt "this machine requires a one-time code" |
