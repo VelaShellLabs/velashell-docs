@@ -231,6 +231,9 @@ sequenceDiagram
 〔决策〕**处理器拒绝时的原因码照实回**：连不上要连的东西（本机目标、本机 agent）回 2，并发名额满了回 4（resource shortage），
 其余回 1。〔历史〕早期一律回 1。
 
+〔决策〕**连接事件的 `Source` 是 `forwarded-tcpip` 里的 originator**（是谁连上了服务端那个暴露出来的端口）：认得出是 IP 地址就是 `IPEndPoint`，
+否则按主机名给 `DnsEndPoint`（不去解析）；Unix 套接字转发没有这一段，是 `null`。〔历史〕早期整个丢掉，`Source` 永远是 `null`。
+
 ### 4.2 三个必须
 
 1. **`bind_port = 0` 时，实际端口在 `REQUEST_SUCCESS` 的载荷里**

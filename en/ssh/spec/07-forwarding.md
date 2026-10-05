@@ -233,6 +233,9 @@ and the server log had no connect failed.
 〔Decision〕**A handler's refusal is answered with the matching reason code**: failing to reach what must be connected (the local target, the local agent) gets 2, a full connection limit gets 4 (resource shortage),
 anything else gets 1. 〔History〕Early versions always replied 1.
 
+〔Decision〕**The `Source` of the connection events is the originator in `forwarded-tcpip`** (who connected to the port exposed on the server): an `IPEndPoint` when it parses as an IP address,
+otherwise a `DnsEndPoint` with the host name (not resolved); Unix socket forwarding has no such field, so it is `null`. 〔History〕Early versions discarded it, so `Source` was always `null`.
+
 ### 4.2 Three musts
 
 1. **When `bind_port = 0`, the actual port is in the payload of `REQUEST_SUCCESS`**
