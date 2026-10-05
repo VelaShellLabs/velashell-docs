@@ -269,6 +269,12 @@ the library does what `SendEofAsync` does: first send everything already written
 `SendEofAsync` and `CompleteStandardInputAsync` are still there; the only difference is that they **wait** until the EOF is queued before returning.
 EOF is sent only once: whichever first moves the channel to "local EOF" sends it; neither sends it while the channel is closing or already closed.
 
+〔Decision〕**`StandardInput` belongs to the caller; the library never completes it on the caller's behalf.** Writing after the channel has closed makes `WriteAsync` / `FlushAsync` return `IsCompleted`
+(the `PipeWriter` idiom for "the reading side is gone") without throwing; the `AsStream()` stream's write throws `IOException`.
+The library used to complete this writer while tearing down: the next write got a BCL `InvalidOperationException` — not an `SshException`, with no disconnect reason —
+and teardown often runs on the receive loop, while the caller may be writing on another thread, which means touching someone else's `PipeWriter` across threads. Now the stdin pump's side does the teardown (it completes the reader).
+Once CLOSE has been queued, the frame in the pump's hands is no longer sent and is not counted as "sent" — otherwise the channel stream's `FlushAsync` would report success for data that was dropped.
+
 Rationale: completing the writer is the idiomatic way for a `PipeWriter` to say "I'm done writing". If it were not treated as EOF, the caller would write, complete the writer,
 and a remote program waiting to read all of its input (`cat`, `sort`, `tar x`) would wait forever —— with no visible error on the caller's side.
 
