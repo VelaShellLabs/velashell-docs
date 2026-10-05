@@ -140,6 +140,7 @@ byte[]   type 相关
 | 6 | `NO_CONNECTION` | `NoConnection` |
 | 7 | `CONNECTION_LOST` | `ConnectionLost` |
 | 8 | `OP_UNSUPPORTED` | `OperationUnsupported` |
+| 10 | `NO_SUCH_PATH`（v4 起） | `NoSuchPath`，与 `NoSuchFile` 一样算「不存在」（`IsNotFound`）—— 同时支持多个版本的服务端在 v3 会话里也可能回它 |
 
 〔重要〕**码 4（`FAILURE`）承载了 v3 里的绝大多数真实错误** ——
 「目录非空」「文件已存在」「磁盘满」「配额超限」在 v3 里全是 4。

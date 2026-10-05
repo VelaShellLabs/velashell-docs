@@ -142,6 +142,7 @@ was counted as acknowledged (`DurableLength` became wrong, and the resume point 
 | 6 | `NO_CONNECTION` | `NoConnection` |
 | 7 | `CONNECTION_LOST` | `ConnectionLost` |
 | 8 | `OP_UNSUPPORTED` | `OperationUnsupported` |
+| 10 | `NO_SUCH_PATH` (v4 onwards) | `NoSuchPath`, counted as "not found" just like `NoSuchFile` (`IsNotFound`) — servers supporting several versions may send it even in a v3 session |
 
 〔Important〕**Code 4 (`FAILURE`) carries the vast majority of real errors in v3** —
 "directory not empty", "file already exists", "disk full", "quota exceeded" are all 4 in v3.
