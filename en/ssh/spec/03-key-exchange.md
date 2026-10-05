@@ -392,6 +392,7 @@ flowchart TD
    It is placed before signature verification so as not to spend any computing resources on weak keys.
 3. **Policy rulings are timed independently.** 〔Decision〕The time taken by `IHostKeyPolicy.EvaluateAsync`
    **is not counted against `ConnectTimeout`**; it is bounded by a separate `HostKeyDecisionTimeout` (infinite by default).
+   A cancellation thrown by the policy itself (the decision timer did not fire and the caller did not cancel: the user closed the prompt) is not a timeout; it is reported as `Aborted` (`08-failures.md` §2.1).
 
    Rationale: this targets a real defect directly —— an interactive client pops up a dialog here to ask the user,
    and if the time the dialog sits there counted against the connect timeout, by the time the user clicks "Trust" this attempt has already been declared dead,

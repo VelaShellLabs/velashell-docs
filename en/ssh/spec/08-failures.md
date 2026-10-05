@@ -144,12 +144,16 @@ raw socket exceptions bypassed `Reason`, so a reconnect policy could not tell it
 | Frame format or integrity check failure (during key exchange or authentication) | `SshProtocolException` | `ProtocolError` |
 | Key exchange computation failed (invalid public value from the peer) | `SshKeyExchangeException` | `ProtocolError` |
 | An exception thrown by a caller's own callback (host key policy, `IHostKeyTypePreference`, banner handler) | Returned as-is — it is not a library failure, so it is not classified as a dropped connection | — |
+| A cancellation thrown by a callback itself (neither the caller's token nor the library's timer fired: the user clicked "Cancel" on a prompt) | `SshConnectException`; during authentication a `DISCONNECT(AUTH_CANCELLED_BY_USER)` is sent first | `Aborted` |
 
 Depending on the step and on who notices it, the same "the connection dropped" can be an `SshConnectException` or an `SshConnectionClosedException`,
 but `Reason` is always `ClosedByPeer` — to tell whether the connection dropped, look at `Reason`, not the type.
 〔Decision〕A mid-packet close during key exchange used to be reported as `ProtocolError`, which made callers think reconnecting was pointless, and socket exceptions after dialing leaked out as-is. Both now match the rules for an established connection.
 〔Decision〕IO errors inside callbacks (the host's trust store failing, the host unable to write its own files) used to be rewritten by the first row above into a retryable `ClosedByPeer` — retrying only fails again;
 an `UnauthorizedAccessException` from the library's own read of `known_hosts` leaked out as-is. Now callback exceptions are returned as-is, and the library's own `known_hosts` read and write failures are reported as `HostKeyStoreFailed` (§3).
+〔Decision〕**Only the library's own timers decide a timeout** (the connect timer, the authentication timer, the host key decision timer). A cancellation the caller did not request used to be reported as a timeout every time:
+clicking "Cancel" on a one-time-code prompt produced "authentication timed out (limit 120 seconds)", and a host key decision with no time limit reported "decision timed out (-00:00:00.001)",
+so the host had to record the cancel in its callback and claim it back after the failure. A cancellation requested by the caller still propagates as a cancellation.
 
 The dialing phase is not covered here: each dialer maps its own failures to an `SshConnectException` with a reason (`DnsFailure`, `TcpRefused`, `ProxyRefused`… in §3; see `09-dialing.md`).
 Timeouts, negotiation failures and rejected host keys during setup are likewise reported by each step itself (§3).
@@ -197,7 +201,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `LimitExceeded` | One of this side's concurrency limits was reached (forwarded connections, agent / X11 channels) | ✘ | |
 | `CommandFailed` | A remote command did not end with exit code 0 (the `SshCommandFailedException` thrown by `SshCommandResult.EnsureSuccess`) | ✘ | Look at `Result`: stderr, exit code or signal |
 | `InvalidConfiguration` | The configuration itself does not hold: a `ProxyJump` cycle, too many hops, an invalid `ProxyCommand` template | ✘ | Fix the configuration —— otherwise the next attempt will fail the same way |
-| `Aborted` | Aborted locally (Dispose / cancellation) | ✘ | |
+| `Aborted` | Aborted locally (Dispose / cancellation); also a cancellation thrown by a callback itself during connection setup (the user clicked "Cancel" on a prompt, §2.1) | ✘ | |
 | `Unsupported` | The requested capability (algorithm, key type, format version) is not supported by the peer or by this library | ✘ | |
 | `Unknown` | Unclassified: the connection ended because of an unexpected error (§2.1) | ✘ | Look at `InnerException` |
 

@@ -142,12 +142,16 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | 帧格式或完整性校验失败（密钥交换、认证期间） | `SshProtocolException` | `ProtocolError` |
 | 密钥交换的计算失败（对端公开值不合法） | `SshKeyExchangeException` | `ProtocolError` |
 | 调用方回调（主机密钥策略、`IHostKeyTypePreference`、横幅处理器）自己抛的异常 | 原样交还 —— 那不是本库的失败，不归成断开 | — |
+| 回调自己抛的取消（调用方的令牌与本库的计时器都没有触发：使用者在询问框上点了「取消」） | `SshConnectException`；认证期间先发 `DISCONNECT(AUTH_CANCELLED_BY_USER)` | `Aborted` |
 
 同一个「断了」按在哪一步、由谁察觉，可能是 `SshConnectException` 也可能是 `SshConnectionClosedException`，
 `Reason` 却总是 `ClosedByPeer` —— 判断「是不是断了」看 `Reason`，不看类型。
 〔决策〕曾经密钥交换期间的报文中途断开报成 `ProtocolError`，调用方会以为不值得重连；拨通之后的套接字异常原样漏出。现在与会话期间一致。
 〔决策〕曾经回调里的 IO 错（宿主的信任库出错、写不了它自己的文件）也被上面第一行改写成可重试的 `ClosedByPeer` —— 重试只会再失败一次；
 本库自己读 `known_hosts` 时的 `UnauthorizedAccessException` 则原样漏出。现在回调的异常原样交还，本库读写 `known_hosts` 失败报 `HostKeyStoreFailed`（§3）。
+〔决策〕**判超时只看本库自己的那把计时器**（连接计时器、认证计时器、主机密钥裁决的计时器）。曾经调用方没取消的取消一律报成超时：
+用户在动态码框上点「取消」得到「认证超时（限 120 秒）」，不限时的主机密钥裁决报「裁决超时（-00:00:00.001）」，
+宿主只好在回调里另记一笔、失败之后再认回来。调用方自己取消的照旧原样当取消交还。
 
 拨号阶段不在此列：各个拨号器自己把失败归成带原因的 `SshConnectException`（§3 的 `DnsFailure`、`TcpRefused`、`ProxyRefused`……，见 `09-dialing.md`）。
 建连期间的超时、协商失败与主机密钥被拒也由各步自己报（§3）。
@@ -195,7 +199,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `LimitExceeded` | 本端的某个并发上限到了（转发连接数、agent / X11 通道数） | ✘ | |
 | `CommandFailed` | 远端命令没有以退出码 0 结束（`SshCommandResult.EnsureSuccess` 抛的 `SshCommandFailedException`） | ✘ | 看 `Result`：stderr、退出码或信号 |
 | `InvalidConfiguration` | 配置本身不成立：`ProxyJump` 成环、跳数超限、`ProxyCommand` 模板非法 | ✘ | 改配置 —— 不改的话下一次还是一样 |
-| `Aborted` | 本端中止（Dispose / 取消） | ✘ | |
+| `Aborted` | 本端中止（Dispose / 取消）；建连时回调自己抛的取消（使用者在询问框上点了「取消」，§2.1）也是它 | ✘ | |
 | `Unsupported` | 请求的能力（算法、密钥类型、格式版本）对端或本库不支持 | ✘ | |
 | `Unknown` | 未分类：连接因意外错误中断（§2.1） | ✘ | 看 `InnerException` |
 

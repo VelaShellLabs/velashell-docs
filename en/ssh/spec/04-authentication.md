@@ -211,7 +211,9 @@ so skipping the credential and sending the next credential's request cannot misa
 a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback (returned as-is, not classified as a dropped connection; see [08 §2.1](08-failures.md)).
 When these happen the request has usually been sent and its reply not yet read. Treating them as a skip would make the
 next credential read the previous credential's reply; the server may already have accepted the user while the client
-reports "all methods failed". Cancellation (`OperationCanceledException`) also propagates as-is.
+reports "all methods failed". Cancellation (`OperationCanceledException`) is not treated as a skip either: one triggered by the caller's token propagates as-is;
+one where neither the caller's token nor the authentication timer fired means the callback itself gave up (the user clicked "Cancel" on a password or one-time-code prompt) —
+the connection ends with `Aborted`, after sending `DISCONNECT(AUTH_CANCELLED_BY_USER)` ([08 §2.1](08-failures.md)).
 
 ---
 
