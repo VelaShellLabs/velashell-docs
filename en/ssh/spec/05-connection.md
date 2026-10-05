@@ -88,6 +88,10 @@ For server-initiated channel types see [`07-forwarding.md`](07-forwarding.md).
 - It constrains the data segment length of a single `CHANNEL_DATA` the **peer** sends to us.
 - The value the peer announces constrains what **we** send to it. OpenSSH usually announces 32 KiB.
 - **The value announced by the peer must be respected**: exceeding it makes the peer disconnect.
+- 〔Decision〕The value the peer announces is **clamped to our own limit** (our packet length limit minus the packet header, the channel header and the maximum padding): taken at face value, a peer announcing 4 GiB
+  would make the stdin pump pack the several MiB queued in the pipe into one packet.
+- 〔Decision〕The peer announces **0**: it accepts no data at all. Whatever is written to stdin fails visibly (the writer's flush gets an `SshChannelException`, `ProtocolError`);
+  completing stdin without writing anything still sends `EOF`. The chunk used to be computed as 0 and taken for "the channel is closed", and the pump quietly exited — stdin silently stopped working, and not even `EOF` was sent any more.
 
 ### 2.3 Replies
 

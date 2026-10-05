@@ -81,7 +81,7 @@ The types below have a fixed `Phase`, and their `Reason` is **reported as it act
 | `SshPrivateKeyException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyPassphraseRequired`, `KeyPassphraseIncorrect`, `Unsupported` | `None` |
 | `SshCertificateException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyMismatch`, `Unsupported` | `None` |
 | `SshAgentException` | `AgentNotRunning`, `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
-| `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected` | `Open` |
+| `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected`, `ProtocolError` (the peer announced a max packet of 0, so what is written to stdin cannot be sent) | `Open` |
 | `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError`; when agent forwarding cannot be set up because the local agent cannot be reached, the agent side's `AgentNotRunning` / `AgentUnavailable` is carried over | `Open` |
 | `SftpTransferInterruptedException` | Follows the cause of the interruption (the inner exception): a dropped connection is `ClosedByPeer`; a write the server rejected (disk full, quota, permission) takes the reason code of the inner `SftpException`; caller cancellation and local disposal are `Aborted`; a timeout waiting for acknowledgements on close is `Timeout`. 〔Decision〕It used to be fixed at `ClosedByPeer`, so callers deciding by reason code would treat "disk full" as a dropped connection and try to resume anyway | `Open` |
 
