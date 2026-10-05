@@ -422,6 +422,10 @@ Uses: connection diagnostics panel, protocol-level troubleshooting, record and r
 Uses `ILogger`, but **logs are not an API**: anything users need to consume programmatically
 must also appear in structured form in exceptions, events or metrics.
 
+〔Current state〕**The library has no logger yet**: `SshConnectionOptions` has no `ILoggerFactory`, and the table below is a plan.
+Wherever the specs say "log one debug entry", only the action itself (discard, ignore) is done today, with nothing recorded;
+"the peer does not support strict KEX" can be read from `SshConnection.Algorithms.StrictKeyExchange`, but no Warning is logged.
+
 | Level | Content |
 | --- | --- |
 | `Trace` | Per-packet metadata (equivalent to `IPacketTap` without payload) |

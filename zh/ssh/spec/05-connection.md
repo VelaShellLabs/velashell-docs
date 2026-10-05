@@ -233,7 +233,7 @@ stateDiagram-v2
 | 3 | `uint32` | `data_type_code` —— **1 = stderr**，其余保留 |
 | 4 | `string` | 数据 |
 
-〔决策〕**`data_type_code != 1` 的扩展数据：丢弃，计入窗口，记一条 debug 日志。**
+〔决策〕**`data_type_code != 1` 的扩展数据：丢弃，计入窗口，记一条 debug 日志。**（日志器还没有做，见 `08-failures.md` §十；目前只丢弃、计入窗口。）
 不报错 —— 保留值的语义未来可能被定义，断开会让我们无法与新实现共处。
 
 ### 4.3 数据面的 API 形状
@@ -515,7 +515,7 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 
 | 类型 | 处理 |
 | --- | --- |
-| `hostkeys-00@openssh.com` | 〔决策〕M5 实现 —— 服务端主动告知它的全部主机密钥，用于轮换。解析后交给 `IHostKeyPolicy.OnHostKeysAnnouncedAsync` |
+| `hostkeys-00@openssh.com` | 〔未实现〕设计是：服务端主动告知它的全部主机密钥，用于轮换（OpenSSH 的 `UpdateHostKeys`），解析后交给主机密钥策略。目前与其它未知请求一样处理 —— OpenSSH 发它时 `want_reply = false`，于是直接忽略；`IHostKeyPolicy` 上也还没有对应的成员 |
 | 其它未知 | `want_reply = true` 时回 `REQUEST_FAILURE`，否则忽略 |
 
 〔重要〕**对未知全局请求回 `REQUEST_FAILURE` 是必须的**，不能沉默。
@@ -572,7 +572,7 @@ sequenceDiagram
 
 | 情况 | 处理 |
 | --- | --- |
-| 收到未知通道号的报文 | 〔决策〕**忽略并记 debug 日志**，不断开。可能是刚回收的通道的在途数据 |
+| 收到未知通道号的报文 | 〔决策〕**忽略并记 debug 日志**（日志器还没有做，目前只忽略），不断开。可能是刚回收的通道的在途数据 |
 | 对端发的数据超出我们宣告的窗口 | `ProtocolError`，断开（这是明确的协议违规） |
 | 对端发的单个数据段超出我们宣告的 max packet | `ProtocolError`，断开 |
 | 我们要发的数据超出对端窗口 | 等待 `WINDOW_ADJUST`（背压），**不报错** |

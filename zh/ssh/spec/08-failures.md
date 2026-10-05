@@ -420,6 +420,10 @@ readonly struct PacketTapRecord
 用 `ILogger`，但**日志不是 API**：任何使用者需要程序化消费的东西
 都必须同时以结构化形式出现在异常、事件或度量里。
 
+〔现状〕**库里还没有日志器**：`SshConnectionOptions` 上没有 `ILoggerFactory`，下表是规划。
+规格各处写的「记一条 debug 日志」目前都只做了动作本身（丢弃、忽略），没有记录；
+「对端不支持严格 KEX」可以从 `SshConnection.Algorithms.StrictKeyExchange` 读到，但没有 Warning。
+
 | 级别 | 内容 |
 | --- | --- |
 | `Trace` | 每个报文的元信息（等价于 `IPacketTap` 不含载荷） |

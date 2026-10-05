@@ -235,7 +235,7 @@ refunding by window size, or refunding twice, makes the budget grow with every r
 | 3 | `uint32` | `data_type_code` — **1 = stderr**, others reserved |
 | 4 | `string` | Data |
 
-〔Decision〕**Extended data with `data_type_code != 1`: discard, count against the window, log one debug entry.**
+〔Decision〕**Extended data with `data_type_code != 1`: discard, count against the window, log one debug entry.** (There is no logger yet, see `08-failures.md` §10; today it is only discarded and counted against the window.)
 No error — the semantics of reserved values may be defined in the future, and disconnecting would prevent us from coexisting with newer implementations.
 
 ### 4.3 Shape of the data-plane API
@@ -517,7 +517,7 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
 
 | Type | Handling |
 | --- | --- |
-| `hostkeys-00@openssh.com` | 〔Decision〕Implemented in M5 — the server proactively announces all its host keys, for rotation. Parsed and passed to `IHostKeyPolicy.OnHostKeysAnnouncedAsync` |
+| `hostkeys-00@openssh.com` | 〔Not implemented yet〕The design: the server proactively announces all its host keys, for rotation (OpenSSH's `UpdateHostKeys`), and they are parsed and handed to the host key policy. Today it is handled like any other unknown request — OpenSSH sends it with `want_reply = false`, so it is simply ignored; `IHostKeyPolicy` has no corresponding member yet either |
 | Other unknown | Reply `REQUEST_FAILURE` when `want_reply = true`, otherwise ignore |
 
 〔Important〕**Replying `REQUEST_FAILURE` to unknown global requests is mandatory**; staying silent is not allowed.
@@ -574,7 +574,7 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 
 | Situation | Handling |
 | --- | --- |
-| Message received for an unknown channel number | 〔Decision〕**Ignore and log at debug level**; do not disconnect. May be in-flight data for a just-reclaimed channel |
+| Message received for an unknown channel number | 〔Decision〕**Ignore and log at debug level** (there is no logger yet; today it is only ignored); do not disconnect. May be in-flight data for a just-reclaimed channel |
 | Peer sends data exceeding the window we announced | `ProtocolError`, disconnect (this is a clear protocol violation) |
 | Peer sends a single data segment exceeding the max packet we announced | `ProtocolError`, disconnect |
 | Data we want to send exceeds the peer's window | Wait for `WINDOW_ADJUST` (backpressure), **no error** |
