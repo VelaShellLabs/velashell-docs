@@ -321,6 +321,10 @@ and `ssh-rsa-cert-v01@openssh.com`. The last one is a SHA-1 signature as well, a
 filtered out exactly like `ssh-rsa`. Comparing only against the name `ssh-rsa` means that when logging in with an RSA certificate
 and the server's `server-sig-algs` lists only `ssh-rsa-cert-v01@openssh.com`, SHA-1 still gets picked — the switch would be meaningless.
 
+〔Decision〕**A certificate is also matched against `server-sig-algs` with the suffix stripped** (names listed with the suffix are accepted as well): `server-sig-algs` lists signature algorithms (RFC 8308 §3.1),
+and a certificate's signature algorithm is the one without the suffix. 〔History〕Early versions compared the names as is, so a certificate never matched and always took the first preference —
+a server accepting only `rsa-sha2-256` still received 512, and with SHA-1 allowed a server accepting only `ssh-rsa` never got SHA-1.
+
 〔Note〕The type string in the public key blob is **always `"ssh-rsa"`**, independent of the signature algorithm name (§03 5.1).
 
 ### 4.5 Certificate authentication (OpenSSH `PROTOCOL.certkeys`)

@@ -314,6 +314,10 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 与 `ssh-rsa` 一样被滤掉。只比对 `ssh-rsa` 这个名字的话，拿 RSA 证书登录、服务端的 `server-sig-algs`
 又只列了 `ssh-rsa-cert-v01@openssh.com` 时，SHA-1 照样会被挑出来用 —— 开关形同虚设。
 
+〔决策〕**证书与 `server-sig-algs` 比对时也去掉后缀**（原样列出带后缀的名字也认）：`server-sig-algs` 列的是签名算法（RFC 8308 §3.1），
+证书的签名算法就是不带后缀的那个。〔历史〕早期只按原样比，证书永远比不中、永远取第一偏好 ——
+只认 `rsa-sha2-256` 的服务端照样收到 512，允许 SHA-1 时只认 `ssh-rsa` 的服务端也收不到 SHA-1。
+
 〔注意〕公钥 blob 里的类型串**永远是 `"ssh-rsa"`**，与签名算法名无关（§03 5.1）。
 
 ### 4.5 证书认证（OpenSSH `PROTOCOL.certkeys`）
