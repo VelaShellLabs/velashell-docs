@@ -217,6 +217,9 @@ and reading must loop until enough is obtained or `EOF` is encountered.
   But **keep the raw text** for callers who need it.
 - `.` and `..` **do** appear in the results. 〔Decision〕The `SftpFileSystem` layer filters them out by default,
   with a switch provided.
+- 〔Decision〕**Entries with an invalid name are dropped**: empty names and names containing `/` or NUL. A directory entry can only be a name; when a server returns `../x`, `a/b`,
+  `/etc/passwd` or an empty string, the combined full path points outside this directory (or at the directory itself) — a recursive copy or delete that follows it acts on something else.
+  Dropped entries are not handed to the caller and are not an error (one odd entry should not make the whole directory unlistable).
 
 ### 4.5 Argument order of `SSH_FXP_SYMLINK`
 
