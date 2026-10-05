@@ -298,13 +298,13 @@ Rules:
 | --- | --- |
 | `server-sig-algs` received (§7) | The highest-priority one among those we support (`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`) |
 | `server-sig-algs` received, but it lists none we can use | 〔Decision〕Still use our own first preference (`rsa-sha2-512`). Servers with incomplete announcements do exist, and a wrong guess costs only one extra round trip |
-| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; 〔Not implemented yet〕if that fails, **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1). Today only the first preference is used, with no retry on failure |
+| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; if it is refused (the probe or the signed request gets `FAILURE`), **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1; a certificate likewise drops to `ssh-rsa-cert-v01@openssh.com`) |
 
 〔Decision〕**Downgrade is off by default** (`AllowSha1RsaSignatures = false`).
 Rationale: unconditional downgrade hands back the gains of Terrapin-style downgrade attacks.
-Those who need to connect to old servers turn it on explicitly. 〔Not implemented yet〕"SHA-1 signature was used this time" is visible in the diagnostics — today the chosen signature algorithm is not recorded in the attempt record.
-Because the retry in the table's third row does not exist yet either, turning the switch on today only takes effect when `server-sig-algs`
-lists `ssh-rsa` but no `rsa-sha2-*` (or when the signer offers only `ssh-rsa`); an old server that sends no `server-sig-algs` still receives only `rsa-sha2-512`.
+Those who need to connect to old servers turn it on explicitly — and the ones that need it most are exactly the old servers that send no `server-sig-algs`, which is why the retry in the table's third row is indispensable.
+When the retry happens, the attempt record (`SshAuthAttempt.Detail`) says "`rsa-sha2-512` was refused, downgraded to `ssh-rsa` (SHA-1) and retried".
+〔Not implemented yet〕When SHA-1 is picked directly from `server-sig-algs` without a downgrade, the chosen signature algorithm is not yet recorded in the attempt record.
 
 〔Note〕**Strip the certificate suffix before deciding "is this SHA-1"** (`SshPublicKey.StripCertificateSuffix`).
 An RSA certificate (§4.5) has three algorithm names: `rsa-sha2-512-cert-v01@openssh.com`, `rsa-sha2-256-cert-v01@openssh.com`

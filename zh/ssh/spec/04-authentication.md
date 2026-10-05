@@ -291,13 +291,13 @@ string    公钥 blob
 | --- | --- |
 | 收到 `server-sig-algs`（§7） | 取其中我们支持的、优先级最高的（`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`） |
 | 收到 `server-sig-algs`，但其中没有我们能用的 | 〔决策〕仍用我们自己的第一偏好（`rsa-sha2-512`）。宣告不完整的服务端确实存在，试错的代价只是一次多余的往返 |
-| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；〔未实现〕若因此失败，**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1）。今天只用第一偏好，失败了不重试 |
+| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；若被拒（探测或签名请求回 `FAILURE`），**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1；证书同理降到 `ssh-rsa-cert-v01@openssh.com`） |
 
 〔决策〕**降级默认关闭**（`AllowSha1RsaSignatures = false`）。
 理由：无条件降级会把 Terrapin 那类降级攻击的收益还回去。
-需要连老服务器的人显式打开。〔未实现〕在诊断信息里能看到「本次使用了 SHA-1 签名」—— 今天选中的签名算法不进尝试记录。
-由于上表第三行的重试也还没有，今天打开这个开关只在 `server-sig-algs` 列了 `ssh-rsa`、却没列 `rsa-sha2-*` 时
-（或签名器只提供 `ssh-rsa` 时）起作用；不发 `server-sig-algs` 的老服务器照样只收到 `rsa-sha2-512`。
+需要连老服务器的人显式打开 —— 最需要它的恰恰是不发 `server-sig-algs` 的老服务器，所以上表第三行的重试不可少。
+降级重试时，尝试记录（`SshAuthAttempt.Detail`）写明「`rsa-sha2-512` 被拒后降级为 `ssh-rsa`（SHA-1）重试」。
+〔未实现〕没有降级、直接按 `server-sig-algs` 选中 SHA-1 时，选中的签名算法还不进尝试记录。
 
 〔注意〕**判断「是不是 SHA-1」之前先去掉证书后缀**（`SshPublicKey.StripCertificateSuffix`）。
 RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`、`rsa-sha2-256-cert-v01@openssh.com`
