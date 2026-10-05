@@ -605,7 +605,7 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 | `posix-rename@openssh.com` | **Atomic** rename (overwriting the target), `RenameAsync(..., overwrite: true)` | Throw `SftpException` (`OperationUnsupported`), **no degradation** — a plain `SSH_FXP_RENAME` fails when the target exists, so silently degrading would change the semantics; "delete the target, then rename" is not atomic and is left for the caller to decide |
 | `hardlink@openssh.com` | Create hard link | Throw `Unsupported` |
 | `fsync@openssh.com` | Force persistence to disk | Throw `Unsupported` |
-| `limits@openssh.com` | §5.2 | Use conservative defaults |
+| `limits@openssh.com` | §5.2; when it announces `max-open-handles`, opens queue on it: each open file or directory takes one slot and returns it on close, and a new `OPEN` / `OPENDIR` waits when the slots run out, instead of hitting the server's limit and getting a random "operation failed" | Use conservative defaults; handles unlimited |
 | `statvfs@openssh.com` | File system usage | 〔Status〕The capability can be queried (`HasStatVfs`); **this library does not wrap it yet** |
 | `copy-data` | Copy **within the server**, without going over the network | 〔Status〕Queryable (`HasCopyData`), **not wrapped yet**; the host's remote copy downloads then uploads |
 | `home-directory` | Get a given user's home directory | 〔Status〕Queryable, **not wrapped yet**; the working directory comes from `REALPATH "."` (§4.6) |
