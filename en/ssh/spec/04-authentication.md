@@ -249,6 +249,13 @@ for a key the server does not even accept is unacceptable.
 
 This distinction is expressed by `ISshSigner.IsLocalAndCheap`.
 
+〔Decision〕**`PK_OK` must echo the key we asked about** (RFC 4252 §7: the algorithm name and the public key blob are both taken from the request): a mismatched public key blob is a `ProtocolError` —
+we would be signing with a key the server never accepted; besides the algorithm from the request, the key's own type name is also accepted (an `rsa-sha2-256` request echoed as `ssh-rsa`),
+since it names the same key, and the signature algorithm stays the one we chose. 〔History〕Early versions did not look at the echo at all.
+
+〔Decision〕**When the server answers a probe with `SUCCESS` outright (non-compliant, but some implementations do), authentication is complete**: nothing more is signed and no further credential is tried —
+RFC 4252 §5.1 says authentication requests after success are ignored. 〔History〕Early versions recorded it as "this public key is not accepted" and sent the next request, waiting until the authentication timeout.
+
 〔Decision〕**When the key is held in ssh-agent, bind the session with the agent before signing** (`session-bind@openssh.com`, `is_forwarding = false`,
 `07-forwarding.md` §7.4). The agent relies on it to enforce the destination constraints that `ssh-add -h` puts on a key — without the binding, the real OpenSSH agent
 refuses to sign with a constrained key. The binding is sent only once per agent connection (and only when a signature is actually needed: a key that failed the query does not need it);

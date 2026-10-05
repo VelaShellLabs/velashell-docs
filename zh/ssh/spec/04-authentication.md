@@ -242,6 +242,13 @@ sequenceDiagram
 
 这条区分由 `ISshSigner.IsLocalAndCheap` 表达。
 
+〔决策〕**`PK_OK` 回显的必须是我们问的那一把**（RFC 4252 §7：算法名与公钥 blob 都取自请求）：公钥 blob 对不上是 `ProtocolError` ——
+签下去的会是服务端没认过的那一把；算法名除了请求里的那个，也认这把钥自己的类型名（`rsa-sha2-256` 的请求回显成 `ssh-rsa`），
+说的是同一把钥，签名算法照我们选的。〔历史〕早期回显什么都不看。
+
+〔决策〕**服务端对探测直接回 `SUCCESS`（不合规，个别实现会这样）就算认证完成**，不再签名、也不再试下一条凭据 ——
+RFC 4252 §5.1 说成功之后的认证请求一律忽略。〔历史〕早期记成「不接受这把公钥」、接着发下一条请求，一直等到认证超时。
+
 〔决策〕**钥在 ssh-agent 里时，签名之前先向 agent 声明会话**（`session-bind@openssh.com`，`is_forwarding = false`，
 `07-forwarding.md` §7.4）。agent 靠它执行 `ssh-add -h` 给钥加的目的地约束 —— 不声明的话，真实的 OpenSSH agent
 拒绝用受约束的钥签名。同一条 agent 连接上只声明一次（只在真要签名时才发：探测没过的钥用不着）；
