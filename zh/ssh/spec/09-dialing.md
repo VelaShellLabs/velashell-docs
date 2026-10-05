@@ -106,7 +106,10 @@
    正在试的某一个**失败了就立刻发起下一个**，不等满这段间隔。
 3. **先连上的胜出**：其余还在试的全部取消；恰好在取消之前也连上了的那几条随即关掉 —— 没人要的连接不能挂着。
 4. 全部失败时报**最后一个**失败的原因，按 `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable` 归类（`08-failures.md` §3），
-   `Hops` 里是一条 `Tcp`。
+   `Hops` 里是一条 `Tcp`。〔决策〕归类按套接字错误如实对应：查不到、DNS 暂时失败（`EAI_AGAIN`，断网时最常见）、
+   DNS 不可恢复的错误 → `DnsFailure`；拒绝 → `TcpRefused`；超时 → `TcpTimeout`；网络或主机不可达、本机网络不可用、
+   主机无响应 → `TcpUnreachable`；其余（本机防火墙拦了出站、本机地址不可用……）→ `Unknown`。
+   曾经认不出的一律报成 `TcpRefused`：断网时用户看到「对方拒绝连接」，去查的是服务端。
 
 ```mermaid
 sequenceDiagram

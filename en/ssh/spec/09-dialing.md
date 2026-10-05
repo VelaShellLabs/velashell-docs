@@ -108,7 +108,10 @@ otherwise it first resolves the name and gets **all** addresses (it does not do 
    if an attempt in progress **fails, start the next immediately** without waiting out the delay.
 3. **The first to connect wins**: all other attempts still in progress are cancelled; any that happened to connect just before being cancelled are closed right away — an unwanted connection must not linger.
 4. If all fail, the **last** failure is reported, classified as `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable` (`08-failures.md` §3),
-   with a single `Tcp` entry in `Hops`.
+   with a single `Tcp` entry in `Hops`. 〔Decision〕The classification follows the socket error faithfully: not found, a temporary DNS failure (`EAI_AGAIN`, the most common one when the network is down)
+   and an unrecoverable DNS error → `DnsFailure`; refused → `TcpRefused`; timed out → `TcpTimeout`; network or host unreachable, local network down,
+   host not responding → `TcpUnreachable`; anything else (a local firewall blocking outbound traffic, a local address not available, …) → `Unknown`.
+   Anything unrecognized used to be reported as `TcpRefused`: with the network down, the user saw "connection refused" and went checking the server.
 
 ```mermaid
 sequenceDiagram
