@@ -211,13 +211,25 @@ sequenceDiagram
     R->>S: 连到服务端的 bind_port
     S->>F: CHANNEL_OPEN "forwarded-tcpip"<br/>bind_addr ‖ bind_port ‖ orig_addr ‖ orig_port
     F->>F: 按 bind 地址+端口找到对应的转发器
-    alt 找得到
-        F->>S: CHANNEL_OPEN_CONFIRMATION
-        Note over F: 连本地目标，双向搬运
-    else 找不到
+    alt 找不到
         F->>S: CHANNEL_OPEN_FAILURE(1)
+    else 找得到，先连本地目标
+        alt 连上了
+            F->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over F: 双向搬运
+        else 连不上
+            F->>S: CHANNEL_OPEN_FAILURE(2)「连不上转发的本机目标」
+            Note over F: 本地记一笔 TargetConnect 错误
+        end
     end
 ```
+
+〔决策〕**本机目标在确认通道之前连好**，与 agent 转发（§7.1）同一个时序：连不上就回 `CHANNEL_OPEN_FAILURE(2)`（connect failed），
+描述只说「连不上转发的本机目标」—— 本机的地址不往外送。〔历史〕早期先确认、再去连：目标连不上时远端看到的是「接受之后立刻关闭」，
+服务端日志里也没有 connect failed。
+
+〔决策〕**处理器拒绝时的原因码照实回**：连不上要连的东西（本机目标、本机 agent）回 2，并发名额满了回 4（resource shortage），
+其余回 1。〔历史〕早期一律回 1。
 
 ### 4.2 三个必须
 
@@ -841,7 +853,7 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
 | 转发参数的非法值（`MaxConnections` 小于 1、监听端口不在 0–65535、SOCKS 握手时限不为正、绑定地址为 null） | 〔决策〕设值时就抛 `ArgumentOutOfRangeException` / `ArgumentNullException`；起监听之后出了任何错，监听当场关掉。〔历史〕曾经不拦：`MaxConnections = 0` 时监听已经起来、构造转发器才抛，端口一直占到 GC |
 | 在已经断开（或释放）的连接上起转发 | 照实失败：释放了抛 `ObjectDisposedException`，判死了抛那次故障 —— 本地、动态、远程三种一致，不起监听。〔历史〕本地 / 动态转发曾经照样起监听、「成功」返回一个 `IsActive = false` 的转发器 |
-| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(1)`；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
+| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(4)`（resource shortage，§4.1）；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |
 | 请求 agent 转发时本机 agent 连不上 | 不发 `auth-agent-req`；按 `FailureMode` 抛出或照常启动（§7.1、§7.5.8），原因码沿用 agent 那边的（`AgentNotRunning` / `AgentUnavailable`） |
 | `auth-agent@openssh.com` 通道到来时本机 agent 连不上 | 回 `CHANNEL_OPEN_FAILURE(2)`，描述只写「本机 ssh-agent 不可用」；会话与转发器不受影响（§7.1） |

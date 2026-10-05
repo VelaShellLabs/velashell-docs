@@ -213,13 +213,25 @@ sequenceDiagram
     R->>S: Connects to the server's bind_port
     S->>F: CHANNEL_OPEN "forwarded-tcpip"<br/>bind_addr ‖ bind_port ‖ orig_addr ‖ orig_port
     F->>F: Find the matching forwarder by bind address + port
-    alt Found
-        F->>S: CHANNEL_OPEN_CONFIRMATION
-        Note over F: Connect to the local target, copy both ways
-    else Not found
+    alt Not found
         F->>S: CHANNEL_OPEN_FAILURE(1)
+    else Found: connect to the local target first
+        alt Connected
+            F->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over F: Copy both ways
+        else Cannot connect
+            F->>S: CHANNEL_OPEN_FAILURE(2) "cannot connect to the forwarded local target"
+            Note over F: Record a TargetConnect error locally
+        end
     end
 ```
+
+〔Decision〕**The local target is connected before the channel is confirmed**, the same order as agent forwarding (§7.1): if it cannot be reached, reply `CHANNEL_OPEN_FAILURE(2)` (connect failed),
+with a description that only says it cannot connect to the forwarded local target — local addresses are not sent out. 〔History〕Early versions confirmed first and connected afterwards: when the target was unreachable the remote side saw "accepted, then closed at once",
+and the server log had no connect failed.
+
+〔Decision〕**A handler's refusal is answered with the matching reason code**: failing to reach what must be connected (the local target, the local agent) gets 2, a full connection limit gets 4 (resource shortage),
+anything else gets 1. 〔History〕Early versions always replied 1.
 
 ### 4.2 Three musts
 
@@ -855,7 +867,7 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
 | Invalid forwarding options (`MaxConnections` below 1, a listening port outside 0–65535, a non-positive SOCKS handshake timeout, a null bind address) | 〔Decision〕Throw `ArgumentOutOfRangeException` / `ArgumentNullException` when set; if anything fails after the listener is up, the listener is closed on the spot. 〔History〕They used to go unchecked: with `MaxConnections = 0` the listener was already up when constructing the forwarder threw, and the port stayed taken until GC |
 | Starting a forward on a connection that is already disconnected (or disposed) | Fail outright: `ObjectDisposedException` once disposed, the recorded fault once declared dead — the same for local, dynamic and remote, and no listener is opened. 〔History〕Local / dynamic forwarding used to open the listener anyway and "succeed", returning a forwarder with `IsActive = false` |
-| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
+| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(4)` (resource shortage, §4.1); 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
 | The local agent cannot be reached when agent forwarding is requested | Do not send `auth-agent-req`; throw or start normally per `FailureMode` (§7.1, §7.5.8); the reason code is carried over from the agent side (`AgentNotRunning` / `AgentUnavailable`) |
 | The local agent cannot be reached when an `auth-agent@openssh.com` channel arrives | Reply `CHANNEL_OPEN_FAILURE(2)`, with the description saying only "local ssh-agent unavailable"; the session and the forwarder are unaffected (§7.1) |
