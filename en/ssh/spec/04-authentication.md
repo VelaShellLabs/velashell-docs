@@ -359,6 +359,10 @@ no flag means SHA-1. A certificate's algorithm name is `rsa-sha2-512-cert-v01@op
 it does not match, the flag stays empty, and the agent produces a SHA-1 `ssh-rsa` signature — which contradicts the algorithm declared
 in the request, and is exactly the kind §4.4 disables by default.
 
+〔Decision〕**The algorithm name in the signature the agent returns is checked**: if it differs from the one requested (with the certificate suffix stripped), the signature is not handed on; an `SshAgentException` (`Unsupported`) is thrown,
+and the credential is skipped as "a problem with the material" (§3.4). An old agent that does not understand the SHA-2 flags still returns an `ssh-rsa` signature: it used to be handed on as-is,
+the authenticator sent it to the server as `rsa-sha2-512`, the user saw only Permission denied, and the intent of `AllowSha1RsaSignatures = false` was quietly bypassed.
+
 〔Decision〕**A certificate's fingerprint is the fingerprint of the key inside it** (`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`),
 matching what `ssh-keygen -l` shows for a certificate. Hashing the whole certificate blob would change the fingerprint on every re-signing,
 while what users compare against is always the key. So the plain identity and the certificate identity of the same key show the same

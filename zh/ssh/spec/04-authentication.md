@@ -350,6 +350,10 @@ agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RS
 对不上，标志位就空着，agent 签出来的是 SHA-1 的 `ssh-rsa` —— 与请求里声明的算法不符，
 而且正是 §4.4 默认要禁掉的那一种。
 
+〔决策〕**agent 签回来的签名要核对算法名**：与请求的（去掉证书后缀）不一致就不交出去，报 `SshAgentException`（`Unsupported`），
+这条凭据按「材料有问题」跳过（§3.4）。不认 SHA-2 标志位的老 agent 会照旧回一个 `ssh-rsa` 签名：曾经原样交出去，
+认证器当 `rsa-sha2-512` 发给服务端，用户只看到 Permission denied，`AllowSha1RsaSignatures = false` 的意图也被悄悄绕过。
+
 〔决策〕**证书的指纹就是证书里那把钥的指纹**（`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`），
 与 `ssh-keygen -l` 对证书显示的一致。按整张证书的 blob 算的话，每次重签指纹都会变，
 而用户拿去对照的永远是那把钥。因此同一把钥的普通身份与证书身份在列表里显示同一个指纹，这是对的。
