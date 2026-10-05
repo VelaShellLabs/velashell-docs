@@ -51,6 +51,13 @@ sequenceDiagram
 `ArgumentException`：报文收齐之前收包循环一个字节都不消费，而窗口只随消费回补 —— 窗口比报文小，就是双方死等、没有任何报错。
 通道的默认窗口（256 KiB）恰好装不下一块 256 KiB 的 `DATA` 应答，所以 `SftpOptions` 自带一个更大的窗口。
 
+〔决策〕**握手有时限**（`SftpOptions.HandshakeTimeout`，默认 30 秒，覆盖 `INIT` → `VERSION`、查 limits、取工作目录），到点以
+`SftpUnavailableException`（`Timeout`）失败。sftp-server 是经登录 shell 起的，启动文件卡住（等输入、挂在连不上的网络盘上）时它永远不会回 `VERSION`；
+曾经只靠调用方的令牌，没给就一直挂着。
+
+〔决策〕**报文长度超上限、而那 4 个字节全是可打印文字时，消息里点明多半是启动文件在往 stdout 输出**（`.bashrc` 之类打印了欢迎语），
+并把那几个字节摆出来。曾经只报「长度超上限」，看不出真实原因。
+
 ---
 
 ## 二 SFTP 报文的外层结构

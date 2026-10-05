@@ -53,6 +53,13 @@ The channel's receive window (the lower bound of `Channel.WindowPolicy`) **must 
 the receive loop consumes nothing until a message is complete, and the window is replenished only by consumption — a window smaller than a message means both sides wait forever, with no error.
 The channel's default window (256 KiB) is just too small for a 256 KiB `DATA` reply, which is why `SftpOptions` carries a larger window of its own.
 
+〔Decision〕**The handshake has a time limit** (`SftpOptions.HandshakeTimeout`, 30 seconds by default, covering `INIT` → `VERSION`, the limits query and fetching the working directory); when it expires
+it fails with `SftpUnavailableException` (`Timeout`). sftp-server is started through the login shell, and when a startup file hangs (waiting for input, stuck on an unreachable network drive) it never answers `VERSION`;
+it used to rely on the caller's token alone and hung forever without one.
+
+〔Decision〕**When a message length exceeds the limit and those 4 bytes are all printable text, the message says it is most likely a startup file writing to stdout** (a `.bashrc` printing a greeting),
+and shows those bytes. It used to say only "length over the limit", which hid the real cause.
+
 ---
 
 ## 2 Outer structure of SFTP messages
