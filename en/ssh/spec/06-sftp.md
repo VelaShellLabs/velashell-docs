@@ -395,6 +395,10 @@ it does not complete as faulted, so it never becomes an unobserved task exceptio
 There used to be no such signal and the host could only check "does the object still exist": after sftp-server exited or the server closed an idle channel under `ChannelTimeout`,
 that session's file panel stayed broken until the whole SSH connection reconnected.
 
+〔Decision〕**Stopping creates no unobserved task exceptions.** A request already abandoned (its waiter cancelled) gets no exception when the pipeline stops; when abandonment and the fault race, the abandoning side observes the fault.
+When an in-flight write of a file stream fails, the error is recorded on the stream (later writes and `FlushAsync` / closing report an interruption with the resume point) and the write task itself does not end faulted.
+Exceptions nobody looks at raise `UnobservedTaskException` at GC time, which the host writes to its crash log — one disconnect made dozens of writes "crash" at once, filling the crash log with records that were not crashes.
+
 ### 5.5 Read-ahead for sequential reads
 
 **Problem**: if a file stream's sequential read (`ReadAsync`) sends one `READ` at a time and waits for it before sending the next,
