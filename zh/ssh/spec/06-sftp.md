@@ -112,6 +112,11 @@ byte[]   type 相关
 | 105 | `SSH_FXP_ATTRS` | ATTRS |
 | 201 | `SSH_FXP_EXTENDED_REPLY` | 扩展相关 |
 
+〔决策〕**应答的类型要对上请求。**每个请求都声明成功时该收到什么：`OPEN` / `OPENDIR` 收 `HANDLE`，`READ` 收 `DATA`，`STAT` 一类收 `ATTRS`，
+`REALPATH` / `READLINK` / `READDIR` 收 `NAME`，`limits@openssh.com` 收 `EXTENDED_REPLY`，其余只认 `STATUS = OK`。错误状态照旧报 `SftpException`；
+既不是错误状态、也不是该收的类型，就是 `SshProtocolException`（`ProtocolError`）。曾经按「不是错误状态就算成功」：`WRITE` 收到任何非 `STATUS` 的应答
+都被记成已确认（`DurableLength` 失真，续传点跨过没确认的数据），`OPEN` 收到 `DATA` 会把数据当成句柄。
+
 ### 3.3 状态码
 
 | 码 | 名称 | 我们的映射（`SftpException.StatusCode`，类型 `SftpStatusCode`） |

@@ -114,6 +114,11 @@ this is precisely why SFTP can achieve throughput, and why replies must be match
 | 105 | `SSH_FXP_ATTRS` | ATTRS |
 | 201 | `SSH_FXP_EXTENDED_REPLY` | Extension-specific |
 
+〔Decision〕**The reply type must match the request.** Each request states what it expects on success: `OPEN` / `OPENDIR` expect `HANDLE`, `READ` expects `DATA`, the `STAT` family expects `ATTRS`,
+`REALPATH` / `READLINK` / `READDIR` expect `NAME`, `limits@openssh.com` expects `EXTENDED_REPLY`, and everything else accepts only `STATUS = OK`. An error status is still reported as `SftpException`;
+a reply that is neither an error status nor the expected type is an `SshProtocolException` (`ProtocolError`). It used to be "anything but an error status counts as success": a `WRITE` that got any non-`STATUS` reply
+was counted as acknowledged (`DurableLength` became wrong, and the resume point skipped unacknowledged data), and an `OPEN` that got `DATA` took the data as a handle.
+
 ### 3.3 Status codes
 
 | Code | Name | Our mapping (`SftpException.StatusCode`, of type `SftpStatusCode`) |
