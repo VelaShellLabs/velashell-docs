@@ -600,14 +600,14 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 
 | Extension | Purpose | Behavior when absent |
 | --- | --- | --- |
-| `posix-rename@openssh.com` | **Atomic** rename (overwriting the target) | Degrade to `SSH_FXP_RENAME`, **and report this fact** |
+| `posix-rename@openssh.com` | **Atomic** rename (overwriting the target), `RenameAsync(..., overwrite: true)` | Throw `SftpException` (`OperationUnsupported`), **no degradation** — a plain `SSH_FXP_RENAME` fails when the target exists, so silently degrading would change the semantics; "delete the target, then rename" is not atomic and is left for the caller to decide |
 | `hardlink@openssh.com` | Create hard link | Throw `Unsupported` |
 | `fsync@openssh.com` | Force persistence to disk | Throw `Unsupported` |
-| `statvfs@openssh.com` | File system usage | Throw `Unsupported` |
 | `limits@openssh.com` | §5.2 | Use conservative defaults |
-| `copy-data` | Copy **within the server**, without going over the network | Degrade to "download then upload" |
-| `home-directory` | Get a given user's home directory | Use `REALPATH "."` |
-| `expand-path@openssh.com` | Expand `~` | Use `REALPATH` |
+| `statvfs@openssh.com` | File system usage | 〔Status〕The capability can be queried (`HasStatVfs`); **this library does not wrap it yet** |
+| `copy-data` | Copy **within the server**, without going over the network | 〔Status〕Queryable (`HasCopyData`), **not wrapped yet**; the host's remote copy downloads then uploads |
+| `home-directory` | Get a given user's home directory | 〔Status〕Queryable, **not wrapped yet**; the working directory comes from `REALPATH "."` (§4.6) |
+| `expand-path@openssh.com` | Expand `~` | 〔Status〕Queryable, **not wrapped yet** |
 
 ### 7.2 Capability query is a public API
 
@@ -631,8 +631,8 @@ nor can they warn in the UI that "this server does not support atomic overwrite;
 | 4 | `string` | Extension name |
 | 5+ | Extension-specific | |
 
-`ISftpExtension` is a public extension point (architecture §8 item 10),
-letting callers add vendor-private extensions without modifying the library.
+〔Status〕**There is no public extension point yet** (the planned `ISftpExtension`, architecture §8 item 10): vendor-private extensions can currently only be sent inside the library
+with `SftpWire.WriteExtended`; consumers cannot add them.
 
 ---
 

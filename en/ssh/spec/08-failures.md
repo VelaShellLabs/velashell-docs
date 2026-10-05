@@ -313,6 +313,9 @@ Not sending it leaves only a TCP reset in the server log, and the administrator 
 
 ## 7. Metrics (`System.Diagnostics.Metrics`)
 
+〔Status〕**Only the forwarding set is implemented so far** (`velashell.ssh.forward.*`, Meter name `VelaShell.Ssh.Forwarding`, see [`07-forwarding.md`](07-forwarding.md) §5).
+The other instruments in the table below (connections, bytes, rekeys, channel windows, SFTP pipeline depth) **are not implemented yet**; they are the plan.
+
 Meter name: `VelaShell.Ssh`
 
 | Instrument | Type | Tags |
@@ -335,6 +338,8 @@ and writing usernames into widely queryable metrics is another.
 ---
 
 ## 8. Tracing (`ActivitySource`)
+
+〔Status〕**Not implemented yet**; the table below is the plan.
 
 Source name: `VelaShell.Ssh`
 

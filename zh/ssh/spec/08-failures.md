@@ -311,6 +311,9 @@ bool                       PartialSuccessAchieved
 
 ## 七 度量（`System.Diagnostics.Metrics`）
 
+〔现状〕**目前只实现了转发的那一组**（`velashell.ssh.forward.*`，Meter 名 `VelaShell.Ssh.Forwarding`，见 [`07-forwarding.md`](07-forwarding.md) §5）。
+下表其余的仪表（连接、字节、重协商、通道窗口、SFTP 管线深度）**还没有实现**，是规划。
+
 Meter 名：`VelaShell.Ssh`
 
 | 仪表 | 类型 | 标签 |
@@ -333,6 +336,8 @@ Meter 名：`VelaShell.Ssh`
 ---
 
 ## 八 追踪（`ActivitySource`）
+
+〔现状〕**还没有实现**，下表是规划。
 
 Source 名：`VelaShell.Ssh`
 

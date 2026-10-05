@@ -598,14 +598,14 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 
 | 扩展 | 用途 | 没有时的行为 |
 | --- | --- | --- |
-| `posix-rename@openssh.com` | **原子**重命名（覆盖目标） | 退化到 `SSH_FXP_RENAME`，**并把这个事实报出来** |
+| `posix-rename@openssh.com` | **原子**重命名（覆盖目标），`RenameAsync(..., overwrite: true)` | 抛 `SftpException`（`OperationUnsupported`），**不退化** —— 普通 `SSH_FXP_RENAME` 在目标存在时失败，悄悄退化等于换了语义；「先删目标再改名」不是原子的，由调用方自己决定要不要 |
 | `hardlink@openssh.com` | 建硬链接 | 抛 `Unsupported` |
 | `fsync@openssh.com` | 强制落盘 | 抛 `Unsupported` |
-| `statvfs@openssh.com` | 文件系统用量 | 抛 `Unsupported` |
 | `limits@openssh.com` | §5.2 | 用保守默认 |
-| `copy-data` | **服务端内**复制，不经过网络 | 退化到「下载再上传」 |
-| `home-directory` | 取指定用户的家目录 | 用 `REALPATH "."` |
-| `expand-path@openssh.com` | 展开 `~` | 用 `REALPATH` |
+| `statvfs@openssh.com` | 文件系统用量 | 〔现状〕能力位可查（`HasStatVfs`），**本库还没有封装** |
+| `copy-data` | **服务端内**复制，不经过网络 | 〔现状〕能力位可查（`HasCopyData`），**还没有封装**；宿主的远端复制走「下载再上传」 |
+| `home-directory` | 取指定用户的家目录 | 〔现状〕能力位可查，**还没有封装**；工作目录取自 `REALPATH "."`（§4.6） |
+| `expand-path@openssh.com` | 展开 `~` | 〔现状〕能力位可查，**还没有封装** |
 
 ### 7.2 能力查询是公开 API
 
@@ -629,8 +629,8 @@ SftpCapabilities Capabilities { get; }
 | 4 | `string` | 扩展名 |
 | 5+ | 扩展相关 | |
 
-`ISftpExtension` 是公开的扩展点（架构 §8 第 10 项），
-让使用者能加厂商私有扩展而不必改库。
+〔现状〕**还没有公开的扩展点**（规划中的 `ISftpExtension`，架构 §8 第 10 项）：厂商私有扩展目前只能在库内用
+`SftpWire.WriteExtended` 发，使用者加不了。
 
 ---
 
