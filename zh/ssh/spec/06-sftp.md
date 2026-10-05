@@ -563,7 +563,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | --- | --- |
 | 在途写入有失败 | 抛 `SftpTransferInterruptedException`（带 `DurableLength`）。`CLOSE` 照发，但它的状态不再看 —— 先发生的才是根因 |
 | 写入都确认了，**可写的流**上 `CLOSE` 回了错误状态 | 抛 `SftpException`（码与服务端原话照 §3.3） |
-| 只读的流上 `CLOSE` 回了错误状态 | 不报 |
+| 只读的流上 `CLOSE` 回了错误状态 | 不报。〔决策〕既然不报，**关闭就不等 `CLOSE` 的应答**：`CLOSE` 在后台发，句柄额度等应答回来再还 —— 小文件下载省掉一整轮往返。同一条通道上之后的请求排在它后面，服务端按到达顺序处理 |
 | `CLOSE` 发不出去或等不到应答（通道已断、流水线已坏，或超过 `CloseTimeout`） | 不报 |
 | 在途写入超过 `CloseTimeout`（默认 30 秒）还没确认完 | 抛 `SftpTransferInterruptedException`（带 `DurableLength`）；`CLOSE` 照发、句柄额度照还。曾经没有时限：服务端不再应答时关闭一直等下去，关标签页、取消上传都挂住 |
 | 已经关过的流再关（含同步 `Dispose` 之后） | 空操作，不抛 |

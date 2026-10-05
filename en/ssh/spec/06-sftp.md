@@ -565,7 +565,7 @@ The wrap-up order of `DisposeAsync` (`await using`):
 | --- | --- |
 | An in-flight write failed | Throw `SftpTransferInterruptedException` (carrying `DurableLength`). `CLOSE` is still sent, but its status is not examined — what happened first is the root cause |
 | All writes acknowledged, and `CLOSE` on a **writable stream** returns an error status | Throw `SftpException` (code and the server's text as in §3.3) |
-| `CLOSE` on a read-only stream returns an error status | Not reported |
+| `CLOSE` on a read-only stream returns an error status | Not reported. 〔Decision〕Since it is not reported, **closing does not wait for the `CLOSE` reply**: `CLOSE` is sent in the background and the handle slot is returned when the reply arrives — a small-file download saves a whole round trip. Later requests on the same channel queue behind it, and the server processes them in order |
 | `CLOSE` cannot be sent or gets no reply (channel gone, pipeline broken, or past `CloseTimeout`) | Not reported |
 | In-flight writes still unacknowledged after `CloseTimeout` (30 seconds by default) | Throw `SftpTransferInterruptedException` (with `DurableLength`); `CLOSE` is still sent and the handle slot returned. There used to be no time limit: when the server stopped answering, closing waited forever, hanging tab closes and upload cancellations |
 | Closing an already closed stream (including after a synchronous `Dispose`) | No-op, does not throw |
