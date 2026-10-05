@@ -380,7 +380,7 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 | --- | --- | --- | --- |
 | OpenSSH（`openssh-key-v1`，OpenSSH 7.8 起 `ssh-keygen` 的默认） | `BEGIN OPENSSH PRIVATE KEY` | 不加密；或 `bcrypt` KDF + `aes{128,192,256}-ctr`、`aes{128,192,256}-cbc`、`aes{128,256}-gcm@openssh.com`、`chacha20-poly1305@openssh.com` | 本库 |
 | PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | 不加密；或 `aes256-cbc`（v2 用 SHA-1 派生，v3 用 Argon2id） | 本库 |
-| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | BCL（PKCS#8 里的 Ed25519 读不了） |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | 解密用 BouncyCastle，导入用 BCL（PKCS#8 里的 Ed25519 读不了，报 `Unsupported`） |
 | PKCS#1 RSA / SEC1 EC，不加密 | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | 无 | BCL |
 | 传统加密 PEM | 上一行的文件头 + `Proc-Type: 4,ENCRYPTED` | 口令经一次 MD5 派生 + 3DES / AES-CBC | **拒绝**（见下） |
 
@@ -415,8 +415,12 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 〔决策〕**加密 PKCS#8 的 KDF 迭代数上限一千万次**（PBES2 的 PBKDF2，以及 PBES1 / PKCS#12 PBE），交给 BCL 之前先从 DER 里读出来核对，
 超了报 `KeyFormatInvalid`。迭代数来自文件，而 **.NET 导入加密 PKCS#8 不设上限**（实测 300 万次照常导入）：被改成 `int.MaxValue` 的文件
 按每秒约七百万次要跑五分钟，同步、停不下来。常见取值是 OpenSSL 的 2048、OWASP 建议的 60 万。
-加密 PKCS#8 看不出钥的类型，只能按 RSA、ECDSA 逐个试，每试一次 KDF 都整个跑一遍 —— 〔决策〕密文不超过 320 字节的先按 ECDSA 试
-（椭圆曲线钥连 P-521 带公钥也不到 260 字节，最小的 512 位 RSA 钥也有三百四十多字节），口令对时只算一遍。
+〔决策〕**加密 PKCS#8 只解密一次**（BouncyCastle 解出里面的明文 PrivateKeyInfo）：填充校验失败就是口令不对（`KeyPassphraseIncorrect`）；
+解开之后**按 PrivateKeyInfo 里的算法标识分派** —— RSA 与 NIST 曲线上的 ECDSA 交给 BCL 导入，Ed25519 / Ed448 / DSA / 别的曲线报 `Unsupported`
+（`NeedsPassphrase = false`，说出是什么钥）。明文 PKCS#8 同样按算法分派。
+〔历史〕早期加密 PKCS#8 看不出钥的类型，逐个按 RSA、ECDSA 交给 BCL 去试、每试一次 KDF 都整个跑一遍，都失败就报「口令多半不对」——
+装的是 Ed25519 / DSA 时口令明明是对的，界面一遍遍弹口令框。BouncyCastle 不认的加密方案仍走那条老路：
+密文不超过 320 字节的先按 ECDSA 试（椭圆曲线钥连 P-521 带公钥也不到 260 字节，最小的 512 位 RSA 钥也有三百四十多字节）。
 
 〔决策〕**私钥文件是外来输入，读不懂一律是 `SshPrivateKeyException`（`KeyFormatInvalid`）**，不论哪种格式、错在哪一层：
 截断（复制粘贴丢了尾行，base64 恰好在 4 字符边界断开）、字段畸形（`.ppk` 的 `Public-Lines: abc`、RSA 的 p 或 q 为 1）。
