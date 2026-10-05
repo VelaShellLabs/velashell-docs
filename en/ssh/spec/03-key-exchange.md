@@ -451,6 +451,10 @@ when someone means to revoke a key and writes `@revoke` instead of `@revoked`, u
 〔Decision〕Host names are **lower-cased** for lookups and when writing (as OpenSSH does: it lower-cases before writing, and a hashed line is the HMAC of the lower-case name).
 Hashing the name as typed means a hashed line never matches when the user typed upper case — with a man in the middle, "key changed" degrades into "never seen, trust it?",
 the key type preference stops protecting as well, and hashed lines this library writes cannot be read back by OpenSSH.
+〔Decision〕**A host name containing characters that mean something else in `known_hosts` is not written** (`KnownHostsFile.IsRecordableHost`): `,` `*` `?` `!` `[` `]` `#`, whitespace,
+control characters, and a leading `@` or `|`. The host field is itself a pattern list; with `x,*` written into it, the key becomes valid for every host, and host names can come from external launch links
+or `HostName` in `ssh_config`. `FormatEntry` / `AppendAsync` throw `ArgumentException`; when `KnownHostsPolicy` meets such a name on "trust and remember",
+**the connection is not allowed either** (`InvalidConfiguration`) — if it cannot be remembered, it must not silently become "trust just this once". Hashed lines are refused too: such a name is not a host anyway.
 
 ### 5.5 Host certificates (`*-cert-v01@openssh.com`)
 

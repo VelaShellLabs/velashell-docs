@@ -450,6 +450,10 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 〔决策〕查询与写出时主机名**一律小写**（与 OpenSSH 一致：它写之前先小写化，散列行算的就是小写名字的 HMAC）。
 原样拿去算的话，用户填的是大写时散列行一条都对不上 —— 有中间人时「密钥变了」降级成「没见过，要信任吗」，
 类型偏好的保护也一并失效；本库写出的散列行也就读不回 OpenSSH 那边。
+〔决策〕**主机名里有 `known_hosts` 另有含义的字符时不写**（`KnownHostsFile.IsRecordableHost`）：`,` `*` `?` `!` `[` `]` `#`、空白、
+控制字符，以及开头的 `@` `|`。主机名那一栏本身是一张模式表，`x,*` 写进去这把钥就对所有主机生效；而主机名可能来自外部启动链接、
+`ssh_config` 的 `HostName`。`FormatEntry` / `AppendAsync` 抛 `ArgumentException`；`KnownHostsPolicy` 在「信任并记住」时遇到这样的名字，
+**这次连接也不放行**（`InvalidConfiguration`）—— 记不下来就不该悄悄当成「只信这一次」。散列行同样拒绝：这样的名字本来就不是一台主机。
 
 ### 5.5 主机证书（`*-cert-v01@openssh.com`）
 
