@@ -159,6 +159,8 @@ which simply fails for internal domain names and also leaks the destination.
 
 〔Decision〕**A zero-length domain name gets `0x08` (address type not supported), and that connection is closed.** An empty name is not a target:
 let through, opening the tunnel fails on an invalid argument and the client gets no SOCKS reply at all, with no way to tell what went wrong.
+〔Decision〕**A target port of 0 gets `0x01` (general failure), and that connection is likewise closed during the handshake**, recorded as a SOCKS handshake error.
+〔History〕Early versions let it through: opening the tunnel threw on the invalid argument, the client got no reply at all, and the error was recorded as a relay error.
 
 ### 3.2 Reply code mapping
 
@@ -845,6 +847,7 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | SSH session disconnected | Local/dynamic forwards close the listener and release the port; every forwarder's `IsActive` becomes false; in-flight connections are aborted as errors. The forwarder raises no separate `Error` for the disconnect (§2.4, §4.5) |
 | Invalid SOCKS handshake | Close that one, count it in `errors`, the forwarder keeps running |
 | Zero-length domain name in a SOCKS request | Reply `0x08`, close that one (§3.1) |
+| Port 0 in a SOCKS request | Reply `0x01`, close that one (§3.1) |
 | SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`ForwardErrorReason.SocksHandshake`), the forwarder keeps running (§3.3) |
 | No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(1)`; `(3)` when the connection has no remote forward at all |
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
