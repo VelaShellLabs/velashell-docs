@@ -326,6 +326,7 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 本地校验只会在时钟不同步时制造假阴性。〔未实现〕设计是**把过期事实放进
 `SshAuthAttempt.Detail`** —— 认证失败时这是头号线索。今天认证器不看证书的有效期，`Detail` 里没有这一条；
 有效期由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者，要在界面上说「证书过期了」得自己判断。
+换算成时刻的那两个属性不会因为 9999 年以后的值抛异常（规则同 [03 §5.5](03-key-exchange.md)）。
 
 **agent 里的证书。** `ssh-add` 加 `id_*` 时会顺手把同名的 `id_*-cert.pub` 一起加进去，
 所以 agent 的身份列表里常有 `*-cert-v01@openssh.com` 类型的条目。

@@ -486,7 +486,9 @@ The verification order in §5.3 gains two rules:
    - the CA signature verifies: it covers every field from the type string up to and including the signing CA's public key;
      the signature algorithm is limited to `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-256`, `rsa-sha2-512` —
      〔Decision〕SHA-1 `ssh-rsa` signatures are not accepted; the CA key must not itself be a certificate; an RSA CA must be at least 2048 bits;
-   - the current time is within `[valid_after, valid_before)`;
+   - the current time is within `[valid_after, valid_before)` (both ends are compared as raw uint64 seconds. The fields may hold values past the year 9999;
+     those are legal and must not make validation throw: when converted to a point in time for display, a `valid_before` past the end of 9999 is treated as unlimited,
+     and a `valid_after` past it becomes the latest representable time);
    - `valid principals` is non-empty and contains the host name being connected to (exact comparison, case-insensitive, no wildcards);
    - there are no critical options (none are defined for host certificates, and an unrecognized critical option must be rejected).
 

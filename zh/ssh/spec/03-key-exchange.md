@@ -485,7 +485,9 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
    - CA 签名验得过：签名覆盖从类型串到签发 CA 公钥（含）的全部字段；
      签名算法限 `ssh-ed25519`、`ecdsa-sha2-nistp256/384/521`、`rsa-sha2-256`、`rsa-sha2-512` ——
      〔决策〕SHA-1 的 `ssh-rsa` 签名不认；CA 公钥本身不能是证书；RSA 的 CA 至少 2048 位；
-   - 当前时刻在 `[valid_after, valid_before)` 里；
+   - 当前时刻在 `[valid_after, valid_before)` 里（两端都按原始的 uint64 秒数比。字段可以取到 9999 年以后的值，
+     那是合法的，验证不许因此抛异常：换算成时刻给人看时，晚于 9999 年末的 `valid_before` 当作不限，
+     `valid_after` 取可表示的最晚时刻）；
    - `valid principals` 非空且含被连的主机名（逐字比较，不区分大小写，不做通配）；
    - 没有 critical option（主机证书没有定义任何一个，不认识的 critical option 必须拒绝）。
 

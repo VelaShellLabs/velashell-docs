@@ -333,6 +333,7 @@ is the server's `Permission denied`, indistinguishable from "CA not trusted" or 
 local validation only produces false negatives when clocks are out of sync. 〔Not implemented yet〕The design is to **put the expiry fact into
 `SshAuthAttempt.Detail`** — when authentication fails, it is the number-one clue. Today the authenticator does not look at the certificate's validity period and `Detail` says nothing about it;
 the validity period is exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`, and saying "your certificate has expired" in the UI is up to the caller.
+The two properties that convert to a point in time do not throw on values past the year 9999 (same rule as [03 §5.5](03-key-exchange.md)).
 
 **Certificates in the agent.** When `ssh-add` adds `id_*`, it also adds the matching `id_*-cert.pub`,
 so the agent's identity list often contains entries of type `*-cert-v01@openssh.com`.
