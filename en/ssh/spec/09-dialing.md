@@ -249,6 +249,8 @@ and host names often do not come from whoever wrote the configuration (`ssh://` 
 
 - Read up to the first empty line (`CRLF CRLF`); response headers are capped at 16 KiB, and exceeding that is judged `ProxyRefused`.
 - A 2xx status code is success; over-read bytes are handed back to the upper layer (§2.3).
+- 〔Decision〕A 1xx (except 101) is an interim response: skip it and read on to the final response (RFC 9110 §15.2); several interim responses together are still bound by the response header size limit.
+  〔History〕Early versions treated it as a refusal.
 - 407: judged `ProxyAuthRequired` if no credentials are configured; if they are configured (meaning they were rejected) it is judged `ProxyAuthFailed`,
   with `Detail` carrying the value of the `Proxy-Authenticate` header. 〔Decision〕The two are separate: one means "configure them", the other "correct them"; they used to share `ProxyAuthRequired`,
   so the host had to tell them apart by whether credentials were configured.

@@ -247,6 +247,8 @@ sequenceDiagram
 
 - 读到第一个空行（`CRLF CRLF`）为止；响应头上限 16 KiB，超过判 `ProxyRefused`。
 - 状态码 2xx 成功；多读到的字节交还给上层（§2.3）。
+- 〔决策〕1xx（101 除外）是中间响应，跳过它接着读最终响应（RFC 9110 §15.2）；几个中间响应合起来也受响应头的长度上限约束。
+  〔历史〕早期当成拒绝。
 - 407：没配凭据判 `ProxyAuthRequired`；配了（说明凭据被拒）判 `ProxyAuthFailed`，
   `Detail` 带上 `Proxy-Authenticate` 头的值。〔决策〕两者分开：一个是「去配」，一个是「改对」；曾经共用 `ProxyAuthRequired`，
   宿主只好自己靠「有没有配凭据」来分。
