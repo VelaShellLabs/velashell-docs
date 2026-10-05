@@ -401,6 +401,11 @@ with `NeedsPassphrase = true` — the user kept re-entering the correct passphra
 ② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
 so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
 
+〔Decision〕**The Ed25519 private key in a `.ppk` is the 32-byte seed at fixed length (the RFC 8032 private key, bytes as is), not an mpint**: no leading zero is added when the first byte is ≥ 0x80.
+The basis is real `puttygen` (0.83) output — every one of 80 keys was 32 bytes, 47 of them with a first byte ≥ 0x80; samples are kept in the tests together with the public keys exported by `ssh-keygen -y`.
+Files written by mpint rules (one leading zero, or shorter than 32 bytes with leading zeros dropped) are accepted too and normalized to 32 bytes; a misreading is caught on the spot by check ② above.
+〔History〕Early versions read it as an mpint: files whose first byte was ≥ 0x80 (about half) were rejected as "negative mpint" and could not be loaded at all. The test cases back then were all `.ppk` files assembled on the same understanding, so the shared mistake could not show up.
+
 〔Decision〕**`openssh-key-v1` is checked for internal consistency too**, and any mismatch is `KeyFormatInvalid`:
 ① the plaintext public section at the head of the file must be the same key as the one derived from the private part (it used to be discarded unread — yet `ssh-keygen -y` and agents list that public section);
 ② an Ed25519 private section carries the public key twice (on its own, and after the seed), and the seed yields a third copy; all three must be identical;
