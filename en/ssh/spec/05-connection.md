@@ -617,6 +617,11 @@ Every action that wakes someone up from these two places must let the woken part
   exactly what the rule above ("caller code is never executed on the receive loop") exists to prevent.
   Now the receive loop only parses the message and looks up the handlers (with no handler it refuses on the spot with `UNKNOWN_CHANNEL_TYPE`); asking the handler, creating the channel and sending the confirmation all happen in the background.
   This introduces no ordering problem: the peer may not send anything on the channel before it receives our confirmation, and the order in which the confirmations of two opens go out does not matter — each carries the peer's channel number.
+  〔Decision〕**But the peer may send as soon as it receives the confirmation** (port scans, health checks: connect, then EOF + CLOSE), and the receive loop runs concurrently with the background task:
+  the peer's channel number, initial window, packet limit and the channel state must be set **before the confirmation is enqueued**, and the pumps start only after it is enqueued
+  (so data from the pumps queues behind the confirmation). The confirmation used to go out first and the peer's number was set afterwards: when the background task was preempted between the two steps,
+  the receive loop handled that CLOSE first and answered with a CLOSE carrying a channel number that was still 0 — closing the peer's channel 0 (often the user's first shell),
+  while the real channel never received a CLOSE. Setting the state also no longer overwrites a channel that has already wound down.
 - **At most 64** peer channel opens may be deciding in the background at once; any beyond that are refused immediately with `CHANNEL_OPEN_FAILURE` (`RESOURCE_SHORTAGE`, reason code 4).
   Without a limit, a peer flooding channel opens while the handler is slow would leave a pile of hanging tasks.
 - After a handler accepts, this side may still reject the channel because the channel count or window budget is exhausted —
