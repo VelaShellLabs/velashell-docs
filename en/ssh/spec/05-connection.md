@@ -580,7 +580,8 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 | `UNIMPLEMENTED` / `IGNORE` / `DEBUG` / `EXT_INFO` received | Ignore (replying `UNIMPLEMENTED` to an `UNIMPLEMENTED` would only make both sides echo each other) |
 | `DISCONNECT` received | Session declared dead; the exception carries **the reason code and the peer's verbatim text** (`DisconnectReason` / `PeerDescription`) |
 | The peer keeps sending messages that need replies but does not read what we send back | Replies posted by the receive loop queue past `MaxQueuedReplyBytes` (default 16 MiB) → `ProtocolError`, disconnect. The receive loop cannot wait on backpressure, so a hard limit is the only option here; replies also count toward backpressure, so data-plane senders wait |
-| The peer floods channel requests we don't recognize | At most 64 unread unknown requests stay in the event stream; later ones are dropped (still answered with `FAILURE`). Exit status, `EOF` and close are not affected |
+| The peer floods channel requests we don't recognize | At most 64 unread unknown requests stay in the event stream; later ones are dropped (still answered with `FAILURE`). Exit status, `EOF` and close are not subject to this limit |
+| The peer repeats exit status / exit signal / `EOF` | Only the first is taken, later ones are dropped — each happens once per channel (RFC 4254 §6.10) and is not subject to the limit above, so accepting repeats would be memory amplification that bypasses window flow control. A repeated `EOF` does not change the state either |
 | The peer opens a channel type we don't recognize | Reply `CHANNEL_OPEN_FAILURE`; the description is truncated to 256 characters — an overlong type name from the peer is not echoed back verbatim |
 | Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException`, **do not disconnect the session** |
 | Channel count exceeds `MaxChannels` (〔Decision〕default 512) | Same as above |
