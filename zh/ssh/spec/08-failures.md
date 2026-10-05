@@ -30,6 +30,10 @@
 原样拼进去就是一个转义序列注入面（改剪贴板、清屏伪造提示、盖掉前半行）。
 **原话照样放在专门的属性里**（`PeerDescription`、`ServerMessage`），那些属性按不可信文本对待。
 
+多行的对端输出（远端命令的 stderr）**只带末尾**：`SshCommandResult.EnsureSuccess` 的消息里放 stderr 最后 1024 个字符的清洗摘要，
+换行收成一个「 ⏎ 」接成一行（一个换行就能在日志里伪造一行别的记录），出错的那一句通常在最后；
+对端给的信号名同样清洗、截到 32 个字符。原文完整地留在 `SshCommandFailedException.Result` 里。
+
 ---
 
 ## 二 异常层级

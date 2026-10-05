@@ -32,6 +32,10 @@ and proxy replies all come from the peer, often from a peer that has not been au
 so embedding it verbatim is an escape-sequence injection surface (rewriting the clipboard, clearing the screen to fake a prompt, overwriting the start of a line).
 **The verbatim text is still kept in dedicated properties** (`PeerDescription`, `ServerMessage`), which are treated as untrusted text.
 
+Multi-line peer output (a remote command's stderr) **contributes only its tail**: the message from `SshCommandResult.EnsureSuccess` carries a cleaned summary of the last 1024 characters of stderr,
+with line breaks collapsed into a single " ⏎ " so it stays on one line (a single newline is enough to forge another record in a log); the line saying what went wrong is usually the last one.
+A signal name from the peer is cleaned the same way and cut to 32 characters. The full original stays in `SshCommandFailedException.Result`.
+
 ---
 
 ## 2. Exception hierarchy
