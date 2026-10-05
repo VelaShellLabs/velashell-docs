@@ -156,6 +156,8 @@ If you really need to restrict access, use OS mechanisms (firewall, namespaces).
 This is the single most important semantic of dynamic forwarding — `curl --socks5-hostname` depends on it.
 Local resolution would cause a "DNS goes local, connection goes through the tunnel" split,
 which simply fails for internal domain names and also leaks the destination.
+〔Decision〕The domain name is decoded as UTF-8, and a non-ASCII name is converted to Punycode before it is passed on (as the SOCKS5 dialer does); invalid UTF-8, or a name that cannot be converted, gets `0x08`.
+〔History〕Early versions decoded it as ASCII, turning every non-ASCII character into `?` and connecting to a host that does not exist.
 
 〔Decision〕**A zero-length domain name gets `0x08` (address type not supported), and that connection is closed.** An empty name is not a target:
 let through, opening the tunnel fails on an invalid argument and the client gets no SOCKS reply at all, with no way to tell what went wrong.
