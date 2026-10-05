@@ -252,6 +252,19 @@ Returns `SSH_FXP_NAME` with `count == 1`.
 taking the result as the initial value of `SftpFileSystem.WorkingDirectory`.
 This is the only reliable answer to "where is the user's home directory" — far more reliable than assembling `/home/{user}`.
 
+### 4.7 File name encoding
+
+In SFTP v3 a file name is a `string` **with no specified encoding** (only v4 onwards makes it UTF-8). Old servers, NAS boxes and embedded devices using GBK, Shift-JIS or Latin-1 are common:
+the bytes of a name are not valid UTF-8.
+
+〔Decision〕**UTF-8 by default, with undecodable bytes round-tripping losslessly.** Valid UTF-8 decodes as usual; every undecodable byte `b` (which can only be 0x80–0xFF) becomes a lone low surrogate
+`U+DC00 + b` on its own, and encoding turns a lone `U+DC80`–`U+DCFF` back into that byte. Valid UTF-8 never decodes to a lone surrogate, so this mapping cannot collide with a real name.
+A listed name shows replacement characters in the UI, but opening, deleting, renaming or linking with it sends the original bytes back to the server.
+Names used to be decoded leniently: undecodable bytes became U+FFFD, and re-encoding as UTF-8 produced different bytes — such files **could not be opened, deleted or renamed**, and links were reported as broken.
+
+〔Decision〕**The server's encoding can be specified** (`SftpOptions.FileNameEncoding`, e.g. GBK): names are decoded and encoded with it so they display correctly; bytes invalid in that encoding are not guaranteed to round-trip.
+Path arguments, directory entry names and `longname`, and the results of `READLINK` / `REALPATH` all go through the same codec; status messages and extension names are not file names and stay UTF-8.
+
 ---
 
 ## 5 Request pipeline
