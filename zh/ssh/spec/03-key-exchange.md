@@ -270,6 +270,8 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
   正是为了避开 `mpint` 的前导零问题。**写错这一条，表现同样是概率性签名失败。**
 - ML-KEM 在 .NET 11 的 BCL 里有（`System.Security.Cryptography.MLKem`）；
   sntrup761 没有，需要自实现或用 BouncyCastle。
+  〔决策〕`MLKem.IsSupported`（Windows 的 CNG、OpenSSL 3.5 起）时 ML-KEM-768 走 BCL，否则退回 BouncyCastle；
+  两种实现互通（一边生成、另一边封装）有用例钉住。曾经一律走 BouncyCastle。
   〔决策〕**M1 先只做 `mlkem768x25519-sha256`**；sntrup761 放到 M5，
   因为 OpenSSH 9.9+ 已经把 ML-KEM 排在前面，sntrup761 只是对 8.5–9.8 的兼容。
 - `sntrup761x25519-sha512@openssh.com` 是同一算法的旧名（OpenSSH < 9.9 用它）。

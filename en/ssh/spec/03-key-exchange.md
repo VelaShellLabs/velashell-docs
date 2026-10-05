@@ -271,6 +271,8 @@ Both have the same shape: **a KEM run in parallel with X25519**, with the shared
   precisely to avoid the `mpint` leading-zero problem. **Get this wrong and the symptom is, again, probabilistic signature failure.**
 - ML-KEM is available in the .NET 11 BCL (`System.Security.Cryptography.MLKem`);
   sntrup761 is not, and must be implemented ourselves or taken from BouncyCastle.
+  〔Decision〕When `MLKem.IsSupported` (CNG on Windows, OpenSSL 3.5 onwards) ML-KEM-768 goes through the BCL, otherwise it falls back to BouncyCastle;
+  a test pins down that the two implementations interoperate (one side generates, the other encapsulates). It used to go through BouncyCastle unconditionally.
   〔Decision〕**M1 does only `mlkem768x25519-sha256`**; sntrup761 is deferred to M5,
   because OpenSSH 9.9+ already ranks ML-KEM first, and sntrup761 is only for compatibility with 8.5–9.8.
 - `sntrup761x25519-sha512@openssh.com` is the old name of the same algorithm (used by OpenSSH < 9.9).
