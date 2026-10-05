@@ -445,6 +445,14 @@ so upper layers need not stat again, much less roll back blindly.
 the number of in-flight requests is fixed at 1, sacrificing throughput in exchange for "the file length is the trustworthy length".
 Used for scenarios that must guarantee the file is a complete prefix at any moment (e.g. writing configuration files).
 
+〔Decision〕**Pipelined mode sends whole blocks.** Sequential `WriteAsync` calls keep a tail shorter than a block on this side and send it once later writes fill the block;
+before `FlushAsync`, disposal, reads (`ReadAsync` / `ReadAtAsync`), `SetLengthAsync`, `GetAttributesAsync` and positioned `WriteAtAsync` the tail is sent first
+(a read must see what was written, a truncation must not be stretched again by it, and when it overlaps a positioned write the earlier write must arrive first);
+after a `Seek`, a tail that no longer lines up is sent before the next write.
+Rationale: in-flight writes are throttled by **request count**, and every `WRITE` takes one slot regardless of size. Each call used to be split into blocks on its own —
+when the caller writes 256 KiB at a time and the server's block is 255 KiB (OpenSSH's `limits@openssh.com`), every call became a "big + tiny" pair of requests,
+halving the bytes in flight and with it upload throughput on high-RTT links. Sequential mode does not buffer: its promise is that every write returns already confirmed.
+
 ---
 
 ### 6.4 File streams are async-only
@@ -456,7 +464,7 @@ on the UI thread that freezes the interface for one RTT, and on the thread pool,
 | Synchronous member | Behavior |
 | --- | --- |
 | `Read` / `Write` / `SetLength` (and single-byte, `Span` overloads) | Throw `NotSupportedException`, with the message naming the async version to use |
-| `Flush` | **Non-blocking no-op** (there is no local buffer); known write failures are still thrown. Use `FlushAsync` to confirm persistence |
+| `Flush` | **Non-blocking no-op**: it neither sends the tail pipelined mode keeps (§6.3) nor waits for confirmation; known write failures are still thrown. Use `FlushAsync` (disposal does it too) to send everything and confirm persistence |
 | `Dispose` | **Non-blocking**: wrap-up (waiting for in-flight write acknowledgements, closing the handle) is handed to the background and it returns immediately; wrap-up errors (write interruption, `CLOSE` failure, §6.5) are not visible — to see them, use `await using` |
 
 `Flush` is kept as a non-throwing no-op because wrapper streams (such as `StreamWriter`) call it synchronously in their own wrap-up;
