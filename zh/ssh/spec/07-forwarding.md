@@ -856,7 +856,7 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
 | 转发参数的非法值（`MaxConnections` 小于 1、监听端口不在 0–65535、SOCKS 握手时限不为正、绑定地址为 null） | 〔决策〕设值时就抛 `ArgumentOutOfRangeException` / `ArgumentNullException`；起监听之后出了任何错，监听当场关掉。〔历史〕曾经不拦：`MaxConnections = 0` 时监听已经起来、构造转发器才抛，端口一直占到 GC |
 | 在已经断开（或释放）的连接上起转发 | 照实失败：释放了抛 `ObjectDisposedException`，判死了抛那次故障 —— 本地、动态、远程三种一致，不起监听。〔历史〕本地 / 动态转发曾经照样起监听、「成功」返回一个 `IsActive = false` 的转发器 |
-| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(4)`（resource shortage，§4.1）；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
+| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）—— 〔决策〕事件**每秒至多一次**，带着这期间拒了几条；度量里的错误计数照常每条都记（〔历史〕曾经每拒一条报一次，上限撞满时一大波连接让宿主逐条推到界面上）。对端在 accept 之前就重置了的那一条（`ConnectionReset` / `ConnectionAborted`）不退避、也不报 —— 那是那一条自己的事，监听好好的（〔历史〕曾经照「接受失败」报错、整个监听退避 50 ms 起步）。远程转发：回 `CHANNEL_OPEN_FAILURE(4)`（resource shortage，§4.1）；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |
 | 请求 agent 转发时本机 agent 连不上 | 不发 `auth-agent-req`；按 `FailureMode` 抛出或照常启动（§7.1、§7.5.8），原因码沿用 agent 那边的（`AgentNotRunning` / `AgentUnavailable`） |
 | `auth-agent@openssh.com` 通道到来时本机 agent 连不上 | 回 `CHANNEL_OPEN_FAILURE(2)`，描述只写「本机 ssh-agent 不可用」；会话与转发器不受影响（§7.1） |
