@@ -530,6 +530,8 @@ The mitigation has two parts, both required:
    - **Receiving any non-KEX-related packet during the first KEX (including `SSH_MSG_IGNORE`,
      `SSH_MSG_DEBUG`, `SSH_MSG_UNIMPLEMENTED`) always disconnects.**
      This applies to the first KEX only —— during a rekey these are ordinary, legal packets.
+   - **The peer's first packet must be `KEXINIT`.** When it is read, whether strict KEX will be negotiated is not yet known, so any `IGNORE` / `DEBUG`
+     before it can only be skipped per the RFC; once strict KEX is negotiated this is checked retroactively, and if anything was skipped the connection is dropped (`ProtocolError`).
    - **After every `SSH_MSG_NEWKEYS`, both sequence numbers are reset to zero** —— including every rekey.
 
 〔Note〕Recomputing it from "does this KEXINIT carry the marker" each time is wrong: when the peer omits the marker on rekey,
@@ -691,6 +693,7 @@ Blocking the receiving side as well would lose data.
 | A host certificate vouched for by a CA is invalid (§5.5 item 3) | `HostKeyRejected` | Yes (after the certificate is re-issued) |
 | Rejected by policy | `HostKeyRejected` / `HostKeyChanged` | Yes (after the user changes trust) |
 | IGNORE/DEBUG received during the first KEX under strict KEX | `ProtocolError` | No |
+| Under strict KEX, the peer sent other packets before its KEXINIT | `ProtocolError` | No |
 | `K_S` changed during rekeying | `HostKeyChanged` | No |
 | KEX timeout | `Timeout` | Yes |
 

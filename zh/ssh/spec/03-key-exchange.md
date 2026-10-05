@@ -529,6 +529,8 @@ Terrapin 攻击的原理是：握手期间中间人可以**插入或删除**报�
    - **首次 KEX 期间收到任何非 KEX 相关的报文（含 `SSH_MSG_IGNORE`、
      `SSH_MSG_DEBUG`、`SSH_MSG_UNIMPLEMENTED`）一律断开。**
      只管首次 KEX —— 重协商期间这几种报文是合法的普通报文。
+   - **对端的第一个报文必须就是 `KEXINIT`。**读它的时候还不知道会协商出严格 KEX，前面的 `IGNORE` / `DEBUG`
+     只能先照 RFC 跳过；协商出严格 KEX 之后回头追究，跳过过就断开（`ProtocolError`）。
    - **每次 `SSH_MSG_NEWKEYS` 之后，双向序号归零** —— 包括每一次重协商。
 
 〔注意〕按「这一次 KEXINIT 里有没有标记」逐次重算是错的：对端重协商时不再带标记，
@@ -690,6 +692,7 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | 有 CA 担保的主机证书不合格（§5.5 第 3 条） | `HostKeyRejected` | 是（重签证书后） |
 | 策略拒绝 | `HostKeyRejected` / `HostKeyChanged` | 是（用户改信任后） |
 | 严格 KEX 下、首次 KEX 期间收到 IGNORE/DEBUG | `ProtocolError` | 否 |
+| 严格 KEX 下、对端在 KEXINIT 之前还发了别的报文 | `ProtocolError` | 否 |
 | 重协商时 `K_S` 变了 | `HostKeyChanged` | 否 |
 | KEX 超时 | `Timeout` | 是 |
 
