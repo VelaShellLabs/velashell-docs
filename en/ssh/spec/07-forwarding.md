@@ -531,7 +531,7 @@ it only shows up on the first signature.
 
 | Number | Name | Argument | Meaning |
 | :-: | --- | --- | --- |
-| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires. A fraction of a second is rounded up; 〔Decision〕a lifetime of 0, negative, or beyond uint32 throws `ArgumentOutOfRangeException` when set (it used to be silently clamped to 1 second, so the added key vanished a second later) |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | none | The agent asks the user to confirm every signature (`ssh-add -c`) |
 
 **Response**: `6` `SSH_AGENT_SUCCESS` means success; `5` `SSH_AGENT_FAILURE` throws `SshAgentException`.

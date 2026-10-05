@@ -525,7 +525,7 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 
 | 编号 | 名称 | 参数 | 含义 |
 | :-: | --- | --- | --- |
-| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥 |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥。不足一秒向上取整；〔决策〕0、负数或超过 uint32 的有效期在设值时就抛 `ArgumentOutOfRangeException`（曾经被静默钳成 1 秒，加进去的钥一秒后就没了） |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | 无 | 每次签名都由 agent 向使用者确认（`ssh-add -c`） |
 
 **应答**：`6` `SSH_AGENT_SUCCESS` 为成功；`5` `SSH_AGENT_FAILURE` 抛 `SshAgentException`。
