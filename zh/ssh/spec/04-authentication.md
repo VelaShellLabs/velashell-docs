@@ -361,7 +361,9 @@ agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RS
 ### 4.6 私钥文件
 
 本地私钥由 `SshPrivateKeyFile.LoadAsync` / `Parse` 读入，按文件头认格式。密钥类型支持 Ed25519、RSA、
-ECDSA P-256/384/521。
+ECDSA P-256/384/521。〔决策〕ECDSA 的曲线**按曲线本身（OID）认**，不按位数：PKCS#8 / SEC1 能装任意曲线，
+secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交给服务端，签名验不过，症状只是「不接受这把公钥」。
+三条 NIST 曲线以外的报 `Unsupported`。
 
 | 格式 | 文件头 | 加密 | 谁来解 |
 | --- | --- | --- | --- |

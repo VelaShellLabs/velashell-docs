@@ -371,7 +371,9 @@ fingerprint in the list, and that is correct.
 ### 4.6 Private key files
 
 Local private keys are read by `SshPrivateKeyFile.LoadAsync` / `Parse`, which recognizes the format from the file header. Supported key
-types are Ed25519, RSA, and ECDSA P-256/384/521.
+types are Ed25519, RSA, and ECDSA P-256/384/521. 〔Decision〕An ECDSA curve is **recognized by the curve itself (its OID)**, not by its size: PKCS#8 / SEC1 can carry any curve,
+and secp256k1 and brainpoolP256r1 are 256-bit too — they used to be labelled `nistp256` and handed to the server, the signature failed to verify, and the only symptom was "this public key is not accepted".
+Curves other than the three NIST ones are reported as `Unsupported`.
 
 | Format | File header | Encryption | Decoded by |
 | --- | --- | --- | --- |
