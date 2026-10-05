@@ -204,6 +204,9 @@ repeated: string type ‖ string data
    `0o100000` regular file, `0o040000` directory, `0o120000` symbolic link.
    **v3 has no separate type field; the type can only be taken from here.**
 
+〔Decision〕At most 1024 extended attribute pairs are kept, and **the rest are read and discarded** — parsing must not simply stop at the limit: in a `NAME` reply, the next entry would start in the middle of the remaining bytes.
+It cannot spin: every pair is at least 8 bytes, so however large the count, the number of iterations is bounded by the message length.
+
 ### 4.3 `SSH_FXP_READ` / `SSH_FXP_WRITE`
 
 | READ | | | WRITE | | |
