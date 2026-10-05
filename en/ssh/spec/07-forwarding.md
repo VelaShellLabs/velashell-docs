@@ -457,6 +457,43 @@ This is not defended by lowering the impersonation level to Identification: the 
 
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
+#### 7.2.1 Signature confirmation must say what the signature is for
+
+> Basis: RFC 4252 §7 (the `publickey` signature input); OpenSSH `PROTOCOL` (`publickey-hostbound-v00@openssh.com`),
+> `PROTOCOL.agent` (`session-bind@openssh.com`), `PROTOCOL.sshsig`.
+
+If the confirmation callback only gets the key and its comment, the user cannot tell whether this is the `git pull` they just ran on the remote,
+or someone on that machine using the key to sign in somewhere else — and per-signature confirmation is meaningless.
+So when the data to be signed is recognizable, `AgentSignatureRequest` carries a few more fields:
+
+| Property | When it is set | Where it comes from, and why it can be trusted |
+| --- | --- | --- |
+| `UserName` / `Service` | The data is a public-key sign-in | The user name and service in the signature input. The server checks them against the request, so the signature can only be used to sign in as that user |
+| `DestinationHostKey` | A sign-in whose destination can be verified | `publickey-hostbound-v00@openssh.com`: the host key at the end of the signature input, which the server checks is its own. Plain `publickey`: a session binding (§7.4) that the remote hop sent **on the same agent channel**, **whose signature we verify ourselves**, with a session identifier equal to the `session_id` in the signature input |
+| `SignatureNamespace` | The data is an SSHSIG (`ssh-keygen -Y sign`, git's SSH commit signing) | The namespace in the signature input, such as `git` or `file` |
+
+Shapes of the signature input:
+
+| Kind | Fields (in order) |
+| --- | --- |
+| Public-key sign-in (RFC 4252 §7) | string `session_id`; byte `50`; string user name; string service; string `publickey`; boolean TRUE; string signature algorithm; string public key |
+| Host-bound sign-in | As above with method `publickey-hostbound-v00@openssh.com`, followed by string server host key |
+| SSHSIG | 6 bytes `SSHSIG`; string namespace; string reserved; string hash algorithm; string message digest |
+
+〔Decision〕**We verify the remote's session bindings ourselves.** The local agent cannot be relied on to do it: agents that do not know the extension
+(Pageant, older Windows agents) answer `FAILURE` regardless, and from a `SUCCESS` we cannot tell whether it was verified. Without verifying, the remote could
+declare any public key of "a host you trust" and the dialog would say "signing in to github.com". A binding that fails verification is still relayed to the agent (§7.4);
+it is just not used as the destination.
+
+〔Decision〕**The key presented in the sign-in request must be the key being asked to sign**, otherwise the data is not treated as a sign-in: that signature could not
+sign in anywhere, and showing the user name inside it would only mislead.
+
+〔Decision〕**This is for display only.** Anything unrecognized is left empty; it never causes a refusal or changes the request passed to the agent. Text that reaches
+the UI has control and bidirectional-control characters replaced and is cut to 128 characters. Parsing and verification happen only when per-signature confirmation is on;
+each agent channel keeps at most 16 verified bindings, and the oldest is dropped when more arrive.
+
+〔Decision〕**Say when it cannot be verified.** When `DestinationHostKey` is `null` (the remote's ssh is too old to send session bindings, or deliberately does not),
+the UI should say "cannot be verified" rather than nothing — saying nothing lets the user assume it is going where they think.
 
 ### 7.3 Adding keys to the local agent (`ssh-add`)
 

@@ -719,10 +719,21 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     - **Agent signature dialog** (`AgentSignPromptView`, same shell as the host key dialog): the warning banner says "A
       remote session wants to sign with a key in your local ssh-agent", and the advice names the legitimate cause (you
       are running ssh / git on that server) and when to deny (you did nothing of the sort). The info block lists the
-      **session** (`user@host:port`), key type, fingerprint and the agent comment (usually the private key path); a
-      footer line reads "If you do not answer within 60 seconds, the request is denied."
-      - Three buttons: **Deny** (outline) / **Allow for this session** (outline; this key is not asked about again until
-        the session closes) / **Allow once** (accent pill).
+      **session** (`user@host:port`), **purpose**, **destination** (sign-ins only), key type, fingerprint and the agent
+      comment (usually the private key path); a footer line reads "If you do not answer within 60 seconds, the request is
+      denied."
+      - **Purpose** and **destination** are what lets the user tell "the `git pull` I just ran" from "someone using this key
+        to sign in elsewhere". They come from the context the SSH library recognizes in the data to be signed
+        ([spec/07 §7.2.1](../ssh/spec/07-forwarding.md#721-signature-confirmation-must-say-what-the-signature-is-for)): the
+        purpose reads 'Sign in to an SSH server as "git"', "Data signature (namespace git)" or "Unrecognized data — not an
+        SSH sign-in"; the destination shows the matching known-host names (with the port when it is not 22), "Not in your
+        known hosts (fingerprint)" when it does not match, or "Cannot be verified — the remote side did not prove which
+        host it is signing in to", **the last two in the warning color**. If the known hosts cannot be read, the names are
+        simply missing and the dialog still opens.
+      - Three buttons: **Deny** (outline) / **Allow for this session** (outline; until the session closes, this key is
+        not asked about again **for the same purpose** — the same user signing in to the same destination, or a data
+        signature in the same namespace; approving a `git pull` to github does not approve using the key to sign in
+        elsewhere) / **Allow once** (accent pill).
       - **Deny is both the default and the cancel button, and has focus when the dialog opens**: the dialog can pop up
         while the user is typing in the terminal, so a stray Enter or Esc can only land on Deny; no "allow" button is
         ever the default.

@@ -455,6 +455,39 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 
 〔决策〕**我们只做转发，不做 agent 服务端。**
 本机 agent 由操作系统提供（OpenSSH agent / Pageant / 1Password 等）。
+#### 7.2.1 签名确认要说得出「签来做什么」
+
+> 依据：RFC 4252 §7（`publickey` 的签名输入）；OpenSSH `PROTOCOL`（`publickey-hostbound-v00@openssh.com`）、
+> `PROTOCOL.agent`（`session-bind@openssh.com`）、`PROTOCOL.sshsig`。
+
+确认回调只拿到钥和注释的话，使用者分不出这是自己刚在远端敲的 `git pull`，还是那台机器上有人在拿这把钥登录别处 ——
+「逐次确认」就形同虚设。所以被签的数据认得出来时，`AgentSignatureRequest` 多交几项：
+
+| 属性 | 什么时候有 | 从哪来、为什么当得了真 |
+| --- | --- | --- |
+| `UserName` / `Service` | 被签的是一次公钥登录 | 签名输入里的用户名与服务名。服务端会核对它们与请求一致，这份签名只能拿去以这个用户登录 |
+| `DestinationHostKey` | 登录、且目的主机核实得了 | `publickey-hostbound-v00@openssh.com`：签名输入末尾的主机公钥，服务端会核对是不是自己的。普通 `publickey`：远端那一跳**在同一条 agent 通道上**转来的会话声明（§7.4），**签名我们自己验过**，且会话标识与签名输入里的 `session_id` 相同 |
+| `SignatureNamespace` | 被签的是 SSHSIG（`ssh-keygen -Y sign`、git 的 SSH 提交签名） | 签名输入里的命名空间，如 `git`、`file` |
+
+签名输入的形状：
+
+| 种类 | 字段（按顺序） |
+| --- | --- |
+| 公钥登录（RFC 4252 §7） | string `session_id`；byte `50`；string 用户名；string 服务名；string `publickey`；boolean TRUE；string 签名算法；string 公钥 |
+| 绑定主机密钥的登录 | 同上，方法名换成 `publickey-hostbound-v00@openssh.com`，末尾再加 string 服务端主机公钥 |
+| SSHSIG | 6 字节 `SSHSIG`；string 命名空间；string 保留；string 摘要算法；string 消息摘要 |
+
+〔决策〕**远端的会话声明我们自己验。**不能指望本机 agent 替我们验：不认这个扩展的 agent（Pageant、旧版 Windows agent）
+一律回 `FAILURE`，认它的回的 `SUCCESS` 我们也看不出验没验。不验的话，远端随手拿一把「你信任的主机」的公钥来声明，
+确认框就会说「要登录 github.com」。验不过的声明照样转给 agent（§7.4），只是不拿来当目的主机。
+
+〔决策〕**登录请求里出示的钥必须就是要签的这一把**，否则不当作登录：那份签名哪儿也登录不了，摆出里面的用户名只会误导人。
+
+〔决策〕**只为给人看。**认不出来就什么都不填，绝不因此拒签或改动转给 agent 的请求；进界面的文本清掉控制字符与双向控制符，
+截到 128 字符。只在开了逐次确认时才解析、验签；每条 agent 通道最多记 16 条验过的声明，多出来的挤掉最早的。
+
+〔决策〕**核实不了要明说。**`DestinationHostKey` 为 `null`（远端的 ssh 太旧、不发会话声明，或者**故意**不发）时，
+界面应当写「无法核实」，而不是什么都不写 —— 不写，用户只会默认它是去了自己以为的那台。
 
 ### 7.3 往本机 agent 加钥（`ssh-add`）
 
