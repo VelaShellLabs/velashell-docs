@@ -75,7 +75,8 @@ Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 
 On failure, `SshConnectException.Hops` lists the result of **every hop** (nearest to farthest) —
 "cannot reach the proxy", "the proxy refused to forward" and "jump host authentication failed" are three different problems, and this table keeps them apart.
-Reason codes: a proxy refusal is `ProxyRefused`; authentication required with no credentials (or credentials rejected) is `ProxyAuthRequired`.
+Reason codes: a proxy refusal is `ProxyRefused`; authentication required with no credentials is `ProxyAuthRequired`, and rejected credentials are `ProxyAuthFailed`;
+a host name or credentials that cannot even be put into the proxy protocol locally are `InvalidConfiguration`.
 
 > [!NOTE]
 > On Windows, `ProxyCommand` goes through anonymous pipes, and anonymous pipes do not support overlapped IO —

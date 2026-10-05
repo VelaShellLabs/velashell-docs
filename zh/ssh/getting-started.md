@@ -73,7 +73,8 @@ Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 
 失败时 `SshConnectException.Hops` 列出**每一跳**的结果（从近到远）——
 「连不上代理」「代理拒绝转发」「跳板认证失败」是三个不同的问题，这张表让它们分得开。
-原因码：代理拒绝是 `ProxyRefused`，要认证而没凭据（或凭据被拒）是 `ProxyAuthRequired`。
+原因码：代理拒绝是 `ProxyRefused`，要认证而没凭据是 `ProxyAuthRequired`，凭据被拒是 `ProxyAuthFailed`；
+主机名、凭据在本地就放不进代理协议是 `InvalidConfiguration`。
 
 > [!NOTE]
 > `ProxyCommand` 在 Windows 上走匿名管道，而匿名管道不支持重叠 IO ——

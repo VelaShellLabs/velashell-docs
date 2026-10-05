@@ -169,7 +169,8 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `TcpTimeout` | Connection timed out | ✔ | Check firewall/network |
 | `TcpUnreachable` | Network unreachable | ✔ | |
 | `ProxyRefused` | Proxy refused to forward | ✔ | **See §5.2** |
-| `ProxyAuthRequired` | Proxy requires authentication: no credentials configured, or the credentials were rejected | ✘ | Configure (or correct) proxy credentials |
+| `ProxyAuthRequired` | Proxy requires authentication, and no credentials are configured | ✘ | Configure proxy credentials |
+| `ProxyAuthFailed` | Proxy rejected the configured credentials | ✘ | Correct the proxy username or password |
 | `NotAnSshServer` | Peer does not speak SSH | ✘ | Wrong port |
 | `VersionMismatch` | Protocol version is not 2.0 | ✘ | |
 | `NegotiationFailed` | No algorithm in common | ✘ | **See §5.1** |

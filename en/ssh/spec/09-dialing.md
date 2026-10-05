@@ -60,7 +60,9 @@ Reason code conventions:
 | --- | --- |
 | The proxy itself cannot be reached | Same as a direct connection (`DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`) |
 | The proxy refuses to forward to the target | `ProxyRefused` |
-| The proxy requires authentication and we have no credentials, or the credentials are rejected | `ProxyAuthRequired` |
+| The proxy requires authentication and we have no credentials | `ProxyAuthRequired` |
+| The proxy rejects the credentials we configured | `ProxyAuthFailed` |
+| The request cannot even be sent locally: the host name does not fit the proxy protocol, the credentials are too long, the `ProxyCommand` shell cannot start | `InvalidConfiguration` |
 | What the proxy says does not conform to the protocol | `ProxyRefused`, with `Detail` stating what was received |
 
 ### 2.3 No over-reading when reading handshake replies
@@ -177,8 +179,8 @@ Selecting a method we did not offer is a protocol error.
 | Password length | 1 | 1–255 |
 | Password | N | UTF-8 |
 
-〔Decision〕When the encoded username or password exceeds 255 bytes, **reject locally**; do not truncate.
-The reply is two bytes: sub-negotiation version and status; a non-zero status is judged `ProxyAuthRequired` (credentials rejected).
+〔Decision〕When the encoded username or password exceeds 255 bytes, **reject locally** (`InvalidConfiguration`); do not truncate.
+The reply is two bytes: sub-negotiation version and status; a non-zero status is judged `ProxyAuthFailed` (credentials rejected).
 
 ### 3.3 Connect request
 
@@ -188,7 +190,7 @@ The reply is two bytes: sub-negotiation version and status; a non-zero status is
 | Command | 1 | `1` (CONNECT) |
 | Reserved | 1 | `0` |
 | Address type | 1 | `1` IPv4 / `3` domain name / `4` IPv6 |
-| Target address | 4 / 1+N / 16 | The domain-name form is a one-byte length followed by the name (max 255) |
+| Target address | 4 / 1+N / 16 | The domain-name form is a one-byte length followed by the name (max 255; non-ASCII names are converted to Punycode first, and a name that cannot be converted or is too long is judged `InvalidConfiguration`) |
 | Target port | 2 | Big-endian |
 
 ### 3.4 Reply
@@ -246,8 +248,9 @@ and host names often do not come from whoever wrote the configuration (`ssh://` 
 
 - Read up to the first empty line (`CRLF CRLF`); response headers are capped at 16 KiB, and exceeding that is judged `ProxyRefused`.
 - A 2xx status code is success; over-read bytes are handed back to the upper layer (§2.3).
-- 407: judged `ProxyAuthRequired` if no credentials are configured; if they are configured (meaning they were rejected) it is likewise judged `ProxyAuthRequired`,
-  with `Detail` carrying the value of the `Proxy-Authenticate` header.
+- 407: judged `ProxyAuthRequired` if no credentials are configured; if they are configured (meaning they were rejected) it is judged `ProxyAuthFailed`,
+  with `Detail` carrying the value of the `Proxy-Authenticate` header. 〔Decision〕The two are separate: one means "configure them", the other "correct them"; they used to share `ProxyAuthRequired`,
+  so the host had to tell them apart by whether credentials were configured.
 - Other status codes are judged `ProxyRefused`, with `Detail` carrying the status line.
 - 〔Decision〕When the target port is 22 and the proxy replies 403 / 405 / 501, **give a suggestion directly** in the message:
   "this proxy may only allow 80/443 — please use SOCKS5 instead, or have the server listen on 443".
@@ -320,6 +323,7 @@ When treating an SSH channel as a bidirectional byte stream:
   in the template parse values such as `-e` or `-oProxyUseFdpass` as **options** — argument injection (the same class as Git's CVE-2017-1000117).
   Legitimate host and user names do not start with `-`.
 - The program exits before the handshake completes: judged `ProxyRefused`, with `Detail` carrying the exit code and the tail of stderr.
+- The local shell cannot start (the program `ComSpec` points to is missing or not executable): judged `InvalidConfiguration` — retrying will not help.
 - When the stream is disposed, close the program's standard input to give it a chance to exit gracefully; if it still has not exited after a short wait, terminate the whole process tree.
 - 〔Limitation, stated honestly〕On Windows, a child process's standard input and output are anonymous pipes, and anonymous pipes do not support overlapped IO:
   asynchronous reads and writes on them are completed by the runtime in a blocking manner on thread-pool threads. This is a platform limitation, not a choice of this library;

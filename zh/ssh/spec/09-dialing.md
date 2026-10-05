@@ -58,7 +58,9 @@
 | --- | --- |
 | 代理本身连不上 | 与直连相同（`DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`） |
 | 代理拒绝转发到目标 | `ProxyRefused` |
-| 代理要求认证而我们没有凭据，或凭据被拒 | `ProxyAuthRequired` |
+| 代理要求认证而我们没有凭据 | `ProxyAuthRequired` |
+| 代理拒绝了我们配置的凭据 | `ProxyAuthFailed` |
+| 请求在本地就发不出去：主机名放不进代理协议、凭据超长、`ProxyCommand` 的 shell 起不来 | `InvalidConfiguration` |
 | 代理说的话不合协议 | `ProxyRefused`，`Detail` 写明收到了什么 |
 
 ### 2.3 读握手应答时不许多读
@@ -175,8 +177,8 @@ sequenceDiagram
 | 口令长度 | 1 | 1–255 |
 | 口令 | N | UTF-8 |
 
-〔决策〕用户名或口令编码后超过 255 字节时，**在本地拒绝**，不截断。
-应答两个字节：子协商版本与状态；状态非 0 判 `ProxyAuthRequired`（凭据被拒）。
+〔决策〕用户名或口令编码后超过 255 字节时，**在本地拒绝**（`InvalidConfiguration`），不截断。
+应答两个字节：子协商版本与状态；状态非 0 判 `ProxyAuthFailed`（凭据被拒）。
 
 ### 3.3 连接请求
 
@@ -186,7 +188,7 @@ sequenceDiagram
 | 命令 | 1 | `1`（CONNECT） |
 | 保留 | 1 | `0` |
 | 地址类型 | 1 | `1` IPv4 / `3` 域名 / `4` IPv6 |
-| 目标地址 | 4 / 1+N / 16 | 域名形式是一个字节长度后跟名字（最长 255） |
+| 目标地址 | 4 / 1+N / 16 | 域名形式是一个字节长度后跟名字（最长 255；非 ASCII 先转 Punycode，转不了或超长判 `InvalidConfiguration`） |
 | 目标端口 | 2 | 大端 |
 
 ### 3.4 应答
@@ -244,8 +246,9 @@ sequenceDiagram
 
 - 读到第一个空行（`CRLF CRLF`）为止；响应头上限 16 KiB，超过判 `ProxyRefused`。
 - 状态码 2xx 成功；多读到的字节交还给上层（§2.3）。
-- 407：没配凭据判 `ProxyAuthRequired`；配了（说明凭据被拒）同样判 `ProxyAuthRequired`，
-  `Detail` 带上 `Proxy-Authenticate` 头的值。
+- 407：没配凭据判 `ProxyAuthRequired`；配了（说明凭据被拒）判 `ProxyAuthFailed`，
+  `Detail` 带上 `Proxy-Authenticate` 头的值。〔决策〕两者分开：一个是「去配」，一个是「改对」；曾经共用 `ProxyAuthRequired`，
+  宿主只好自己靠「有没有配凭据」来分。
 - 其它状态码判 `ProxyRefused`，`Detail` 带状态行。
 - 〔决策〕目标端口是 22 而代理回了 403 / 405 / 501 时，消息里**直接给出建议**：
   「这个代理可能只放行 80/443 —— 请改用 SOCKS5，或让服务端在 443 上监听」。
@@ -318,6 +321,7 @@ sequenceDiagram
   会把 `-e`、`-oProxyUseFdpass` 这样的值当成**选项**解析 —— 那是参数注入（与 Git 的 CVE-2017-1000117 同一类）。
   合法的主机名与用户名不以 `-` 开头。
 - 程序在握手完成前退出：判 `ProxyRefused`，`Detail` 带退出码与 stderr 末尾。
+- 本机的 shell 起不来（`ComSpec` 指向的程序不在、没有执行权限）：判 `InvalidConfiguration` —— 重试不会好。
 - 流释放时关闭程序的标准输入，给它一个体面退出的机会；短暂等待后仍未退出则结束整个进程树。
 - 〔限制，如实说明〕Windows 上子进程的标准输入输出是匿名管道，而匿名管道不支持重叠 IO：
   对它们的异步读写由运行时在线程池线程上以阻塞方式完成。这是平台限制，不是本库的选择；

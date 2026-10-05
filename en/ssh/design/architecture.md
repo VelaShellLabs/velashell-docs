@@ -510,8 +510,8 @@ class SshNegotiationException : SshException
 ```
 enum SshFailureReason {
     Unknown,
-    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired,
-    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
+    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired, ProxyAuthFailed,
+    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged, HostKeyStoreFailed,
     AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
     AgentUnavailable, AgentNotRunning, AgentRefused,
