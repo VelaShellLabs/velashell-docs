@@ -71,7 +71,6 @@ The types below each correspond to a single kind of failure, and their `Reason` 
 | `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
 | `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
 | `SftpUnavailableException` | `Unsupported` | `Open` |
-| `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
 | `SshCommandFailedException` | `CommandFailed` | `Open` |
 
 The types below have a fixed `Phase`, and their `Reason` is **reported as it actually is**:
@@ -84,6 +83,7 @@ The types below have a fixed `Phase`, and their `Reason` is **reported as it act
 | `SshAgentException` | `AgentNotRunning`, `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
 | `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected` | `Open` |
 | `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError`; when agent forwarding cannot be set up because the local agent cannot be reached, the agent side's `AgentNotRunning` / `AgentUnavailable` is carried over | `Open` |
+| `SftpTransferInterruptedException` | Follows the cause of the interruption (the inner exception): a dropped connection is `ClosedByPeer`; a write the server rejected (disk full, quota, permission) takes the reason code of the inner `SftpException`; caller cancellation and local disposal are `Aborted`; a timeout waiting for acknowledgements on close is `Timeout`. 〔Decision〕It used to be fixed at `ClosedByPeer`, so callers deciding by reason code would treat "disk full" as a dropped connection and try to resume anyway | `Open` |
 
 Reading a private key, reading a certificate and parsing a public key happen outside any connection (there may be no connection at all), so `Phase` is `None`.
 When parsing the peer's host key fails during key exchange, the key exchange wraps it into an `SshConnectException` with `Reason` `HostKeyRejected`.

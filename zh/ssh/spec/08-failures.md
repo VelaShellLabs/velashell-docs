@@ -69,7 +69,6 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 | `SshNegotiationException` | `NegotiationFailed` | `KeyExchange` |
 | `SshKeyExchangeException` | `ProtocolError` | `KeyExchange` |
 | `SftpUnavailableException` | `Unsupported` | `Open` |
-| `SftpTransferInterruptedException` | `ClosedByPeer` | `Open` |
 | `SshCommandFailedException` | `CommandFailed` | `Open` |
 
 下面这些 `Phase` 固定，`Reason` **按实情报**：
@@ -82,6 +81,7 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 | `SshAgentException` | `AgentNotRunning`、`AgentUnavailable`、`AgentRefused`、`LimitExceeded`（要加的钥超出报文上限）、`ProtocolError` | `Authenticating` |
 | `SshChannelException` | `ChannelOpenFailed`（带 `OpenFailureReason`）、`ChannelRequestRejected` | `Open` |
 | `SshForwardException` | `ForwardRejected`、`ForwardBindFailed`、`ForwardSetupFailed`、`LimitExceeded`、`ProtocolError`；agent 转发因本机 agent 连不上而没开成时沿用 agent 那边的 `AgentNotRunning` / `AgentUnavailable` | `Open` |
+| `SftpTransferInterruptedException` | 随中断的原因（内层异常）：断线 `ClosedByPeer`；服务端拒写（磁盘满、配额、权限）照内层 `SftpException` 的原因码；调用方取消、本端释放 `Aborted`；关闭时等确认超时 `Timeout`。〔决策〕曾经固定为 `ClosedByPeer`，按原因码判断的调用方会把「磁盘满」当成断线、照样去续传 | `Open` |
 
 读私钥、读证书、解析公钥发生在连接之外（也可能根本没有连接），所以 `Phase` 是 `None`。
 密钥交换里解析对端的主机密钥失败时，由密钥交换把它包成 `Reason` 为 `HostKeyRejected` 的 `SshConnectException`。
