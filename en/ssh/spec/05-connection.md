@@ -318,6 +318,13 @@ The reply is `CHANNEL_SUCCESS` (99) / `CHANNEL_FAILURE` (100),
 When multiple `want_reply = true` requests are sent concurrently on the same channel,
 replies come back in sending order. The request ledger (L6) uses a **queue**, not a dictionary, on this channel.
 
+〔Decision〕**On a channel this side has already wound down, a late reply is absorbed, not treated as out of sync.**
+When the caller cancels while waiting for a reply (a probe command with a timeout, the user closing the tab while a shell is opening), the channel winds down on this side:
+CLOSE is sent, the ledger is closed, requests in flight are settled as "did not succeed", and the channel number stays reserved until the peer's CLOSE (§4.3).
+The peer replies to that request first and only then sends CLOSE — that reply is a legitimate in-flight message (RFC 4254 §5.3)
+and must not be taken as the FIFO falling out of sync; otherwise the terminal, SFTP and tunnels on the same connection would all go down with it.
+Likewise, once the ledger is closed no further `want_reply = true` request is sent: its reply would come back with nobody to claim it.
+
 ### 5.2 Requests we send
 
 | Type | `want_reply` | Fields |
@@ -567,7 +574,7 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 | Data we want to send exceeds the peer's window | Wait for `WINDOW_ADJUST` (backpressure), **no error** |
 | `WINDOW_ADJUST` causes the window to overflow `uint32` | `ProtocolError`, disconnect |
 | Data for a channel received after its `CHANNEL_CLOSE` | Discard, no error (§1 rule 4) |
-| SUCCESS/FAILURE received while the channel request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync) |
+| SUCCESS/FAILURE received while the channel request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync); except on a channel this side has already wound down, where it is absorbed (§5.1) |
 | SUCCESS/FAILURE received while the global request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync) |
 | Message with an unknown number received | Reply `UNIMPLEMENTED`, **carrying the sequence number of the rejected message** (RFC 4253 §11.4); do not disconnect |
 | `UNIMPLEMENTED` / `IGNORE` / `DEBUG` / `EXT_INFO` received | Ignore (replying `UNIMPLEMENTED` to an `UNIMPLEMENTED` would only make both sides echo each other) |

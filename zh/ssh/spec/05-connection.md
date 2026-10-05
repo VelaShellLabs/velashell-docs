@@ -316,6 +316,13 @@ EOF 只发一次：谁先把通道推进到「本端 EOF」谁发；通道正在
 同一条通道上并发发多个 `want_reply = true` 的请求时，
 应答按发送顺序返回。请求账本（L6）在这条通道上用**队列**而不是字典。
 
+〔决策〕**本端收尾过的通道，迟到的应答照单吸收，不算失步。**
+调用方等应答时取消了（探测命令带超时、用户在 shell 打开途中关掉标签页），通道在本端收尾：
+CLOSE 发出、账本关掉、在途的请求以「没成」结算，通道号还扣着等对端的 CLOSE（§4.3）。
+对端按顺序先回那个请求的应答、再回 CLOSE —— 那个应答是合法的在途报文（RFC 4254 §5.3），
+不能拿它判 FIFO 失步，否则同一连接上的终端、SFTP、隧道会一起断。
+同样地，账本关掉之后不再发 `want_reply = true` 的请求：发出去的话应答回来没人认领。
+
 ### 5.2 我们会发的请求
 
 | 类型 | `want_reply` | 字段 |
@@ -565,7 +572,7 @@ sequenceDiagram
 | 我们要发的数据超出对端窗口 | 等待 `WINDOW_ADJUST`（背压），**不报错** |
 | `WINDOW_ADJUST` 导致窗口溢出 `uint32` | `ProtocolError`，断开 |
 | `CHANNEL_CLOSE` 之后收到该通道数据 | 丢弃，不报错（§1 规则 4） |
-| 通道请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步） |
+| 通道请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步）；本端已收尾的通道除外，照单吸收（§5.1） |
 | 全局请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步） |
 | 收到未知编号的报文 | 回 `UNIMPLEMENTED`，**带被拒报文的序号**（RFC 4253 §11.4），不断开 |
 | 收到 `UNIMPLEMENTED` / `IGNORE` / `DEBUG` / `EXT_INFO` | 忽略（对 `UNIMPLEMENTED` 再回 `UNIMPLEMENTED` 只会让两边互相回声） |
