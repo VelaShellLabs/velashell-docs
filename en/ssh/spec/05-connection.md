@@ -163,6 +163,10 @@ During heavy uploads on the same connection (a pile of port-forwarded connection
 if another channel's `WINDOW_ADJUST` queued behind them, the peer would get its window only after all of that had been sent —
 our own upload would slow the download almost to a halt, coupling the two directions. 〔History〕Early on, an adjustment even had to wait for room on the backpressure before it could be enqueued.
 
+〔Decision〕**Senders waiting on backpressure queue in arrival order; when room frees up they are released one at a time from the head of the queue until the room is used up again, and each is charged the moment it is released.**
+〔History〕Early versions woke every waiter after each flush round: they all checked the room, all got through together, the backlog shot past the limit by several messages, and the next round they all went back to sleep together (a thundering herd);
+nor did the first to wait necessarily go first.
+
 So window adjustments go through a separate priority lane: the send pump checks it before taking each item, and an adjustment does not wait on backpressure;
 its bytes still count toward the pending total, so data-plane senders see them. This is safe because:
 
