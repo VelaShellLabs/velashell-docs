@@ -267,7 +267,9 @@ In that case the library still receives packets as usual and **replenishes the w
 〔Decision〕**Completing `StandardInput` sends EOF.** When the caller completes this `PipeWriter` (`Complete` / `CompleteAsync`),
 the library does what `SendEofAsync` does: first send everything already written, then send `CHANNEL_EOF` (§1 item 1: EOF is not closing the channel).
 `SendEofAsync` and `CompleteStandardInputAsync` are still there; the only difference is that they **wait** until the EOF is queued before returning.
-EOF is sent only once: whichever first moves the channel to "local EOF" sends it; neither sends it while the channel is closing or already closed.
+EOF is sent only once: whichever first moves the channel to "local EOF" records that an EOF is owed, and the stdin pump sends it after flushing everything already written (under the channel's own lifetime);
+nothing is sent while the channel is closing or already closed. 〔Decision〕If `SendEofAsync` is cancelled while waiting for the flush, it merely stops waiting, and the EOF is still sent — it used to send the EOF itself after waiting,
+so a cancellation meant the EOF was never sent and a remote `cat` / `sort` waited for input forever.
 
 〔Decision〕**`StandardInput` belongs to the caller; the library never completes it on the caller's behalf.** Writing after the channel has closed makes `WriteAsync` / `FlushAsync` return `IsCompleted`
 (the `PipeWriter` idiom for "the reading side is gone") without throwing; the `AsStream()` stream's write throws `IOException`.

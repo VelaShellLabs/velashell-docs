@@ -265,7 +265,9 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 〔决策〕**完成 `StandardInput` 就是发 EOF。**调用方完成这个 `PipeWriter`（`Complete` / `CompleteAsync`）时，
 库照 `SendEofAsync` 的样子办：先把已写入的内容全部发完，再发 `CHANNEL_EOF`（§1 第 1 条：EOF 不是关通道）。
 `SendEofAsync` 与 `CompleteStandardInputAsync` 仍然在，区别只在于它们会**等** EOF 入队再返回。
-EOF 只发一次：谁先把通道推进到「本端 EOF」谁发；通道正在关或已关时两者都不发。
+EOF 只发一次：谁先把通道推进到「本端 EOF」谁记下「欠一个 EOF」，由 stdin 泵在把已写入的内容冲干净之后发（用通道自己的生命周期）；
+通道正在关或已关时不发。〔决策〕`SendEofAsync` 等冲刷时被取消只是不再等，EOF 照样会发 —— 曾经由它自己在等完之后发，
+被取消就永远不发了，远端的 `cat` / `sort` 一直等输入。
 
 〔决策〕**`StandardInput` 归调用方，库不替它完成。**通道关了之后再写，`WriteAsync` / `FlushAsync` 返回 `IsCompleted`
 （`PipeWriter` 表达「读的一方不要了」的惯用法），不抛；`AsStream()` 那条流的写抛 `IOException`。
