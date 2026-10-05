@@ -340,7 +340,7 @@ sequenceDiagram
 | `UserKnownHostsFile` | 主机密钥策略改用该文件（写了多个路径时只用第一个）；`none` / `/dev/null` → **不读也不写**任何 `known_hosts`（`KnownHostsPolicy.WithoutFile`：每台主机都当成没见过，接受了也不记）。`StrictHostKeyChecking` 为 `ask` / 缺省且调用方给了策略时，这一项不起作用（见下一行） |
 | `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝 |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。跳板拿到哪些调用方凭据见下 |
-| `ProxyCommand` | 代理命令拨号器；`none` 表示不用 |
+| `ProxyCommand` | 代理命令拨号器，**要调用方批准才执行**（见下）；`none` 表示不用 |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数。由它们打开的转发按 `Continue` 请求（`07-forwarding.md` §7.5.8）：本机没有 agent / 显示、服务端拒绝时 shell 照常启动 |
 | `ForwardAgent` 的取值 | 四种写法（`ssh_config(5)`）：`yes` → 转发默认的 agent；`no`（缺省）→ 不转发；agent 套接字路径（展开 `~` 与 `%d` `%u` `%h` `%r`）→ 转发那一个；`$环境变量名` → 转发变量值指的那一个，变量没设或为空时不转发。`yes` / `no` 不分大小写。〔历史〕曾经只认 `yes`：写了路径的配置被当成 `no`，转发悄悄没开 |
 | `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
@@ -348,6 +348,13 @@ sequenceDiagram
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
 取确定的一个比取一个依赖顺序细节的要好。）
+
+〔决策〕**配置里的 `ProxyCommand` 要调用方批准才执行**（`SshConfigConnectOptions.ApproveProxyCommand`），与 `Match exec`（§7.1）同一条理由：
+配置文件常常是从别处拷来的、同步过来的、别人给的，一行 `Host *` 加一行 `ProxyCommand …` 就是「连任何一台主机都先在本机跑一个程序」。
+回调拿到的是 `SshProxyCommandRequest`：主机名，以及**展开 `%h` `%p` `%r` `%n` 之后**将要执行的那一行（照这一跳自己的主机与端口展开）。
+没给回调、或者回调交回 `false`，映射就以 `InvalidConfiguration` 失败 —— **不悄悄改成直连**：写着 `ProxyCommand` 的主机常常根本直连不到，
+直连也可能绕过使用者特意设的代理。`ProxyJump` 压过 `ProxyCommand` 时那条命令用不上，也就不问。
+直接用 `DialerChain.ProxyCommand` 的调用方自己写下了那条命令，不经过这道批准。
 
 〔决策〕跳板链的解析有深度上限（8）并检测环：`a` 的跳板是 `b`、`b` 的跳板又是 `a`
 这种配置应当报错，而不是无限递归。

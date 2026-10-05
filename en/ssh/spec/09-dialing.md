@@ -342,7 +342,7 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `UserKnownHostsFile` | The host key policy uses that file instead (only the first path if several are given); `none` / `/dev/null` → **no** `known_hosts` is read or written (`KnownHostsPolicy.WithoutFile`: every host counts as unseen, and accepting it records nothing). When `StrictHostKeyChecking` is `ask` / absent and the caller supplied a policy, this item has no effect (see the next row) |
 | `StrictHostKeyChecking` | `yes` → reject unseen hosts; `accept-new` / `no` / `off` → accept and record (a **changed** key is still rejected); `ask` / absent → if the caller supplied `SshConfigConnectOptions.HostKeyPolicy`, use the caller's, even if the configuration sets `UserKnownHostsFile`; otherwise, with `UserKnownHostsFile` set, use that file and ask `AskUnknownHost` about unseen hosts (reject if no ask callback is given), and with neither set, use the default `known_hosts` and reject unseen hosts |
 | `ProxyJump` | Comma-separated jump chain; each jump host is **resolved against the same configuration** (with its own `User`, `Port`, `IdentityFile`); `none` means not used. Which of the caller's credentials a jump host gets: see below |
-| `ProxyCommand` | Proxy command dialer; `none` means not used |
+| `ProxyCommand` | Proxy command dialer, **executed only with the caller's approval** (see below); `none` means not used |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | Session parameters (agent and X11 forwarding for shell / exec), not connection parameters. Forwarding turned on by them is requested with `Continue` (`07-forwarding.md` §7.5.8): when there is no local agent / display, or the server refuses, the shell starts normally |
 | Values of `ForwardAgent` | Four forms (`ssh_config(5)`): `yes` → forward the default agent; `no` (default) → do not forward; an agent socket path (with `~` and `%d` `%u` `%h` `%r` expanded) → forward that one; `$ENV_VAR_NAME` → forward the one the variable's value points to, and do not forward when the variable is unset or empty. `yes` / `no` are case-insensitive. 〔History〕It used to accept only `yes`: a configuration that gave a path was treated as `no`, and forwarding silently stayed off |
 | `ForwardX11Timeout` | Validity period of the X11 forwarding turned on by `ForwardX11` (`07-forwarding.md` §7.5.7). `ssh_config` time format: a number followed by `s` / `m` / `h` / `d` / `w`, no unit means seconds, several parts add up (`1h30m`); `0` means no expiry. An invalid value is ignored and the default of 20 minutes applies |
@@ -350,6 +350,13 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;
 picking a deterministic one is better than picking one that depends on ordering details.)
+
+〔Decision〕**A `ProxyCommand` from the configuration runs only with the caller's approval** (`SshConfigConnectOptions.ApproveProxyCommand`), for the same reason as `Match exec` (§7.1):
+configuration files are often copied from elsewhere, synced in, or given by someone else, and one `Host *` line plus one `ProxyCommand …` line means "run a local program before connecting to any host".
+The callback receives an `SshProxyCommandRequest`: the host name and the command line **after expanding `%h` `%p` `%r` `%n`** (expanded for that hop's own host and port), which is what will run.
+With no callback, or when it returns `false`, the mapping fails with `InvalidConfiguration` — **it does not silently fall back to a direct connection**: hosts configured with `ProxyCommand`
+are often unreachable directly, and connecting directly could bypass a proxy the user set on purpose. When `ProxyJump` takes precedence the command is not used, so nothing is asked.
+Callers using `DialerChain.ProxyCommand` directly wrote the command themselves and do not go through this approval.
 
 〔Decision〕Jump chain resolution has a depth limit (8) and detects cycles: a configuration where `a`'s jump host is `b` and `b`'s jump host is `a`
 should produce an error, not infinite recursion.

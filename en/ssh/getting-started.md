@@ -595,7 +595,7 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
 each jump host in `ProxyJump` is **resolved against the same configuration**, and the jump chain has a depth limit and cycle detection.
 Item-by-item rules are in [`spec/09-dialing.md`](spec/09-dialing.md) §7.
 
-Two security constraints worth knowing:
+Three security constraints worth knowing:
 
 1. **`Match exec` executes no commands by default.** It means *parsing a configuration file can run arbitrary programs on the local machine*,
    and configuration files are often copied from elsewhere, synced in, or given by someone else. Without an evaluator,
@@ -609,6 +609,13 @@ Two security constraints worth knowing:
 2. **`Include` has a depth limit (16) and cycle detection.** `a` including `b` and `b` including `a` again
    is easy to write, and without cycle detection the symptom is *the whole process freezes while reading the configuration*.
    One load reads at most 256 files, and only regular files of at most 1 MiB — anything beyond that is skipped without an error.
+3. **A `ProxyCommand` from the configuration runs only if you approve it**, for the same reason as item 1. The callback gets the expanded command line that will run:
+
+   ```csharp
+   new SshConfigConnectOptions { ApproveProxyCommand = (req, ct) => AskUserAsync(req.Host, req.Command, ct) }
+   ```
+
+   Without a callback, or if it does not approve, `CreateConnectionOptionsAsync` fails with `InvalidConfiguration`; it does not silently connect directly.
 
 Other details: `Match` supports `all` / `host` / `originalhost` / `user` / `localuser`;
 conditions are ANDed, and `!` negation is supported; `canonical` / `final` never match (we do no host name canonicalization).
