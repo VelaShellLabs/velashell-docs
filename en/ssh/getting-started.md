@@ -118,6 +118,8 @@ For automation, pin the fingerprint so that not even the first connection is tru
 HostKeyPolicy = new PinnedFingerprintHostKeyPolicy(["SHA256:abc..."])
 ```
 
+Fingerprints are read leniently: the `SHA256:` prefix is optional and case-insensitive, and base64 `=` padding and surrounding whitespace are dropped; the body after the prefix is compared exactly (base64 is case-sensitive).
+
 ---
 
 ## 3. Credentials

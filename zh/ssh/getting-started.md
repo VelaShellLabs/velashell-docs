@@ -116,6 +116,8 @@ HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
 HostKeyPolicy = new PinnedFingerprintHostKeyPolicy(["SHA256:abc..."])
 ```
 
+指纹的写法宽松：`SHA256:` 前缀可有可无、大小写不论，base64 的 `=` 填充与前后空白都会去掉；前缀之后的主体逐字比对（base64 区分大小写）。
+
 ---
 
 ## 三 凭据
