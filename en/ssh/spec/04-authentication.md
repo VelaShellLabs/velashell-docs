@@ -401,6 +401,12 @@ with `NeedsPassphrase = true` — the user kept re-entering the correct passphra
 ② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
 so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
 
+〔Decision〕**`openssh-key-v1` is checked for internal consistency too**, and any mismatch is `KeyFormatInvalid`:
+① the plaintext public section at the head of the file must be the same key as the one derived from the private part (it used to be discarded unread — yet `ssh-keygen -y` and agents list that public section);
+② an Ed25519 private section carries the public key twice (on its own, and after the seed), and the seed yields a third copy; all three must be identical;
+③ an ECDSA key type and curve name must agree (`ecdsa-sha2-nistp256` goes with `nistp256`);
+④ an RSA `n` must be exactly `p·q` (with p and q both greater than 1). A broken file's only symptom used to be "the server does not accept this public key".
+
 〔Decision〕**The KDF iteration count of an encrypted PKCS#8 key is capped at ten million** (PBKDF2 under PBES2, and PBES1 / PKCS#12 PBE); it is read from the DER and checked before handing the key to the BCL,
 and a larger count is reported as `KeyFormatInvalid`. The count comes from the file, and **.NET sets no limit when importing encrypted PKCS#8** (3 million iterations import fine in testing): a file altered to `int.MaxValue`
 runs for about five minutes at roughly seven million iterations per second, synchronously and uncancellably. Common values are OpenSSL's 2048 and OWASP's recommended 600,000.

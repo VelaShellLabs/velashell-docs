@@ -390,6 +390,12 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 ② 私钥半派生出的公钥必须与 `Public-Lines` 是同一把，不是就报 `KeyFormatInvalid` —— 未加密 `.ppk` 的 MAC 键是公开的，
 改了公钥段再重算 MAC，MAC 照样对得上；不核对的话拿到的是「不是你以为的那把」钥，症状只是服务端一句「不接受这把公钥」。
 
+〔决策〕**`openssh-key-v1` 同样核对内部一致性**，对不上一律 `KeyFormatInvalid`：
+① 文件头部明文的公钥段必须与私钥导出的是同一把（曾经直接丢掉不看 —— 而 `ssh-keygen -y`、agent 列出来的都是公钥段那一把）；
+② Ed25519 私钥区里公钥出现两次（单独一份、种子后面一份），种子还能导出第三份，三份必须相同；
+③ ECDSA 的密钥类型与曲线名要对得上（`ecdsa-sha2-nistp256` 配 `nistp256`）；
+④ RSA 的 `n` 必须正好是 `p·q`（p、q 都大于 1）。坏文件的症状本来只是一句「服务端不接受这把公钥」。
+
 〔决策〕**加密 PKCS#8 的 KDF 迭代数上限一千万次**（PBES2 的 PBKDF2，以及 PBES1 / PKCS#12 PBE），交给 BCL 之前先从 DER 里读出来核对，
 超了报 `KeyFormatInvalid`。迭代数来自文件，而 **.NET 导入加密 PKCS#8 不设上限**（实测 300 万次照常导入）：被改成 `int.MaxValue` 的文件
 按每秒约七百万次要跑五分钟，同步、停不下来。常见取值是 OpenSSL 的 2048、OWASP 建议的 60 万。
