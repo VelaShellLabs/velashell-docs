@@ -472,6 +472,12 @@ is the kind of failure users find hardest to recover from on their own.
 - The password's lifetime in memory should be as short as possible; `ZeroMemory` it after use.
   〔Decision〕The credential interface accepts `Func<CancellationToken, ValueTask<...>>` rather than `string`,
   so the caller can decrypt and retrieve it only when actually needed.
+- 〔Decision〕**The same goes for private-key passphrases**: besides the overloads taking `string`, `SshPrivateKeyFile.Parse` / `LoadAsync` have overloads taking `ReadOnlySpan<char>` /
+  `ReadOnlyMemory<char>` — the passphrase can live in the caller's own `char[]` and be cleared by the caller afterwards (a `string` is immutable and cannot be cleared).
+  Every intermediate copy the library derives from the passphrase (UTF-8 bytes, the derived key and IV, the decrypted private section) is zeroed.
+  **The cancellation token reaches the passphrase KDF**: `bcrypt_pbkdf` checks it every round, Argon2 and PBKDF2 check it before starting; cancellation throws `OperationCanceledException`
+  and is not wrapped as "private key format invalid". 〔History〕Early versions used `LoadAsync`'s token only for reading the file, so a high-round key could not be stopped once the KDF started.
+  〔Not implemented〕The private key text itself still comes in as a `string` (the parsers of every format work on `string`) — the contents of an unencrypted key file cannot be cleared; that is the current boundary.
 - Writing the password into any log or `IPacketTap` is **forbidden** (General §5.5).
 
 ---

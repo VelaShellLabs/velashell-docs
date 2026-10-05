@@ -461,6 +461,12 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 - 密码在内存里的生命周期要尽量短，用完 `ZeroMemory`。
   〔决策〕凭据接口收 `Func<CancellationToken, ValueTask<...>>` 而不是 `string`，
   让使用者可以在真正需要时才解密取出。
+- 〔决策〕**私钥的口令同理**：`SshPrivateKeyFile.Parse` / `LoadAsync` 除了收 `string` 的重载，还有收 `ReadOnlySpan<char>` /
+  `ReadOnlyMemory<char>` 的 —— 口令放在调用方自己的 `char[]` 里，用完自己清零（`string` 不可变，清不掉）。
+  库里由口令派生出的中间副本（UTF-8 字节、派生出的密钥与 IV、解出的明文私钥区）一律清零。
+  **取消令牌交给口令派生**：`bcrypt_pbkdf` 逐轮检查，Argon2 与 PBKDF2 开算之前检查；取消时抛 `OperationCanceledException`，
+  不被包成「私钥格式不对」。〔历史〕早期 `LoadAsync` 的令牌只管读文件，高轮数的私钥一旦开算就停不下来。
+  〔未实现〕私钥文本本身仍以 `string` 进来（各格式的解析基于 `string`）—— 未加密私钥文件的内容清不掉，这是现在的边界。
 - **禁止**把密码写进任何日志或 `IPacketTap`（总则 §5.5）。
 
 ---
