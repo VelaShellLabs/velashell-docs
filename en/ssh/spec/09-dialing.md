@@ -83,6 +83,8 @@ Therefore:
   (satellite links, transoceanic jump hosts) still had TCP cut off at 30 seconds, and that 30 seconds appeared in no configuration anywhere.
 - During the host key decision, the connect timer is **paused** (`03-key-exchange.md` §5.3);
   a decision inside a jump hop likewise pauses the **outer** timer — the entire connection setup of that inner hop happens within the outer dialing phase.
+  Pausing the outer timer (for the decision here and for the authentication in the next item) settles its account by the time actually used as well: if the outer budget is already used up by then,
+  the outer timeout is declared on the spot, the inner hop is cancelled with it, and no person is asked.
 - 〔Decision〕**Authentication on a jump host pauses the outer timer too.** Jump host authentication is often waiting for a person (typing a password, reading a one-time code off a phone);
   it runs under the jump host's own authentication timer. Counted against the outer connect timeout, a user spending twenty seconds on a one-time code for the jump host
   would long since have run out a fifteen-second outer connect timeout. The outer connect timeout is designed for network round trips; time spent waiting for a person does not belong in it.
