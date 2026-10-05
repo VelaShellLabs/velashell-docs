@@ -36,6 +36,10 @@ Multi-line peer output (a remote command's stderr) **contributes only its tail**
 with line breaks collapsed into a single " ⏎ " so it stays on one line (a single newline is enough to forge another record in a log); the line saying what went wrong is usually the last one.
 A signal name from the peer is cleaned the same way and cut to 32 characters. The full original stays in `SshCommandFailedException.Result`.
 
+〔Decision〕**These rules are public** (`VelaShell.Ssh.Diagnostics.PeerText.Sanitize` / `SanitizeTail`): consumers who put the original text (`ServerMessage`,
+`PeerDescription`, SFTP paths) into their own UI text use the same rules instead of writing their own — the host once appended the original text after a message that had already been cleaned,
+showing the same sentence twice, with the second copy bypassing the cleaning.
+
 ---
 
 ## 2. Exception hierarchy

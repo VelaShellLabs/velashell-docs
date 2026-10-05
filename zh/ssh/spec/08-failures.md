@@ -34,6 +34,10 @@
 换行收成一个「 ⏎ 」接成一行（一个换行就能在日志里伪造一行别的记录），出错的那一句通常在最后；
 对端给的信号名同样清洗、截到 32 个字符。原文完整地留在 `SshCommandFailedException.Result` 里。
 
+〔决策〕**这套规则公开出来**（`VelaShell.Ssh.Diagnostics.PeerText.Sanitize` / `SanitizeTail`）：使用者要把原话（`ServerMessage`、
+`PeerDescription`、SFTP 的路径）自己拼进界面文案时用同一套，不必各写一份 —— 宿主曾经在已经清洗过的消息后面再追加一遍原文，
+同一句话显示两遍，第二遍绕过了清洗。
+
 ---
 
 ## 二 异常层级
