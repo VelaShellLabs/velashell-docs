@@ -43,6 +43,10 @@ sequenceDiagram
 Rationale: falling back amounts to bypassing the server administrator's configuration when they have explicitly disabled the subsystem.
 Report the failure truthfully (`SftpUnavailable`, with the message explaining that the server may have disabled the sftp subsystem).
 
+〔Decision〕**Only a refused `subsystem` request is reported as `SftpUnavailable`.** When the `session` channel itself does not open (`CHANNEL_OPEN_FAILURE`: the server's `MaxSessions` is full or
+the open is administratively prohibited; or the local channel count / window budget is exhausted), the `SshChannelException` (`ChannelOpenFailed`, with its reason code) is thrown as is.
+Everything used to be rewritten as "sshd_config is missing Subsystem": users went to change configuration that was fine, and lost the information that retrying later could work.
+
 ---
 
 ## 2 Outer structure of SFTP messages

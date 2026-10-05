@@ -41,6 +41,10 @@ sequenceDiagram
 理由：回退等于在服务端管理员明确禁用 subsystem 的情况下绕过它的配置。
 把失败如实报出来（`SftpUnavailable`，并在消息里说明可能是服务端禁用了 sftp 子系统）。
 
+〔决策〕**只有 `subsystem` 请求被拒才报 `SftpUnavailable`。**`session` 通道都没开成（`CHANNEL_OPEN_FAILURE`：服务端 `MaxSessions` 满了、
+管理上禁止；或者本端的通道数 / 窗口预算用尽）原样抛 `SshChannelException`（`ChannelOpenFailed`，带原因码）。
+曾经一律改写成「sshd_config 缺 Subsystem」：用户去改一个本来没问题的配置，也丢了「稍后可以重试」这个信息。
+
 ---
 
 ## 二 SFTP 报文的外层结构
