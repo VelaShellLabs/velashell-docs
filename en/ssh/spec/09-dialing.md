@@ -288,7 +288,7 @@ sequenceDiagram
 - The originator address of `direct-tcpip` is filled with `127.0.0.1`, port `0`: we have no real originating socket,
   and fabricating a realistic-looking address would only mislead the server's logs.
 - A rejected channel is judged `ProxyRefused`, with `Detail` carrying the reason code and description from `CHANNEL_OPEN_FAILURE`;
-  a failure to connect to the jump host is thrown as-is, but `Hops` marks the failure as being at the jump hop.
+  a failure to connect to the jump host is thrown as-is, but `Hops` marks the failure as being at the jump hop. 〔Decision〕**When the jump host's own authentication fails, an `SshAuthenticationException` is still thrown**: the per-attempt records and the methods the server offered stay at the top level, and the message names the hop (one already reported this way from a deeper hop passes through unchanged rather than being wrapped again). 〔History〕It used to be rewritten to `SshConnectException`, leaving that structured information only in `InnerException`, so the host treated it as "cannot connect" rather than "authentication failed".
   〔Decision〕**Only `CHANNEL_OPEN_FAILURE` means "refused to forward".** If the jump host itself drops or violates the protocol while the tunnel is being opened, report its own reason code
   (`ClosedByPeer` is retryable, `ProtocolError` is not), with `Hops` still marking the forwarding hop. This used to be rewritten to `ProxyRefused` every time, so a dropped connection was described as "the jump host refused".
 - 〔Decision〕The returned stream **owns** the jump connection: when the stream is disposed, first close the channel, then dispose the jump connection.

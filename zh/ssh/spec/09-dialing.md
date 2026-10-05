@@ -286,7 +286,7 @@ sequenceDiagram
 - `direct-tcpip` 的来源地址填 `127.0.0.1`、端口 `0`：我们没有一个真实的来源套接字，
   编造一个看起来真实的地址只会误导服务端的日志。
 - 通道被拒判 `ProxyRefused`，`Detail` 带 `CHANNEL_OPEN_FAILURE` 的原因码与描述；
-  跳板的建连失败原样抛出，但 `Hops` 标明失败在跳板那一跳。
+  跳板的建连失败原样抛出，但 `Hops` 标明失败在跳板那一跳。〔决策〕**跳板自己的认证没过，仍抛 `SshAuthenticationException`**：逐条尝试记录与服务端给的方法留在最外层，消息里说清是哪一跳（更深一跳已经这样报过的原样往外传，不再套一层）。〔历史〕曾经改写成 `SshConnectException`，那些结构化信息只剩在 `InnerException` 里，宿主把它当成「连不上」而不是「认证失败」。
   〔决策〕**只有 `CHANNEL_OPEN_FAILURE` 才是「不肯转发」。**开隧道时跳板自己断了、违反了协议，照它自己的原因码报
   （`ClosedByPeer` 可重试，`ProtocolError` 不可），`Hops` 照样标出转发那一跳。曾经一律改写成 `ProxyRefused`，断线被说成了「跳板拒绝」。
 - 〔决策〕返回的流**拥有**跳板连接：流释放时先关通道、再释放跳板连接。
