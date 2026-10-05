@@ -1737,6 +1737,9 @@ Both are now done, each with a constraint:
   OpenSSH) and cycle detection** — `a` including `b` and `b` including `a` is easy to write, and
   without cycle detection the symptom is **the whole process freezing while reading config**.
   One test case pins exactly this.
+  A **total budget** (at most 256 files per load) stops the "wide" explosion — a set of files that
+  `Include dir/*` each other, where every chain without a cycle is walked; **only regular files of at
+  most 1 MiB are read**, so `Include /dev/zero` or a FIFO cannot hang config loading (`spec/09` §7.1).
   Glob results are **sorted**: directory enumeration order differs across file systems,
   and `ssh_config` is "first value wins" — nondeterministic order means nondeterministic results.
 - **`Match exec` doesn't execute by default.** Without an evaluator, blocks with an `exec`

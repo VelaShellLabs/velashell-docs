@@ -373,6 +373,13 @@ and wildcard matches are sorted ordinally — directory enumeration order differ
   (those blocks applied to every host unconditionally); and settings after the `Include` ended up in the included file's last block.
 - **Cycle detection looks only at the current include chain** (comparing normalized full paths): including the same file from two `Host` blocks is a normal pattern, not a cycle.
   The depth limit is 16: anything deeper is not expanded, and no error is raised — the rest of the configuration remains usable.
+- 〔Decision〕**One load reads at most 256 files** (including the top-level one, `MaxIncludedFiles`); once the budget is spent, further `Include`s are not expanded and no error is raised.
+  Cycle detection looks only at the current chain and the depth limit only bounds depth: when N files `Include dir/*` each other, every chain without a cycle is walked,
+  which is on the order of N!/(N−k)! expansions (about ten million for 10 files).
+- 〔Decision〕**Only regular files are read, at most 1 MiB each** (`MaxConfigFileBytes`); a larger file is skipped entirely. **The size is checked before opening**:
+  device files and FIFOs report a size of 0; `Include /dev/zero` would read forever, and opening a FIFO blocks until someone writes to it —
+  the cancellation token cannot reach either case. Anything of size 0 is never opened (a genuinely empty file has no settings anyway). Reading is still capped,
+  so a file that grows or is replaced after its size was checked cannot be read without limit.
 
 Each `Match` condition has three outcomes: satisfied, not satisfied, and **cannot be evaluated**. It cannot be evaluated when:
 

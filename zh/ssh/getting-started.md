@@ -606,6 +606,7 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
    这样「要不要跑外部命令」这个决定明确地落在你身上，而不是藏在库的默认行为里。
 2. **`Include` 有深度上限（16）与环检测。** `a` include `b`、`b` 又 include `a`
    很容易写出来，而没有环检测的表现是*读配置的时候整个进程不动了*。
+   一次最多读 256 个文件，只读普通文件、单个最大 1 MiB —— 超出的部分跳过，不报错。
 
 其余细节：`Match` 支持 `all` / `host` / `originalhost` / `user` / `localuser`，
 条件之间是与，支持 `!` 取反；`canonical` / `final` 永远不匹配（我们不做主机名规范化）。

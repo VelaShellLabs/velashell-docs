@@ -608,6 +608,7 @@ Two security constraints worth knowing:
    This way the decision "whether to run external commands" clearly rests with you, rather than hiding in the library's default behavior.
 2. **`Include` has a depth limit (16) and cycle detection.** `a` including `b` and `b` including `a` again
    is easy to write, and without cycle detection the symptom is *the whole process freezes while reading the configuration*.
+   One load reads at most 256 files, and only regular files of at most 1 MiB — anything beyond that is skipped without an error.
 
 Other details: `Match` supports `all` / `host` / `originalhost` / `user` / `localuser`;
 conditions are ANDed, and `!` negation is supported; `canonical` / `final` never match (we do no host name canonicalization).

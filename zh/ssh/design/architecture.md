@@ -1681,6 +1681,8 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
   也不该碰文件系统。展开时有**深度上限（16，与 OpenSSH 一致）与环检测** ——
   `a` include `b`、`b` 又 include `a` 很容易写出来，而没有环检测的表现是
   **读配置的时候整个进程不动了**。有一条用例专门钉这个。
+  另有**总量上限**（一次最多读 256 个文件）挡「宽」的爆炸 —— 一组文件互相 `Include dir/*`，
+  每条不成环的链都要走一遍；**只读普通文件、单个最大 1 MiB**，`Include /dev/zero` 与 FIFO 不会把读配置拖死（`spec/09` §7.1）。
   通配结果**排序**：目录枚举顺序在不同文件系统上不一样，
   而 `ssh_config` 是「先出现的值赢」—— 顺序不定就意味着结果不定。
 - **`Match exec` 默认不执行。** 没有求值器时，带 `exec` 条件的块**一律不匹配**。
