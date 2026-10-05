@@ -322,7 +322,9 @@ When treating an SSH channel as a bidirectional byte stream:
 - 〔Decision〕**Values starting with `-` are not substituted either** (same failure). Every character may be legal and the value can still turn into something else: `nc` / `ncat` / `socat` / `ssh`
   in the template parse values such as `-e` or `-oProxyUseFdpass` as **options** — argument injection (the same class as Git's CVE-2017-1000117).
   Legitimate host and user names do not start with `-`.
-- The program exits before the handshake completes: judged `ProxyRefused`, with `Detail` carrying the exit code and the tail of stderr.
+- The program exits before connecting (before it has written anything to stdout): judged `ProxyRefused` (`Phase` is `Dialing`), with the message carrying the exit code and the tail of stderr (not truncated, at most 4096 characters),
+  and `Hops` carrying the `ProxyCommand` hop. 〔Decision〕It used to throw an `IOException`, which connection setup classified as "the peer closed the connection", with the message cut to 256 characters —
+  proxy programs often explain the failure only on the last line of stderr, which is exactly the part that was cut. A program that exits with a non-zero code after it has written data means the connection dropped (`ClosedByPeer`); the message carries stderr as well.
 - The local shell cannot start (the program `ComSpec` points to is missing or not executable): judged `InvalidConfiguration` — retrying will not help.
 - When the stream is disposed, close the program's standard input to give it a chance to exit gracefully; if it still has not exited after a short wait, terminate the whole process tree.
 - 〔Limitation, stated honestly〕On Windows, a child process's standard input and output are anonymous pipes, and anonymous pipes do not support overlapped IO:

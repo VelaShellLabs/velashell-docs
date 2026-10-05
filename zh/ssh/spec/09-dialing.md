@@ -320,7 +320,9 @@ sequenceDiagram
 - 〔决策〕**以 `-` 开头的值同样不代入**（同一个失败）。字符全都合法，值本身照样能变成别的东西：模板里的 `nc` / `ncat` / `socat` / `ssh`
   会把 `-e`、`-oProxyUseFdpass` 这样的值当成**选项**解析 —— 那是参数注入（与 Git 的 CVE-2017-1000117 同一类）。
   合法的主机名与用户名不以 `-` 开头。
-- 程序在握手完成前退出：判 `ProxyRefused`，`Detail` 带退出码与 stderr 末尾。
+- 程序在连上之前退出（还没在 stdout 上输出任何数据）：判 `ProxyRefused`（`Phase` 为 `Dialing`），消息带退出码与 stderr 末尾（不截断，最多 4096 个字符），
+  `Hops` 带上 `ProxyCommand` 这一跳。〔决策〕曾经抛的是 `IOException`，建连路上被归成「对端断开」，消息还被截到 256 个字符 ——
+  代理程序往往只在 stderr 的最后一行说明原因，截掉的正是那一段。输出过数据之后才以非零退出码结束的，是连接断了（`ClosedByPeer`），消息里同样带 stderr。
 - 本机的 shell 起不来（`ComSpec` 指向的程序不在、没有执行权限）：判 `InvalidConfiguration` —— 重试不会好。
 - 流释放时关闭程序的标准输入，给它一个体面退出的机会；短暂等待后仍未退出则结束整个进程树。
 - 〔限制，如实说明〕Windows 上子进程的标准输入输出是匿名管道，而匿名管道不支持重叠 IO：
