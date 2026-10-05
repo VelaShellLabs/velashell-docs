@@ -497,7 +497,7 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
-| `KeepAliveInterval` | 0 (off) | Interval since **the last receipt of any message**, not a fixed period |
+| `KeepAliveInterval` | 0 (off) | Interval since **the last receipt of any message**, not a fixed period. Capped at `int.MaxValue` milliseconds (about 24.8 days); a larger value throws `ArgumentOutOfRangeException` at construction |
 | `KeepAliveMaxMissed` | 3 | This many consecutive probes without any reply → the connection is declared dead |
 
 **Key points**:
@@ -605,6 +605,12 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 | The peer opens a channel type we don't recognize | Reply `CHANNEL_OPEN_FAILURE`; the description is truncated to 256 characters — an overlong type name from the peer is not echoed back verbatim |
 | Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException`, **do not disconnect the session** |
 | Channel count exceeds `MaxChannels` (〔Decision〕default 512) | Same as above |
+
+〔Decision〕**Invalid values for these limits throw `ArgumentOutOfRangeException` when they are set**, instead of causing trouble after the connection is up:
+`MaxChannels` must be at least 1; `SessionWindowBudgetBytes`, `MaxQueuedReplyBytes` and the channel's `ReceiveMaxPacketBytes` must be positive;
+`ChannelIdReuseDelay` must not be negative. The upper bound of `ReceiveMaxPacketBytes` (it must fit within the transport's packet limit, see [01 §1.1](01-transport-framing.md)) is checked when the channel is opened.
+〔History〕Early versions did not validate: `MaxQueuedReplyBytes = 0` declared the connection dead on the very first reply; a zero or negative `ReceiveMaxPacketBytes` was cast to `uint` and announced to the peer as is;
+a keepalive interval over about 24.8 days overflowed the millisecond count in the keepalive loop into a negative number and the loop exited silently — keepalive was configured but never ran.
 
 〔Decision〕**When disconnecting with `ProtocolError`, send `DISCONNECT(2)` first, then declare the session dead.**
 In the reverse order, the send path would refuse at its first step because it is "already faulted", and `DISCONNECT` would never reach the peer —

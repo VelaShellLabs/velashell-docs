@@ -495,7 +495,7 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `KeepAliveInterval` | 0（关闭） | 距**上次收到任何报文**的间隔，不是固定周期 |
+| `KeepAliveInterval` | 0（关闭） | 距**上次收到任何报文**的间隔，不是固定周期。上限 `int.MaxValue` 毫秒（约 24.8 天），超过时构造就抛 `ArgumentOutOfRangeException` |
 | `KeepAliveMaxMissed` | 3 | 连续这么多次没等到任何应答 → 判定连接已死 |
 
 **要点**：
@@ -603,6 +603,12 @@ sequenceDiagram
 | 对端开不认识的通道 | 回 `CHANNEL_OPEN_FAILURE`；描述文字截到 256 字符 —— 不把对端给的超长类型名原样回显 |
 | 会话窗口总预算超限 | 拒绝开新通道，抛 `SshChannelException`，**不断开会话** |
 | 通道数超过 `MaxChannels`（〔决策〕默认 512） | 同上 |
+
+〔决策〕**这些限额的非法值在设值时就抛 `ArgumentOutOfRangeException`**，不等连上了再出事：
+`MaxChannels` 至少为 1，`SessionWindowBudgetBytes`、`MaxQueuedReplyBytes` 与通道的 `ReceiveMaxPacketBytes` 必须为正，
+`ChannelIdReuseDelay` 不能为负。`ReceiveMaxPacketBytes` 的上限（装得进传输层的报文上限，见 [01 §1.1](01-transport-framing.md)）在开通道时核对。
+〔历史〕早期不校验：`MaxQueuedReplyBytes = 0` 让第一条应答就把连接判死；`ReceiveMaxPacketBytes` 为 0 或负数照样转成 `uint` 宣告给对端；
+保活间隔超过约 24.8 天时保活循环里的毫秒数溢出成负数，循环静默退出 —— 设了保活等于没设。
 
 〔决策〕**以 `ProtocolError` 断开时，先把 `DISCONNECT(2)` 送出去，再判死。**
 顺序反了的话发送路径第一步就会因为「已经故障」而拒绝，`DISCONNECT` 永远到不了对端 ——
