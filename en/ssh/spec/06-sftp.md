@@ -207,6 +207,9 @@ repeated: string type ‖ string data
 〔Decision〕At most 1024 extended attribute pairs are kept, and **the rest are read and discarded** — parsing must not simply stop at the limit: in a `NAME` reply, the next entry would start in the middle of the remaining bytes.
 It cannot spin: every pair is at least 8 bytes, so however large the count, the number of iterations is bounded by the message length.
 
+〔Decision〕**Only known flag bits are written** (the five in the layout above). Attributes from a stat may carry bits this library does not know (fields from v4 onwards); writing them back without the matching fields
+means that changing one field of a stat result and sending `SETSTAT` produces a malformed message — the server reads a field that is not there.
+
 ### 4.3 `SSH_FXP_READ` / `SSH_FXP_WRITE`
 
 | READ | | | WRITE | | |
