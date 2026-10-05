@@ -392,6 +392,12 @@ with `NeedsPassphrase = true` — the user kept re-entering the correct passphra
 ② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
 so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
 
+〔Decision〕**The KDF iteration count of an encrypted PKCS#8 key is capped at ten million** (PBKDF2 under PBES2, and PBES1 / PKCS#12 PBE); it is read from the DER and checked before handing the key to the BCL,
+and a larger count is reported as `KeyFormatInvalid`. The count comes from the file, and **.NET sets no limit when importing encrypted PKCS#8** (3 million iterations import fine in testing): a file altered to `int.MaxValue`
+runs for about five minutes at roughly seven million iterations per second, synchronously and uncancellably. Common values are OpenSSL's 2048 and OWASP's recommended 600,000.
+An encrypted PKCS#8 key does not reveal its key type, so RSA and ECDSA are tried in turn, each attempt running the whole KDF — 〔Decision〕when the ciphertext is at most 320 bytes ECDSA is tried first
+(an elliptic-curve key, even P-521 with its public key, is under 260 bytes; the smallest 512-bit RSA key is over 340), so a correct passphrase costs one KDF run.
+
 ---
 
 ## 5 `password` (RFC 4252 §8)
