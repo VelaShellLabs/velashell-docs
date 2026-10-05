@@ -398,6 +398,11 @@ runs for about five minutes at roughly seven million iterations per second, sync
 An encrypted PKCS#8 key does not reveal its key type, so RSA and ECDSA are tried in turn, each attempt running the whole KDF — 〔Decision〕when the ciphertext is at most 320 bytes ECDSA is tried first
 (an elliptic-curve key, even P-521 with its public key, is under 260 bytes; the smallest 512-bit RSA key is over 340), so a correct passphrase costs one KDF run.
 
+〔Decision〕**A private key file is foreign input, and anything that cannot be understood is an `SshPrivateKeyException` (`KeyFormatInvalid`)**, whatever the format and wherever the error is:
+truncation (a copy and paste lost the last line, with the base64 breaking exactly on a 4-character boundary), malformed fields (a `.ppk` with `Public-Lines: abc`, an RSA key whose p or q is 1).
+The original exception is kept as the inner one. Likewise, **a malformed reply from the agent** (a truncated identity list or signature) is an `SshAgentException` (`ProtocolError`).
+Internal exceptions from the parsing layer, or BCL ones such as `FormatException` / `DivideByZeroException`, used to leak out as they were — callers only catch these two exception types, so they went all the way to the UI.
+
 ---
 
 ## 5 `password` (RFC 4252 §8)

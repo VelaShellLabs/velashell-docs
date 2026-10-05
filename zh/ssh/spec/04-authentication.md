@@ -387,6 +387,11 @@ ECDSA P-256/384/521。
 加密 PKCS#8 看不出钥的类型，只能按 RSA、ECDSA 逐个试，每试一次 KDF 都整个跑一遍 —— 〔决策〕密文不超过 320 字节的先按 ECDSA 试
 （椭圆曲线钥连 P-521 带公钥也不到 260 字节，最小的 512 位 RSA 钥也有三百四十多字节），口令对时只算一遍。
 
+〔决策〕**私钥文件是外来输入，读不懂一律是 `SshPrivateKeyException`（`KeyFormatInvalid`）**，不论哪种格式、错在哪一层：
+截断（复制粘贴丢了尾行，base64 恰好在 4 字符边界断开）、字段畸形（`.ppk` 的 `Public-Lines: abc`、RSA 的 p 或 q 为 1）。
+原来的异常挂在内层。同理，**agent 回的应答格式不对**（身份列表、签名被截断）是 `SshAgentException`（`ProtocolError`）。
+曾经让解析层 internal 的异常或 BCL 的 `FormatException` / `DivideByZeroException` 原样漏出去 —— 调用方只接这两种异常，那就一路漏到了界面上。
+
 ---
 
 ## 五 `password`（RFC 4252 §8）
