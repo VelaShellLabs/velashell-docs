@@ -449,6 +449,9 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 但仍然**必须**处理「收到 CLOSE 时还没有退出状态」的情况（对端实现不规范或连接断了），
 此时 `ExitCode` 为 `null`，并在 `SshChannelEvent.Closed` 里带上原因。
 
+〔决策〕**退出状态缓存在通道上**，不只活在事件流里：事件流是单读者的，读过一次就没了。`WaitAsync` 读到 `Closed` 之后
+按缓存的那一份交回 —— 调多少次、`ReadToEndAsync` 之后再问、调用方自己先读过事件，答案都一样。曾经读过一次再问就是 `null`。
+
 ---
 
 ## 六 全局请求

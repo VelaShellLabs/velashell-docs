@@ -451,6 +451,9 @@ the RFC requires `exit-status` to be sent **before** `CHANNEL_CLOSE`.
 But the case "CLOSE received while there is still no exit status" **must** still be handled (non-conforming peer implementation or a broken connection);
 in that case `ExitCode` is `null`, and the reason is carried in `SshChannelEvent.Closed`.
 
+〔Decision〕**The exit status is cached on the channel**, not kept only in the event stream: the event stream has a single reader, and once read it is gone. After reading `Closed`, `WaitAsync`
+returns the cached value — however many times it is called, whether after `ReadToEndAsync` or after the caller has read the events itself, the answer is the same. It used to be `null` on the second ask.
+
 ---
 
 ## 6 Global requests
