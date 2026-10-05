@@ -588,6 +588,8 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 | Data we want to send exceeds the peer's window | Wait for `WINDOW_ADJUST` (backpressure), **no error** |
 | `WINDOW_ADJUST` causes the window to overflow `uint32` | `ProtocolError`, disconnect |
 | Data for a channel received after its `CHANNEL_CLOSE` | Discard, no error (§1 rule 4) |
+| `CHANNEL_OPEN_FAILURE` received for a channel that is already open | Ignore (a peer violation). 〔Decision〕Do not wind the channel down and release its number on the spot — without the two-way `CLOSE` the peer still thinks it is open, and reusing the number would cross the streams |
+| `CHANNEL_CLOSE` received for a channel still waiting for confirmation | Wind it down as "not opened": the open call fails with `ChannelOpenFailed`; no `CLOSE` is sent back (the peer's channel number is not known yet). It used to send `CLOSE` back as usual (with a peer number still 0), and a caller waiting for confirmation without a token hung forever |
 | SUCCESS/FAILURE received while the channel request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync); except on a channel this side has already wound down, where it is absorbed (§5.1) |
 | SUCCESS/FAILURE received while the global request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync) |
 | Message with an unknown number received | Reply `UNIMPLEMENTED`, **carrying the sequence number of the rejected message** (RFC 4253 §11.4); do not disconnect |

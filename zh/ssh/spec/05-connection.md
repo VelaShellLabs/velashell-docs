@@ -586,6 +586,8 @@ sequenceDiagram
 | 我们要发的数据超出对端窗口 | 等待 `WINDOW_ADJUST`（背压），**不报错** |
 | `WINDOW_ADJUST` 导致窗口溢出 `uint32` | `ProtocolError`，断开 |
 | `CHANNEL_CLOSE` 之后收到该通道数据 | 丢弃，不报错（§1 规则 4） |
+| 对一条已经开着的通道收到 `CHANNEL_OPEN_FAILURE` | 忽略（对端违规）。〔决策〕不能把通道收尾、当场还号 —— 没走双向 `CLOSE`，对端还以为它开着，号被复用就会串话 |
+| 对一条还在等确认的通道收到 `CHANNEL_CLOSE` | 按「没开成」收尾：开通道的调用以 `ChannelOpenFailed` 失败；不回 `CLOSE`（对端的通道号还不知道）。曾经照常回 `CLOSE`（对端号还是 0）、等确认的调用方不带令牌就永远挂着 |
 | 通道请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步）；本端已收尾的通道除外，照单吸收（§5.1） |
 | 全局请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步） |
 | 收到未知编号的报文 | 回 `UNIMPLEMENTED`，**带被拒报文的序号**（RFC 4253 §11.4），不断开 |
