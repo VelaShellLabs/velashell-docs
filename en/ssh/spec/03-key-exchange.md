@@ -448,6 +448,9 @@ Two more rules for `KnownHostsPolicy`: when a negated pattern (`!pattern`) match
 before appending a record, check whether the file ends with a newline and add one if not — otherwise the new record is glued onto the last line and both break.
 〔Decision〕A leading marker is recognized only if it is one of the two sshd(8) defines, `@revoked` and `@cert-authority` (case as written); **a line with an unrecognized marker is skipped entirely** —
 when someone means to revoke a key and writes `@revoke` instead of `@revoked`, using the line as an ordinary trusted entry would make that key "known" for every host the pattern matches.
+〔Decision〕Host names are **lower-cased** for lookups and when writing (as OpenSSH does: it lower-cases before writing, and a hashed line is the HMAC of the lower-case name).
+Hashing the name as typed means a hashed line never matches when the user typed upper case — with a man in the middle, "key changed" degrades into "never seen, trust it?",
+the key type preference stops protecting as well, and hashed lines this library writes cannot be read back by OpenSSH.
 
 ### 5.5 Host certificates (`*-cert-v01@openssh.com`)
 

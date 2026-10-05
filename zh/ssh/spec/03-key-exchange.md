@@ -447,6 +447,9 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 追加记录前先看文件末尾有没有换行，没有就补一个 —— 否则新记录接在最后一行后面，两条一起坏掉。
 〔决策〕行首的标记只认 sshd(8) 定义的 `@revoked` 与 `@cert-authority`（大小写照原样），**认不出的整行跳过** ——
 把 `@revoked` 写成 `@revoke` 想吊销一把钥时，按普通受信行去用就是让这把钥对模式匹配到的所有主机都成了「已知」。
+〔决策〕查询与写出时主机名**一律小写**（与 OpenSSH 一致：它写之前先小写化，散列行算的就是小写名字的 HMAC）。
+原样拿去算的话，用户填的是大写时散列行一条都对不上 —— 有中间人时「密钥变了」降级成「没见过，要信任吗」，
+类型偏好的保护也一并失效；本库写出的散列行也就读不回 OpenSSH 那边。
 
 ### 5.5 主机证书（`*-cert-v01@openssh.com`）
 
