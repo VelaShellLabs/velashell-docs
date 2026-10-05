@@ -664,6 +664,10 @@ For a directory like `/usr/lib` with hundreds of `.so` links, filling them in se
 `LinkTarget` is `null`, and a failed following `STAT` is treated as a broken link — one odd link must not make the whole directory unlistable.
 **A broken pipeline** (channel disconnected, malformed frame received) is not covered by this and is thrown as usual: that is not this entry's problem.
 
+〔Decision〕**Getting a single path's entry (`GetEntryAsync`) uses the same rules as listing**: `LSTAT` first, and only for a link are `READLINK` and the following `STAT` added, concurrently
+(one round trip for a regular file, two for a link); a path that does not exist gives `null`. The name is the part after the last `/` of the path — SFTP's separator is always `/`,
+and the local platform's path functions must not be used (on Windows they treat a legitimate `\` in a remote name as a separator).
+
 ---
 
 ## 9 Edge cases and errors quick reference
