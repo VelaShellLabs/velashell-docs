@@ -215,6 +215,9 @@ uint32   extended_count —— flags & 0x80000000
    `0o100000` 普通文件、`0o040000` 目录、`0o120000` 符号链接。
    **v3 没有单独的类型字段，类型只能从这里取。**
 
+〔决策〕扩展属性的 `data` 是二进制，**按原样的字节交出**（`SftpExtendedField.Data`），不按 UTF-8 解成字符串 —— 解了，非法的字节就变了，写回去也不再是原来那串。
+交出去的列表是只读视图，下转型改不动。
+
 〔决策〕扩展属性最多留 1024 对，**多出来的读掉、丢弃** —— 不能读到上限就停：在 `NAME` 应答里，下一项会从剩下的字节中间开始解析。
 不会空转：每一对至少 8 个字节，计数再大，循环次数也被报文长度封住。
 
@@ -615,7 +618,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 ```
 SftpCapabilities Capabilities { get; }
   bool HasPosixRename / HasHardlink / HasFsync / HasStatVfs / HasCopyData ...
-  IReadOnlyDictionary<string,string> RawExtensions { get; }
+  IReadOnlyDictionary<string, ReadOnlyMemory<byte>> RawExtensions { get; }   // 冻结的，改不动
 ```
 
 〔决策〕**能力必须可查，而不只是内部降级。**

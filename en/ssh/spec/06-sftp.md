@@ -217,6 +217,9 @@ repeated: string type ‖ string data
    `0o100000` regular file, `0o040000` directory, `0o120000` symbolic link.
    **v3 has no separate type field; the type can only be taken from here.**
 
+〔Decision〕The `data` of an extended attribute is binary and **is handed out as the original bytes** (`SftpExtendedField.Data`), not decoded as UTF-8 — decoding changes invalid bytes, and writing it back no longer gives the original.
+The list handed out is a read-only view that cannot be changed by downcasting.
+
 〔Decision〕At most 1024 extended attribute pairs are kept, and **the rest are read and discarded** — parsing must not simply stop at the limit: in a `NAME` reply, the next entry would start in the middle of the remaining bytes.
 It cannot spin: every pair is at least 8 bytes, so however large the count, the number of iterations is bounded by the message length.
 
@@ -617,7 +620,7 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 ```
 SftpCapabilities Capabilities { get; }
   bool HasPosixRename / HasHardlink / HasFsync / HasStatVfs / HasCopyData ...
-  IReadOnlyDictionary<string,string> RawExtensions { get; }
+  IReadOnlyDictionary<string, ReadOnlyMemory<byte>> RawExtensions { get; }   // frozen, cannot be changed
 ```
 
 〔Decision〕**Capabilities must be queryable, not merely degraded internally.**
