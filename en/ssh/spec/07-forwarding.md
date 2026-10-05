@@ -247,6 +247,10 @@ otherwise connections that are being established get rejected for no apparent re
 
 If the SSH connection is already gone (the cancel request cannot be sent, or the connection drops during the grace period), there is no waiting — no more forwarded channels will arrive.
 
+〔Decision〕**Waiting for the cancel request's reply has a time limit (5 seconds).** On a half-dead link (keepalive off, or a long interval) the reply may never come;
+without a limit, disposal would hang until TCP retransmission gives up (about 15 minutes by default on Linux), and the caller's "stop tunnel" would hang with it.
+When the time is up the link is treated as unusable: the handler is removed and connections are ended as usual, without waiting out the grace period — the same idea as the time limit on channel disposal (`05-connection.md`).
+
 〔History〕The early implementation marked itself "disposed" as soon as disposal began, and the handler rejected everything once that flag was set —
 the grace period did nothing, and in-flight forwarded channels were rejected anyway.
 
