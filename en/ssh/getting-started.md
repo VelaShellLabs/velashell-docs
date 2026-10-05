@@ -144,7 +144,8 @@ Credentials =
 ];
 ```
 
-`LoadAsync` returns an `InMemorySshSigner`: it holds the private key in memory and **zeroes it on dispose**, so take it with `using`.
+`LoadAsync` returns an `InMemorySshSigner`: it holds the private key in memory and **destroys it on dispose**, so take it with `using` —
+it zeroes the Ed25519 seed itself, and RSA / ECDSA private keys are released together with the BCL key objects.
 The connection only needs it during authentication; once connected it can be disposed.
 
 The order is the order of attempts. Methods the server does not accept are skipped and faithfully recorded in the attempt record —
@@ -462,18 +463,21 @@ whereas a `-R 2375:...` port can be connected to by everyone on that machine.
 
 ### X11 forwarding (`ssh -X` / `-Y`)
 
-```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
+Like agent forwarding, it goes on the options for opening a shell or running a command (`x11-req` has to be sent between `pty-req` and `env`, and the library takes care of that ordering,
+so `X11Forwarder` has no public way to create one):
 
-await using X11Forwarder x11 = await X11Forwarder.RequestAsync(conn, session,
-    new X11ForwardOptions
+```csharp
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // reads DISPLAY by default
         Trusted = false,                        // default: corresponds to ssh -X
         Timeout = TimeSpan.FromMinutes(20),     // Zero = never expires
     },
-    ct);
+}, ct);
 
+X11Forwarder x11 = shell.X11!;                  // disposed together with the shell
 Console.WriteLine($"{x11.AcceptedChannels} accepted · {x11.RejectedChannels} rejected");
 ```
 

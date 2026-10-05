@@ -661,7 +661,7 @@ while handing timing constraints over to callers (the rules are in §4.1 of `src
 | 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist | ✅ Public. Built in: `KnownHostsPolicy`, `PinnedFingerprintHostKeyPolicy`, `DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` | 🔒 Seam inside the library. All three are built in (`AgentForwarder`, `X11Forwarder`, `RemotePortForwarder`, which implement this interface explicitly) |
 | 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ❌ Not built. Sending global requests is an internal method of the library |
-| 10 | SFTP extensions | Vendor SFTP extensions | 🔒 Inside the library: `posix-rename`, `limits`, `statvfs` and others are used directly by `SftpFileSystem` according to the capability query |
+| 10 | SFTP extensions | Vendor SFTP extensions | 🔒 Inside the library: `posix-rename`, `hardlink`, `fsync` and `limits` are used directly by `SftpFileSystem` according to the capability query; `statvfs`, `copy-data`, `home-directory` and `expand-path` are only probed (`SftpCapabilities`) and not wrapped yet |
 | 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Forwarding metrics go through `System.Diagnostics.Metrics` (`ForwardMetrics.MeterName`); `ActivitySource` and the packet tap (`IPacketTap`) are not built yet |
 | 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`, with no separate interface |
 

@@ -142,7 +142,8 @@ Credentials =
 ];
 ```
 
-`LoadAsync` 交回的是 `InMemorySshSigner`：它在内存里持有私钥，**释放时清零**，所以用 `using` 接住。
+`LoadAsync` 交回的是 `InMemorySshSigner`：它在内存里持有私钥，**释放时销毁**，所以用 `using` 接住 ——
+Ed25519 的种子由它自己清零，RSA / ECDSA 的私钥随 BCL 的密钥对象一起释放。
 连接只在认证期间用它，连上之后就可以释放。
 
 顺序就是尝试顺序。服务端不接受的方法会被跳过并如实记进尝试记录 ——
@@ -460,18 +461,21 @@ Console.WriteLine(sock.RemoteEndpointName);   // 两种形态统一的说法
 
 ### X11 转发（`ssh -X` / `-Y`）
 
-```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
+与 agent 转发一样写在开 shell / 跑命令的选项上（`x11-req` 要夹在 `pty-req` 与 `env` 之间发，时序由库负责，
+所以 `X11Forwarder` 没有公开的构造入口）：
 
-await using X11Forwarder x11 = await X11Forwarder.RequestAsync(conn, session,
-    new X11ForwardOptions
+```csharp
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // 默认读 DISPLAY
         Trusted = false,                        // 默认：对应 ssh -X
         Timeout = TimeSpan.FromMinutes(20),     // Zero = 不过期
     },
-    ct);
+}, ct);
 
+X11Forwarder x11 = shell.X11!;                  // 随 shell 一起释放
 Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} 条拒绝");
 ```
 
