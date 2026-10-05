@@ -47,6 +47,9 @@ Report the failure truthfully (`SftpUnavailable`, with the message explaining th
 the open is administratively prohibited; or the local channel count / window budget is exhausted), the `SshChannelException` (`ChannelOpenFailed`, with its reason code) is thrown as is.
 Everything used to be rewritten as "sshd_config is missing Subsystem": users went to change configuration that was fine, and lost the information that retrying later could work.
 
+〔Decision〕**`SftpOptions` are checked before the channel opens.** Single fields (`MaxInFlight` and `MaxPipelineDepth` at least 1, `BlockSize` not negative) throw `ArgumentOutOfRangeException` when set;
+cross-field rules (`MaxPipelineDepth` not below `MaxInFlight`) are checked in `ConnectAsync` before opening the channel. It used to throw only while building the pipeline after the sftp channel was open, leaving that channel attached to the connection with nobody to close it.
+
 ---
 
 ## 2 Outer structure of SFTP messages

@@ -45,6 +45,9 @@ sequenceDiagram
 管理上禁止；或者本端的通道数 / 窗口预算用尽）原样抛 `SshChannelException`（`ChannelOpenFailed`，带原因码）。
 曾经一律改写成「sshd_config 缺 Subsystem」：用户去改一个本来没问题的配置，也丢了「稍后可以重试」这个信息。
 
+〔决策〕**`SftpOptions` 先核对、再开通道。**单个字段（`MaxInFlight`、`MaxPipelineDepth` 至少为 1，`BlockSize` 不为负）在设值时就抛 `ArgumentOutOfRangeException`；
+跨字段的（`MaxPipelineDepth` 不小于 `MaxInFlight`）在 `ConnectAsync` 开通道之前核对。曾经是 sftp 通道开了才在建流水线时抛，那条通道一直挂在连接上没人关。
+
 ---
 
 ## 二 SFTP 报文的外层结构
