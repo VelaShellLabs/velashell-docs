@@ -295,6 +295,7 @@ await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight)
 ```
 
 `SshTerminalModes` 是不可变的：`With` 交回一份新的，`SshTerminalModes.Empty` 可以放心地到处共用。
+同一个操作码再 `With` 一次是**替换**它的值（留在原来的位置），不会在表里出现两条。
 
 **像素尺寸是一等公民**，不恒为 0 —— sixel、kitty 图形协议这类东西要靠它排版。
 不知道就给 0，那也是一个有意义的回答。

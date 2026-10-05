@@ -297,6 +297,7 @@ await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight)
 ```
 
 `SshTerminalModes` is immutable: `With` returns a new copy, so `SshTerminalModes.Empty` is safe to share everywhere.
+Calling `With` again with the same opcode **replaces** its value (keeping its position); the table never holds two entries for one opcode.
 
 **Pixel dimensions are first-class citizens**, not always 0 — things like sixel and the kitty graphics protocol rely on them for layout.
 If you don't know, pass 0; that is also a meaningful answer.
