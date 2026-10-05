@@ -305,6 +305,16 @@ Hard-coding 64 × 32 KB = 2 MiB likewise caps at 10 MB/s with a 200 ms RTT.
 Rationale: computing the depth from the bandwidth-delay product requires estimating bandwidth first, and that estimate is very unstable on a link that also carries other traffic;
 "did requests have to wait for a slot" is a more direct signal that is harder to get wrong — the same idea as the channel window growing when it "runs dry" (`05-connection.md` §3.3).
 
+〔Decision〕**A single stream does not carry a cap of its own equal to the starting depth.** With adaptation on, a stream's write slots and read-ahead limit are `MaxPipelineDepth`,
+so the pipeline's in-flight slots are the only throttle — the "did requests have to wait" signal is recorded only when the pipeline's slots run out.
+A stream's cap used to be `MaxInFlight`, equal to the pipeline's starting depth: the stream always hit its cap first, the pipeline's slots were never used up,
+and for a single-file transfer (the most common use) the depth never grew, pinning the window at its starting value. With adaptation off, a stream's cap is `MaxInFlight`.
+
+Resuming: pipelined writes do not complete in offset order, so after a disconnect the remote length is only "the highest confirmed offset".
+`SftpFileSystem.MaxUnconfirmedWriteBytes` gives the most bytes a single write stream can have in flight (with adaptation on it is computed from the depth ceiling —
+how deep the pipeline had grown at the moment of the disconnect cannot be known afterwards); when resuming from the remote length alone, back off by that much and compare.
+When the interrupted stream's `DurableLength` is available, use it and no back-off is needed.
+
 **Choosing the block size**: 〔Decision〕start from the caller's `SftpOptions.BlockSize` (0 = not specified),
 take the minimum of it and the caps below, then clamp to [1, 256 KiB]:
 
