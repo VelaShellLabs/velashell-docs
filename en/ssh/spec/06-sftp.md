@@ -373,6 +373,11 @@ Callers that have no id yet — those waiting on the in-flight limit or the send
 or, in a race during disposal, `ObjectDisposedException`. In-flight slots are returned only by replies, and no reply comes after the pipeline stops; without the release,
 waiters such as the batch of links resolved concurrently while listing a directory (§8) would wait forever.
 
+〔Decision〕**Stopping is a public signal**: `SftpFileSystem.IsConnected` becomes false, and `Closed` (`Task<Exception>`) completes **successfully** with the reason from the table above —
+it does not complete as faulted, so it never becomes an unobserved task exception when nobody awaits it. The object does not recover by itself: on seeing this, consumers drop it and `ConnectAsync` again on the same connection.
+There used to be no such signal and the host could only check "does the object still exist": after sftp-server exited or the server closed an idle channel under `ChannelTimeout`,
+that session's file panel stayed broken until the whole SSH connection reconnected.
+
 ### 5.5 Read-ahead for sequential reads
 
 **Problem**: if a file stream's sequential read (`ReadAsync`) sends one `READ` at a time and waits for it before sending the next,
