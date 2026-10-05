@@ -81,6 +81,8 @@ These lines:
 〔Decision〕**Collect them and hand them to the consumer** (`SshConnectionOptions.PreAuthBannerHandler`),
 but do not display them by default. Rationale: in enterprise environments this text is often a usage notice with legal significance,
 so it is inappropriate for the library to swallow it; but it comes from an **unauthenticated** peer, and printing it to the user's terminal by default is an injection surface.
+The callback has the shape `Func<IReadOnlyList<string>, CancellationToken, ValueTask>` and is called once after the version exchange when there are banner lines (not at all when there are none);
+it receives the raw text (already limited in line count and bytes as in the table below), which the caller sanitizes before display. Exceptions thrown by the callback itself are returned as-is (`08-failures.md` §2.1).
 
 **Limits** (all of them are required; otherwise this is a zero-cost memory exhaustion surface):
 
