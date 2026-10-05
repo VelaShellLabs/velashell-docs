@@ -498,6 +498,12 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 〔决策〕必须显式重写它们：`Stream` 的默认实现把它们绕到同步的 `Read` / `Write` 上，
 不重写的话，调用方明明走的是异步形态，拿到的却是「只支持异步」的 `NotSupportedException`。
 
+〔决策〕**取消令牌只管「等」，不管已经入队的请求。**流水线写的 `WriteAsync` 返回时 `WRITE` 还在路上：调用方的令牌只用于等写槽
+（以及顺序模式下等这一块的确认），入队的 `WRITE` 不带它，只会以应答或流水线收工（§5.4）结束。`FlushAsync(ct)` 被取消时同样只是不再等，
+抛 `OperationCanceledException`，在途的写照样被确认、记账，之后再 `FlushAsync` 照常冲完。
+曾经入队的 `WRITE` 带着发起它的那一次 `WriteAsync` 的令牌：令牌之后被取消，已经发出的 `WRITE` 照样落盘，本端却不再记账
+（`DurableLength` 偏小），流还被标成写入故障，`FlushAsync` / 关闭抛「传输中断，从 N 续传」而不是取消。与 §5.5「预读请求属于流」是同一个思路。
+
 ### 6.5 关闭：`CLOSE` 的应答要看
 
 `DisposeAsync`（`await using`）的收尾顺序：

@@ -500,6 +500,12 @@ The async **array overloads** (the `byte[], int, int, CancellationToken` version
 〔Decision〕They must be overridden explicitly: `Stream`'s default implementation routes them to the synchronous `Read` / `Write`,
 so without the override a caller who clearly used an asynchronous form would get the "async only" `NotSupportedException`.
 
+〔Decision〕**A cancellation token governs waiting, not requests already queued.** When a pipelined `WriteAsync` returns, its `WRITE` is still in flight: the caller's token is used only to wait for a write slot
+(and, in sequential mode, for this block's acknowledgement); the queued `WRITE` does not carry it and ends only with its reply or when the pipeline stops (§5.4). A cancelled `FlushAsync(ct)` likewise only stops waiting:
+it throws `OperationCanceledException`, the in-flight writes are still acknowledged and accounted for, and a later `FlushAsync` completes as usual.
+A queued `WRITE` used to carry the token of the `WriteAsync` that started it: if that token was cancelled later, the `WRITE` already sent still reached the disk, but the local side stopped accounting for it
+(`DurableLength` too small), the stream was marked as having a write failure, and `FlushAsync` / closing threw "transfer interrupted, resume from N" instead of a cancellation. This is the same idea as §5.5's "read-ahead requests belong to the stream".
+
 ### 6.5 Closing: the `CLOSE` reply matters
 
 The wrap-up order of `DisposeAsync` (`await using`):
