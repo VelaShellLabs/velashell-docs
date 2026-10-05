@@ -13,19 +13,28 @@
 stateDiagram-v2
     [*] --> Opening : 发 CHANNEL_OPEN
     Opening --> Open : 收 OPEN_CONFIRMATION
-    Opening --> Failed : 收 OPEN_FAILURE
+    Opening --> Closed : 收 OPEN_FAILURE（号当场还）
     Open --> LocalEof : 发 CHANNEL_EOF（我不再发数据）
     Open --> RemoteEof : 收 CHANNEL_EOF（对端不再发）
     LocalEof --> BothEof : 收 CHANNEL_EOF
     RemoteEof --> BothEof : 发 CHANNEL_EOF
-    Open --> Closing : 发/收 CHANNEL_CLOSE
+    Open --> Closing : 本端先发 CHANNEL_CLOSE
     LocalEof --> Closing
     RemoteEof --> Closing
     BothEof --> Closing
-    Closing --> Closed : 双向 CHANNEL_CLOSE 都已收发
-    Failed --> [*]
+    Closing --> Closed : 收到对端的 CHANNEL_CLOSE
+    Open --> Closed : 收对端先发的 CHANNEL_CLOSE（当场回一个）/ 本端释放 / 会话没了
+    LocalEof --> Closed
+    RemoteEof --> Closed
+    BothEof --> Closed
     Closed --> [*]
 ```
+
+`Closing` 只在**本端先关**时出现；对端先发 `CLOSE` 时收到即回、直接 `Closed`。`Closed` 是「本端已经收尾」，
+**不等于通道号已经还给会话** —— 本端释放通道时对端的 `CLOSE` 可能还在路上，号一直扣着等它（第 2 条）。
+`Closed` 事件的原因看**谁先发的 `CLOSE`**：本端先发是 `ClosedLocally`，对端先发是 `ClosedByPeer`，会话没了是 `SessionClosed`。
+〔2026-10-05 修正〕图里原有一个实现中不存在的 `Failed` 态（没开成直接进 `Closed`），并写着「发/收 `CLOSE` → `Closing`」。
+同时修正的还有实现：本端 `CloseAsync` 先发、对端照规矩回 `CLOSE` 时，事件流曾一律报 `ClosedByPeer`。
 
 **六条硬规则**：
 

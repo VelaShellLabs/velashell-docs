@@ -15,19 +15,28 @@
 stateDiagram-v2
     [*] --> Opening : send CHANNEL_OPEN
     Opening --> Open : receive OPEN_CONFIRMATION
-    Opening --> Failed : receive OPEN_FAILURE
+    Opening --> Closed : receive OPEN_FAILURE (number returned at once)
     Open --> LocalEof : send CHANNEL_EOF (I will send no more data)
     Open --> RemoteEof : receive CHANNEL_EOF (peer will send no more)
     LocalEof --> BothEof : receive CHANNEL_EOF
     RemoteEof --> BothEof : send CHANNEL_EOF
-    Open --> Closing : send/receive CHANNEL_CLOSE
+    Open --> Closing : we send CHANNEL_CLOSE first
     LocalEof --> Closing
     RemoteEof --> Closing
     BothEof --> Closing
-    Closing --> Closed : CHANNEL_CLOSE both sent and received
-    Failed --> [*]
+    Closing --> Closed : receive the peer's CHANNEL_CLOSE
+    Open --> Closed : receive a CHANNEL_CLOSE the peer sent first (answer it at once) / local dispose / session gone
+    LocalEof --> Closed
+    RemoteEof --> Closed
+    BothEof --> Closed
     Closed --> [*]
 ```
+
+`Closing` appears only when **we close first**; when the peer sends `CLOSE` first we answer it on receipt and go straight to `Closed`. `Closed` means "finished on our side";
+it **does not mean the channel number has been returned to the session** — when we dispose a channel the peer's `CLOSE` may still be in flight, and the number stays reserved until it arrives (rule 2).
+The reason on the `Closed` event depends on **who sent `CLOSE` first**: `ClosedLocally` if we did, `ClosedByPeer` if the peer did, `SessionClosed` if the session went away.
+〔2026-10-05 correction〕The diagram used to have a `Failed` state that does not exist in the implementation (a failed open goes straight to `Closed`), and said "send/receive `CLOSE` → `Closing`".
+The implementation was corrected at the same time: when our `CloseAsync` sent first and the peer duly answered with `CLOSE`, the event stream used to report `ClosedByPeer` regardless.
 
 **Six hard rules**:
 
