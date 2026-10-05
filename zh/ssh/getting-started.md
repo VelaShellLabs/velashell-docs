@@ -611,10 +611,16 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
    带 `exec` 的块**一律不匹配**。真要用就自己传：
 
    ```csharp
-   new SshConfigMatchContext { Host = h, ExecEvaluator = cmd => RunAndCheck(cmd) }
+   SshHostConfig config = await SshConfigFile.ResolveAsync(blocks, new SshConfigMatchContext
+   {
+       Host = h,
+       ExecEvaluator = (req, ct) => RunAndCheckAsync(req.ExpandedCommand, ct),
+   }, ct);
    ```
 
    这样「要不要跑外部命令」这个决定明确地落在你身上，而不是藏在库的默认行为里。
+   求值器拿到的 `ExpandedCommand` 已经由库展开好 `%h %n %r %u %%`（代入的值过了与 `ProxyCommand` 同一套白名单）——
+   执行它，不要自己去代入记号；值不能安全代入时那一条根本不会交过来。带求值器的上下文要用 `ResolveAsync`。
 2. **`Include` 有深度上限（16）与环检测。** `a` include `b`、`b` 又 include `a`
    很容易写出来，而没有环检测的表现是*读配置的时候整个进程不动了*。
    一次最多读 256 个文件，只读普通文件、单个最大 1 MiB —— 超出的部分跳过，不报错。

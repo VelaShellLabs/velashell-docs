@@ -613,10 +613,16 @@ Three security constraints worth knowing:
    blocks with `exec` **never match**. If you really need it, pass one yourself:
 
    ```csharp
-   new SshConfigMatchContext { Host = h, ExecEvaluator = cmd => RunAndCheck(cmd) }
+   SshHostConfig config = await SshConfigFile.ResolveAsync(blocks, new SshConfigMatchContext
+   {
+       Host = h,
+       ExecEvaluator = (req, ct) => RunAndCheckAsync(req.ExpandedCommand, ct),
+   }, ct);
    ```
 
    This way the decision "whether to run external commands" clearly rests with you, rather than hiding in the library's default behavior.
+   The `ExpandedCommand` the evaluator receives already has `%h %n %r %u %%` expanded by the library (the substituted values pass the same allow-list as `ProxyCommand`) —
+   run that, do not substitute tokens yourself; a condition whose values cannot be substituted safely is never handed over. A context with an evaluator must be resolved with `ResolveAsync`.
 2. **`Include` has a depth limit (16) and cycle detection.** `a` including `b` and `b` including `a` again
    is easy to write, and without cycle detection the symptom is *the whole process freezes while reading the configuration*.
    One load reads at most 256 files, and only regular files of at most 1 MiB — anything beyond that is skipped without an error.

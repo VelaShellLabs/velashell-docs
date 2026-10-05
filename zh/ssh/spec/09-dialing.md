@@ -416,12 +416,16 @@ Windows 上会去读写当前目录里一个叫 `none` 的文件。
 | --- | --- |
 | 不认识的条件 | 总是 |
 | `canonical` / `final` | 总是 —— 本库不做主机名规范化，也没有「最后再解析一遍」那一轮 |
-| `exec` | 调用方没给 `SshConfigMatchContext.ExecEvaluator` 时（默认不执行任何命令） |
+| `exec` | 调用方没给 `SshConfigMatchContext.ExecEvaluator` 时（默认不执行任何命令）；命令里有不认识的记号、或者代入的值不能安全地交给 shell 时（见下） |
 | `user` / `localuser` | 上下文里没有远端用户名 / 本机用户名时 |
 
 - 〔决策〕**任何一个条件判不了，整个块都不生效 —— 取反也一样。**曾经「判不了」算成「不满足」，前面加个 `!` 就成了「满足」：
   `Match !exec "…"` 在不执行命令时对所有主机生效，那正是写配置的人想排除的情形。判不了就是判不了，不因为一个 `!` 变成真的。
 - 条件之间是「与」；`Match` 后面什么都没写的块不生效。
+- 〔决策〕**`Match exec` 的求值器是异步的，拿到的是 `SshMatchExecRequest`**：原样的命令、库展开好 `%h %n %r %u %%` 的命令（`ExpandedCommand`，执行这一条），
+  以及主机与用户；取消令牌一并交给它。代入的值过与 `ProxyCommand` 同一套白名单（§7 末），不安全、或者有不认识的记号，这一条判不了、不去问求值器。
+  带求值器的上下文用 `ResolveAsync`；同步的 `Resolve` 遇到它直接报错，而不是悄悄不执行。
+  〔历史〕早期是同步的 `Func<string, bool>`，只给原样的命令、没有令牌也没有主机与用户：调用方自己去代入 `%h`，就回到了 CVE-2023-51385 那一类问题。
 - **`Match host` 比的是经 `HostName` 改写之后的主机名**（前面的块里给过 `HostName` 就用它，其中的 `%h` 换成输入的名字）；
   `Match originalhost` 与 `Host` 块比的是使用者输入的那个名字。曾经 `Match host` 一律拿输入的别名去比，为真实主机名写的块永远对不上。
 - `CreateConnectionOptionsAsync` 求值时只知道主机名，所以带 `user` / `localuser` / `exec` 条件的块在这条路径上不生效。

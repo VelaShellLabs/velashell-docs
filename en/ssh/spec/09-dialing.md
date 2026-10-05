@@ -418,12 +418,16 @@ Each `Match` condition has three outcomes: satisfied, not satisfied, and **canno
 | --- | --- |
 | An unrecognized condition | Always |
 | `canonical` / `final` | Always — this library does no host name canonicalization and has no "final re-parse" pass |
-| `exec` | When the caller supplied no `SshConfigMatchContext.ExecEvaluator` (by default no command is ever run) |
+| `exec` | When the caller supplied no `SshConfigMatchContext.ExecEvaluator` (by default no command is ever run); when the command has an unknown token, or a substituted value cannot be safely handed to a shell (see below) |
 | `user` / `localuser` | When the context has no remote user name / local user name |
 
 - 〔Decision〕**If any condition cannot be evaluated, the whole block does not apply — negated or not.** "Cannot be evaluated" used to count as "not satisfied", and a leading `!` turned it into "satisfied":
   `Match !exec "…"` applied to every host when commands were not run, which is exactly the case the configuration's author wanted to exclude. Cannot be evaluated means cannot be evaluated; a `!` does not make it true.
 - Conditions are ANDed; a `Match` with nothing after it does not apply.
+- 〔Decision〕**The `Match exec` evaluator is asynchronous and receives an `SshMatchExecRequest`**: the command as written, the command with `%h %n %r %u %%` expanded by the library (`ExpandedCommand` — run that one),
+  and the host and users; the cancellation token is passed along. Substituted values pass the same allow-list as `ProxyCommand` (end of §7); if one is unsafe or a token is unknown, the condition is undecidable and the evaluator is not asked.
+  A context with an evaluator is resolved with `ResolveAsync`; the synchronous `Resolve` rejects it outright instead of silently not running it.
+  〔History〕It used to be a synchronous `Func<string, bool>` given only the raw command, with no token and no host or user: callers substituting `%h` themselves were back in the CVE-2023-51385 class of problem.
 - **`Match host` compares against the host name after `HostName` rewriting** (if an earlier block set `HostName`, that is used, with `%h` replaced by the name the user typed);
   `Match originalhost` and `Host` blocks compare against the name the user typed. `Match host` used to compare against the typed alias every time, so blocks written for the real host name never matched.
 - `CreateConnectionOptionsAsync` knows only the host name when evaluating, so blocks with `user` / `localuser` / `exec` conditions do not apply on that path.
