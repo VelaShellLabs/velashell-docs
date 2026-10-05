@@ -508,6 +508,11 @@ Rationale: this is the actual behavior of the OpenSSH client, and it is what use
 But it **must** be possible to turn it off — in a true 2FA scenario, the first prompt may be the one-time code,
 and auto-filling the password only wastes an attempt.
 
+〔Decision〕**Within one keyboard-interactive exchange the password is answered at most once**; later rounds (even if they too are a single non-echoed prompt) get empty strings, so the server rejects cleanly and the next credential is tried.
+Rationale: the usual PAM two-step flow is a "Password:" round followed by a "Verification code:" round, both a single non-echoed prompt.
+Looking only at the shape and not the round would send the password in the second round as well — wasting a failure count, and modules such as pam_radius or Duo
+forward that round's answer to a RADIUS server or a third-party service, so the password leaves the target host.
+
 ---
 
 ## 7 Extension negotiation (RFC 8308)
