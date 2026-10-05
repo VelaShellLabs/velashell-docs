@@ -62,6 +62,11 @@ Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { 
 // 多级跳板（ProxyJump a,b）：a 最近，b 直接连目标
 Dialer = DialerChain.Jumps(bastionOptions, innerOptions),
 
+// 跳板连接要按跳现准备（先连 ssh-agent 之类）：回调里准备好参数，用 context 去连 ——
+// 它把外层的计时器带进去，跳板上看指纹、输动态码时外层停表
+Dialer = DialerChain.Jump(new SshEndPoint("bastion.example.com", 22),
+    async (context, ct) => await context.ConnectAsync(await PrepareBastionAsync(ct), ct)),
+
 // ProxyCommand：外部程序的标准输入输出就是那条流（%h %p %r %n %%）
 Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 ```

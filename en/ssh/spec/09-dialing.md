@@ -88,6 +88,10 @@ Therefore:
 - 〔Decision〕**Authentication on a jump host pauses the outer timer too.** Jump host authentication is often waiting for a person (typing a password, reading a one-time code off a phone);
   it runs under the jump host's own authentication timer. Counted against the outer connect timeout, a user spending twenty seconds on a one-time code for the jump host
   would long since have run out a fifteen-second outer connect timeout. The outer connect timeout is designed for network round trips; time spent waiting for a person does not belong in it.
+- 〔Decision〕**Pausing still holds when the jump connection is built by the caller's callback.** Callers that prepare credentials per hop (connecting to ssh-agent first, say) use
+  `DialerChain.Jump(endPoint, (context, ct) => …)`: once the callback has the hop's `SshConnectionOptions` ready,
+  it connects with `context.ConnectAsync(options, ct)` rather than calling `SshConnection.ConnectAsync` directly — the context carries the outer timer in.
+  The callback used to receive only a cancellation token, so the outer timer could not be passed in: the host takes this path for every hop, and typing a one-time code on a jump host for longer than the outer connect timeout got cut off.
 - When the outer timer expires inside a jump hop, the failure is `Timeout` (`Phase` `Dialing`), the message says it timed out while connecting via which jump host,
   or while the jump host was forwarding to the target, and `Hops` marks that hop. 〔Decision〕It is not reported as "TCP connect timed out": the outer connection is indeed still "dialing",
   but what is stuck is the jump host's handshake or forwarding, not the local TCP. If the caller cancelled, that propagates as cancellation, not as a timeout —

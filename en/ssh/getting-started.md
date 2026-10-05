@@ -64,6 +64,11 @@ Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { 
 // Multi-level jump (ProxyJump a,b): a is nearest, b connects directly to the target
 Dialer = DialerChain.Jumps(bastionOptions, innerOptions),
 
+// Jump connection prepared per hop (connecting to ssh-agent first, say): prepare the options in the callback and connect through context —
+// it carries the outer timer in, so the outer timer pauses while a fingerprint is checked or a one-time code typed on the jump host
+Dialer = DialerChain.Jump(new SshEndPoint("bastion.example.com", 22),
+    async (context, ct) => await context.ConnectAsync(await PrepareBastionAsync(ct), ct)),
+
 // ProxyCommand: the external program's standard input and output are the stream (%h %p %r %n %%)
 Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 ```
