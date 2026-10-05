@@ -226,6 +226,17 @@ using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passp
 > 所以它一直就能读；OpenSSH 的 `bcrypt_pbkdf` 谁都不给，所以那一条是自己写的
 > —— 全库唯一的一处，见上面那个注。
 
+只要公钥（显示指纹、补一份 `.pub`）时不必问口令：OpenSSH 私钥的公钥段与 `.ppk` 的 `Public-Lines` 是明文。
+
+```csharp
+if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPublicKey? publicKey))
+{
+    File.WriteAllText("key.ppk.pub", publicKey.ToOpenSshFormat("key") + "\n");
+}
+```
+
+> 读出的是文件里明文的那一份，没有与私钥核对；加密的 PKCS#8 不带明文公钥，返回 `false`。见 [spec 04 §4.6](spec/04-authentication.md)。
+
 ### 把私钥加进 agent（`ssh-add`）
 
 加密私钥解开一次、交给 agent 保管，之后认证与转发都经 agent 签名：

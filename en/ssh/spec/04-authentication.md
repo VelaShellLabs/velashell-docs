@@ -423,6 +423,12 @@ Files written by mpint rules (one leading zero, or shorter than 32 bytes with le
 ③ an ECDSA key type and curve name must agree (`ecdsa-sha2-nistp256` goes with `nistp256`);
 ④ an RSA `n` must be exactly `p·q` (with p and q both greater than 1). A broken file's only symptom used to be "the server does not accept this public key".
 
+〔Decision〕**Reading the public key without a passphrase: `SshPrivateKeyFile.TryReadPublicKey(pem, out key)`.** The public section of `openssh-key-v1` and the
+`Public-Lines` of a `.ppk` are plaintext to begin with, so they can be read even when the private key is encrypted; for unencrypted PKCS#1 / SEC1 / PKCS#8 the public key is derived from the private key.
+Encrypted PKCS#8 and legacy encrypted PEM do not carry the public key in the clear, so the method returns `false`; an unrecognized format or an incomplete file also just returns `false` and does not throw.
+The plaintext copy has **not** been checked against the private key (that needs decryption first), so it is only for showing a fingerprint or writing a `.pub`; authentication uses the key that `Parse` / `LoadAsync`
+decrypts, which is where the checks above happen. The use case is importing a file that has a private key but no `.pub` — a PuTTY user usually has just one `.ppk`.
+
 〔Decision〕**The KDF iteration count of an encrypted PKCS#8 key is capped at ten million** (PBKDF2 under PBES2, and PBES1 / PKCS#12 PBE); it is read from the DER and checked before handing the key to the BCL,
 and a larger count is reported as `KeyFormatInvalid`. The count comes from the file, and **.NET sets no limit when importing encrypted PKCS#8** (3 million iterations import fine in testing): a file altered to `int.MaxValue`
 runs for about five minutes at roughly seven million iterations per second, synchronously and uncancellably. Common values are OpenSSL's 2048 and OWASP's recommended 600,000.

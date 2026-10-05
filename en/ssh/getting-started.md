@@ -228,6 +228,17 @@ using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passp
 > so it could always be read; nobody provides OpenSSH's `bcrypt_pbkdf`, so we wrote that one ourselves
 > — the only instance in the whole library, see the note above.
 
+When you only need the public key (to show a fingerprint, or to write a missing `.pub`), no passphrase is needed: the public section of an OpenSSH private key and the `Public-Lines` of a `.ppk` are plaintext.
+
+```csharp
+if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPublicKey? publicKey))
+{
+    File.WriteAllText("key.ppk.pub", publicKey.ToOpenSshFormat("key") + "\n");
+}
+```
+
+> This is the plaintext copy from the file, not checked against the private key; encrypted PKCS#8 does not carry its public key in the clear and returns `false`. See [spec 04 §4.6](spec/04-authentication.md).
+
 ### Adding a private key to the agent (`ssh-add`)
 
 Decrypt an encrypted private key once and hand it to the agent; authentication and forwarding are then signed through the agent:

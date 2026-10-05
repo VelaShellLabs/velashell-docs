@@ -412,6 +412,12 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 ③ ECDSA 的密钥类型与曲线名要对得上（`ecdsa-sha2-nistp256` 配 `nistp256`）；
 ④ RSA 的 `n` 必须正好是 `p·q`（p、q 都大于 1）。坏文件的症状本来只是一句「服务端不接受这把公钥」。
 
+〔决策〕**不用口令读公钥：`SshPrivateKeyFile.TryReadPublicKey(pem, out key)`。** `openssh-key-v1` 的公钥段与 `.ppk` 的
+`Public-Lines` 本来就是明文，私钥加了密也读得出；未加密的 PKCS#1 / SEC1 / PKCS#8 由私钥导出。加密的 PKCS#8 与传统加密 PEM
+不带明文公钥，返回 `false`；认不出的格式、内容不完整的文件同样只返回 `false`，不抛。明文的那一份**没有**与私钥核对过（核对要先解密），
+只拿来显示指纹、写 `.pub`；认证用的是 `Parse` / `LoadAsync` 解出的那一把，上面几条核对都在那里。
+用处是导入只有私钥、没有 `.pub` 的文件 —— PuTTY 用户手里通常只有一个 `.ppk`。
+
 〔决策〕**加密 PKCS#8 的 KDF 迭代数上限一千万次**（PBES2 的 PBKDF2，以及 PBES1 / PKCS#12 PBE），交给 BCL 之前先从 DER 里读出来核对，
 超了报 `KeyFormatInvalid`。迭代数来自文件，而 **.NET 导入加密 PKCS#8 不设上限**（实测 300 万次照常导入）：被改成 `int.MaxValue` 的文件
 按每秒约七百万次要跑五分钟，同步、停不下来。常见取值是 OpenSSL 的 2048、OWASP 建议的 60 万。
