@@ -421,6 +421,10 @@ Nothing is consumed until a message is complete, and the window is replenished o
 It used to be 32 KiB, and signing slightly longer data (`ssh-keygen -Y sign`, certificates) stalled right there.
 The window is only a credit, not memory allocated up front; ordinary messages are a few hundred bytes. A message with length 0 or over 256 KiB is treated as malformed and the channel is closed.
 
+〔Decision〕**When an exchange of the local agent client is interrupted halfway (cancellation, a read/write error, an unreasonable length), that agent connection is retired**:
+the agent protocol has no request ids, so the request may be only half written and the reply may still be on its way; every later call fails with `AgentUnavailable` and the caller reconnects
+(a client connected by `ConnectAsync` reopens on its own along the session-declaration path, §7.4). 〔History〕Early versions kept using it, and the next request read the previous request's late reply.
+
 ### 7.2 Security requirements
 
 > **Agent forwarding is a loaded gun.** Root on the remote host can, while forwarding is active,
