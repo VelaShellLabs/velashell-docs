@@ -446,6 +446,8 @@ the "host key changed" check is bypassed, and a policy that accepts new hosts wi
 Two more rules for `KnownHostsPolicy`: when a negated pattern (`!pattern`) matches, the **whole line** does not apply to this host
 (`*.corp,!untrusted.corp` must not trust the key for `untrusted.corp` via `*.corp`);
 before appending a record, check whether the file ends with a newline and add one if not — otherwise the new record is glued onto the last line and both break.
+〔Decision〕A leading marker is recognized only if it is one of the two sshd(8) defines, `@revoked` and `@cert-authority` (case as written); **a line with an unrecognized marker is skipped entirely** —
+when someone means to revoke a key and writes `@revoke` instead of `@revoked`, using the line as an ordinary trusted entry would make that key "known" for every host the pattern matches.
 
 ### 5.5 Host certificates (`*-cert-v01@openssh.com`)
 
