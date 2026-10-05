@@ -236,6 +236,12 @@ sequenceDiagram
   and an extra round trip on the connection setup path is pure latency.
 - All line endings are `CRLF`; the request ends with an empty line.
 
+〔Decision〕**The host name is validated before it goes into the request, and if it fails the proxy is not contacted at all.** Non-ASCII names are converted to Punycode
+per IDNA (as for SOCKS5 — the request is encoded as ASCII, and encoding them directly would turn them into `?`); after conversion only letters, digits and `.` `-` `_` are allowed;
+a name containing a colon must parse as an IPv6 address and is re-formatted from the parsed address. Otherwise `SshConnectException` is thrown (`InvalidConfiguration`, not retryable).
+Rationale: with the host name pasted verbatim into the request line and the `Host` header, a `\r\n` in it could inject headers into the request sent to the proxy;
+and host names often do not come from whoever wrote the configuration (`ssh://` links, imported sessions, the quick-connect box).
+
 ### 4.2 Response
 
 - Read up to the first empty line (`CRLF CRLF`); response headers are capped at 16 KiB, and exceeding that is judged `ProxyRefused`.
