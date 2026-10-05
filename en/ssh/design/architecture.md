@@ -2609,6 +2609,36 @@ X11 see §11.2.23; terminal size see §11.2.16 (0 rows / columns are legal, per 
 (§7.5.1: probe commands and SFTP on the same connection should not inherit some shell's forwarding), `null` already means "not requested", and another value would only add a duplicate way of writing it;
 only logging when forwarding is skipped, without handing the reason over — a caller that cannot see it cannot tell the user, so the reason stays on the result object.
 
+### 11.2.26 Where pausing the connect timer ends: once the budget is used up, nobody is asked (2026-10-05)
+
+Background: a clean-room comparison, done the same way as §11.2.23 (an independent analysis session hands back only a behavioral description; the other side's source never enters the implementation session).
+Two things were compared: how time spent waiting for a person during connection setup counts against the connect timeout, and how the host key is verified on rekeying.
+
+**Checked, left alone**:
+
+- Time spent waiting for a person never counts against the connect timeout. The timer is paused during the ruling, and the ruling has its own `HostKeyDecisionTimeout` (§11.2.19).
+  Authentication has a timer of its own, 2 minutes by default, about the same as the default of the OpenSSH server's `LoginGraceTime` — however long the client pauses,
+  the server waits only that long (RFC 4252 §4 also has the server set an authentication time limit). Rulings and authentication on a jump host both pause the outer timer (§11.2.22).
+- Resuming sits in a `finally`, so a ruling that throws never leaves a timer paused forever.
+- The signature is verified before the policy is asked ([`spec/03`](../spec/03-key-exchange.md) §5.3): no person is asked about a key that has not proven it holds the private key, and it is never written to known_hosts first.
+- Rekeying does not go through the host key policy. The first key is pinned, the host key algorithms are narrowed to the same type, and a changed `K_S` disconnects with `HostKeyChanged` ([`spec/03`](../spec/03-key-exchange.md) §8.4).
+  So no dialog pops up mid-session, and there is no need for a "may this one interact" flag.
+- This library has no implicit connections (connecting automatically on first use, reconnecting automatically after a drop); every connection is set up by the caller explicitly calling `ConnectAsync`.
+  Automatic reconnection lives in the host, and its dialogs appear in the tab the user is looking at.
+
+**Done:**
+
+| Problem | Decision |
+| --- | --- |
+| Pausing only looked at whether the expiry callback had arrived. Pausing while the callback sat in the thread pool not yet run froze the timer with 0 left, and the ruling still took the fingerprint to the user; after the user clicked "Trust", the timer expired the moment it resumed and a key exchange timeout was reported. When the thread pool is busy, that window is more than a few milliseconds | Pausing settles the account by the time actually used, and declares the timeout on the spot if it is used up; right before the ruling the connection's token is checked once more, and a connection that has expired or that the caller has cancelled is not taken to the user; an expiry callback that only runs while the timer is paused does not count. The timer now uses its own `ITimer` (through `TimeProvider`) instead of borrowing `CancelAfter`, whose callback knows nothing about pausing ([`spec/03`](../spec/03-key-exchange.md) §5.3, [`spec/09`](../spec/09-dialing.md) §2.4) |
+| The timer's state machine had no direct unit tests, only one "paused during the ruling" case running on the real clock | Added with a manually advanced clock: expiry, pausing and resuming with cumulative deduction, nested pauses, the budget already used up at the pause, a late expiry callback, the outer timer pausing along, pausing inside while the outer is used up, caller cancellation not counting as expiry, pausing and resuming after disposal. Plus one end-to-end case: the budget runs out before the ruling, the policy is never asked, and the failure is `Timeout` with `Phase` `KeyExchange` |
+
+**Considered, not done:**
+
+- A "may this one interact" flag for the ruling and the password callback. Neither of the two situations that need it (rekeying, implicit connections) exists in this library, see above.
+- Pausing this connection's timer during authentication as well. Authentication already has a timer of its own, and the server's `LoginGraceTime` keeps running regardless; pausing on the client does not give the user any more time to think.
+- Accepting another, equally trusted key on rekeying. The decision in `spec/03` §8.4 stands: there is no legitimate reason to change host keys in the middle of a connection.
+
 ### 11.3 Switch-over strategy with VelaShell
 
 1. VelaShell's `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`

@@ -398,7 +398,12 @@ flowchart TD
    and a reconnect has to be made on the spot. With the two timers separated, that reconnect logic disappears together with its explanatory comment.
 
    〔Decision〕In the implementation this comes down to three things:
-   - the connection timer is **paused** during the ruling, and resumes from the remaining time after the ruling ends;
+   - the connection timer is **paused** during the ruling, and resumes from the remaining time after the ruling ends; every pause is deducted in turn, and the remaining time is never topped back up.
+     〔Decision〕**If the budget is already used up at the moment of pausing, the timeout is declared on the spot and the policy is not asked.** The expiry callback runs only once the thread pool gets to it,
+     which can be a long time when the thread pool is busy; freezing the timer at that point would let a connection that has already timed out take the fingerprint to the user,
+     and right after the user clicks "Trust" it would time out anyway. So pausing settles the account by the time actually used, not by whether the callback has arrived;
+     and right before the ruling the connection's token is checked once more — a connection that has expired, or that the caller has cancelled, is not taken to the user. Conversely, an expiry
+     callback that only runs while the timer is paused does not count — the account was settled at the pause: a real expiry was declared then, and one that had not come yet is rescheduled from the remaining time on resume;
    - the ruling and the persistence of "trust permanently" honor only **the caller's cancellation token**, not the connection timer's ——
      when the user clicks "trust permanently", that write to known_hosts should not receive an already-cancelled token;
    - when connecting through a jump host, the entire connection setup of the inner hop happens within the dialing phase of the outer hop ——
