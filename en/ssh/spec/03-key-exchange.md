@@ -647,6 +647,11 @@ so an exchange the peer starts at the same moment cannot put its first frame ahe
 the connection is dropped with `Timeout` (`Phase = Rekeying`). While the gate is closed, all channel data is stashed and keepalive probes cannot go out —
 without a timeout the connection would simply stop, silently.
 
+〔Decision〕**The gate opens only when the exchange succeeds.** When it fails (host key changed, signature check failed, timeout), the gate stays closed and the connection is torn down;
+the stash is dropped by the send pump's teardown, which also releases senders waiting on backpressure with a connection-closed exception. It used to open the gate on failure too:
+the send pump could write the stashed channel data before the connection was torn down — application data after `KEXINIT` and before `NEWKEYS` violates RFC 4253 §7.1,
+and nothing more should go out right after deciding that "the host key changed".
+
 ### 8.3 Receiving side
 
 ```mermaid
