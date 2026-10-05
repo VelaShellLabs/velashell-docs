@@ -659,7 +659,9 @@ so an exchange the peer starts at the same moment cannot put its first frame ahe
 
 〔Decision〕**Rekeying has a timeout** (2 minutes by default): if our `KEXINIT` never gets the peer's, or the exchange stalls midway,
 the connection is dropped with `Timeout` (`Phase = Rekeying`). While the gate is closed, all channel data is stashed and keepalive probes cannot go out —
-without a timeout the connection would simply stop, silently.
+without a timeout the connection would simply stop, silently. Reaching the deadline **faults the connection directly** rather than only cancelling the exchange's token: the exchange's messages go through the send pump,
+and when our sending is stuck (the peer does not read, the link is half-dead), "wait for this frame to go out" does not respond to cancellation; faulting stops the send pump, which is what releases the stuck write.
+A rekey initiated by the peer used to only cancel the token, and once our sending got stuck it waited forever.
 
 〔Decision〕**The gate opens only when the exchange succeeds.** When it fails (host key changed, signature check failed, timeout), the gate stays closed and the connection is torn down;
 the stash is dropped by the send pump's teardown, which also releases senders waiting on backpressure with a connection-closed exception. It used to open the gate on failure too:
