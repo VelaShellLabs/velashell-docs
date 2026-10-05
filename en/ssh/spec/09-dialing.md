@@ -311,10 +311,14 @@ When treating an SSH channel as a bidirectional byte stream:
 - Substitutions in the command line (`ssh_config(5)`): `%h` target host, `%p` port, `%r` username, `%n` original host name, `%%` a percent sign.
 - The command is interpreted by the system shell: `/bin/sh -c` on Unix-like systems, `cmd.exe /c` on Windows.
 - 〔Decision〕**Check the values before substituting `%h` / `%n` / `%r`**: host names may only contain letters, digits and `.` `-` `_` `:` (IPv6),
-  user names only letters, digits and `.` `-` `_` `@`; if anything else is present (shell metacharacters, `%`, whitespace, control characters), nothing is substituted and dialing fails with `ProxyRefused`.
+  user names only letters, digits and `.` `-` `_` `@`; if anything else is present (shell metacharacters, `%`, whitespace, control characters), nothing is substituted and dialing fails with
+  `InvalidConfiguration` (not retryable — retrying changes nothing; the input has to change).
   Host and user names often don't come from whoever wrote the config (an `ssh://` link, an imported session, a quick-connect box); substituted verbatim into a shell command line,
   `x;touch /tmp/pwn`, `x&calc` or `%VAR%` becomes a command that gets executed (the CVE-2023-51385 class).
   Values are rejected rather than escaped: the two shells have different quoting rules, and `cmd`'s are especially hard to get right; legitimate names only need these characters anyway.
+- 〔Decision〕**Values starting with `-` are not substituted either** (same failure). Every character may be legal and the value can still turn into something else: `nc` / `ncat` / `socat` / `ssh`
+  in the template parse values such as `-e` or `-oProxyUseFdpass` as **options** — argument injection (the same class as Git's CVE-2017-1000117).
+  Legitimate host and user names do not start with `-`.
 - The program exits before the handshake completes: judged `ProxyRefused`, with `Detail` carrying the exit code and the tail of stderr.
 - When the stream is disposed, close the program's standard input to give it a chance to exit gracefully; if it still has not exited after a short wait, terminate the whole process tree.
 - 〔Limitation, stated honestly〕On Windows, a child process's standard input and output are anonymous pipes, and anonymous pipes do not support overlapped IO:
