@@ -62,6 +62,7 @@
 | 代理拒绝了我们配置的凭据 | `ProxyAuthFailed` |
 | 请求在本地就发不出去：主机名放不进代理协议、凭据超长、`ProxyCommand` 的 shell 起不来 | `InvalidConfiguration` |
 | 代理说的话不合协议 | `ProxyRefused`，`Detail` 写明收到了什么 |
+| 代理接下了连接却一直不回握手，连接的计时器到点 | `Timeout`（`Phase` 为 `Dialing`），`Hops` 记「到代理成功 + 这一跳失败」—— 与跳板同一个做法（§2.4），不报成「建立 TCP 连接超时」 |
 
 ### 2.3 读握手应答时不许多读
 

@@ -64,6 +64,7 @@ Reason code conventions:
 | The proxy rejects the credentials we configured | `ProxyAuthFailed` |
 | The request cannot even be sent locally: the host name does not fit the proxy protocol, the credentials are too long, the `ProxyCommand` shell cannot start | `InvalidConfiguration` |
 | What the proxy says does not conform to the protocol | `ProxyRefused`, with `Detail` stating what was received |
+| The proxy accepts the connection but never answers the handshake, and the connect timer fires | `Timeout` (`Phase` is `Dialing`), with `Hops` recording "reached the proxy + this hop failed" — the same approach as for jump hosts (§2.4), not reported as "TCP connect timed out" |
 
 ### 2.3 No over-reading when reading handshake replies
 
