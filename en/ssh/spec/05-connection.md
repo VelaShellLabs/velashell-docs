@@ -298,6 +298,9 @@ A terminal also relies on this to tell "the user typed `exit`" from "the link br
 
 Data already received but not yet read when the link breaks is discarded along with it — the result is incomplete anyway.
 Disposing the connection yields `ObjectDisposedException` rather than a connection failure, so the caller can tell "I tore it down" from "the link broke".
+Disposal first sends `DISCONNECT(BY_APPLICATION)` within a time limit (`08-failures.md` §6), then stops the send and receive loops; 〔Decision〕**waiting for those loops to finish is time-limited too** (2 seconds):
+when the limit is reached the transport is disposed first, closing the underlying stream so that stuck reads and writes end, and then it waits once more. Reads and writes on the underlying stream do not necessarily respond to cancellation — on Windows, `ProxyCommand`'s anonymous pipes
+complete by blocking on the thread pool (`09-dialing.md` §6) — and since disposal used to wait for the loops first and dispose the transport afterwards, with no time limit, it hung in that case.
 
 **`SshChannel.Closed`** (a `CancellationToken`) is cancelled when the channel is **entirely** finished: both `CLOSE`s done, this side disposed the channel,
 the peer refused the open, or the connection went away. It differs from EOF — EOF only means the peer will send no more, and writing to it still makes sense; at `Closed` both directions are gone.
