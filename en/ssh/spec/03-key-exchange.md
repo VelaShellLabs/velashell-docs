@@ -599,6 +599,11 @@ Either side may initiate rekeying at any time by sending `SSH_MSG_KEXINIT`.
 > handles rekeying initiated by the peer, initiated by us, and initiated by both sides simultaneously.
 > The thresholds live in `SshRekeyPolicy`, enabled by default.
 
+〔Decision〕**A rekey initiated by the peer during authentication is completed in place.** If the user takes a few minutes to find a one-time code, a time-based `RekeyLimit` on the server sends `KEXINIT` in the middle of authentication.
+At that point the authenticator is the only reader and the only writer, so the exchange runs directly on the connection-setup transport (pinning the host key of the first exchange, §8.4), and then reading continues for the reply to the request in flight —
+it arrives after the exchange, under the new keys; the delayed compression attached after authentication succeeds follows the latest negotiation result.
+`KEXINIT` used to be treated as an unexpected message, and the connection failed with a protocol error.
+
 〔Decision〕Thresholds at which we trigger rekeying ourselves:
 
 | Condition | Default | Rationale |
