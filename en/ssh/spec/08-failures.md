@@ -129,6 +129,9 @@ see `05-connection.md` §4.4). 〔Decision〕**Before it is handed out, it is no
 | Anything else unexpected | `SshConnectionClosedException`, with the original exception in `InnerException` | `Unknown` |
 
 The newly wrapped ones always carry `Phase` `Open`, even when the fault happened during a rekey (a known limitation); exceptions passed through keep their own `Phase` (a rekey timeout, for example, is `Rekeying`).
+〔Decision〕**When the key exchange itself fails during a rekey** (signature verification fails, negotiation fails, the exchange reply is malformed, the peer sends `DISCONNECT`): the reason code is kept and `Phase` becomes `Rekeying`;
+a protocol error is still an `SshProtocolException`, everything else is an `SshConnectionClosedException`, with the original exception attached as the inner one (for a negotiation failure, both sides' lists are still on it).
+The exchanger does not distinguish the first exchange from a rekey and reports in first-exchange terms, `SshConnectException` / `KeyExchange` — that used to be passed through as-is, and callers that branch on type took a long-established connection for "could not connect".
 
 Reason: this cause lands in the users' `catch` blocks and reconnect policies, and both of those branch on `SshException` and its `Reason`
 (§3: automatic reconnect should apply only to "the connection dropped"). It used to be thrown as-is: internal parse exception types could not be caught by type;

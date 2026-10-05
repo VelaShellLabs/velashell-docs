@@ -127,6 +127,9 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | 其它任何意外 | `SshConnectionClosedException`，原异常在 `InnerException` 里 | `Unknown` |
 
 新包出来的这几种 `Phase` 一律记为 `Open`，即使故障发生在重协商期间（已知局限）；原样交出的保留自己的 `Phase`（比如重协商超时是 `Rekeying`）。
+〔决策〕**密钥交换本身在重协商时失败**（验签失败、协商不上、交换应答格式非法、对端发了 `DISCONNECT`）：原因码不变，`Phase` 改成 `Rekeying`；
+协议错误仍是 `SshProtocolException`，其余是 `SshConnectionClosedException`，原来的异常挂在内层（协商失败时双方的名单还在它上面）。
+交换器不分首次与重协商，按首次的口径报 `SshConnectException` / `KeyExchange` —— 曾经原样交出去，按类型分流的调用方会把一条早已建好的连接当成「没连上」。
 
 理由：这个原因会落到使用者的 `catch` 与重连策略上，而那两者都按 `SshException` 与它的 `Reason` 分流
 （§3：自动重连只该对「断了」生效）。曾经原样抛出：内部的解析异常类型，使用者按类型 `catch` 不到；
