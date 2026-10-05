@@ -174,7 +174,12 @@ pflags：
 
 〔决策〕**创建文件时的默认权限 0644**，目录 0755，都可配。
 不传 ATTRS 会让服务端用它自己的默认值（通常受 umask 影响），
-结果不可预测 —— 传明确的值。
+结果不可预测 —— 传明确的值。**任何带 `CREAT` 的打开都是这样**：`OpenAsync` 收到的属性里没有权限就补上 0644
+（曾经只有 `OpenWriteAsync` / `OpenAppendAsync` 传，直接用 `OpenAsync` 的都没传）。
+
+〔决策〕**自相矛盾的 pflags 在本地就拒**（`ArgumentException`，不发 `OPEN`）：`TRUNC` / `EXCL` 没配 `CREAT`（draft-02 §6.3 要求一起用），
+或者既不读也不写。只想截短一个已有的文件（.NET 的 `FileMode.Truncate`）：以写方式打开，再 `SetLengthAsync(0)` ——
+照字面配上 `CREAT` 的话，文件不存在时会被建出来。
 
 **打开之后先问一次长度。** 不截断的打开（读、续写、不带 `TRUNC` 的写）拿到 handle 后立刻对它发一次 `FSTAT`，
 得到的大小就是流的 `Length` 的起点 —— `Seek(SeekOrigin.End)`、§5.5 的预读边界、§6.6 续传的前缀都靠它。

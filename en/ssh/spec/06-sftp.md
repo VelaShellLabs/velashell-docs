@@ -176,7 +176,12 @@ pflags:
 
 〔Decision〕**Default permissions when creating files are 0644**, directories 0755, both configurable.
 Not passing ATTRS makes the server use its own default (usually affected by umask),
-with unpredictable results — pass explicit values.
+with unpredictable results — pass explicit values. **This holds for every open with `CREAT`**: when the attributes given to `OpenAsync` carry no permissions, 0644 is added
+(it used to be passed only by `OpenWriteAsync` / `OpenAppendAsync`; direct `OpenAsync` callers sent none).
+
+〔Decision〕**Self-contradictory pflags are rejected locally** (`ArgumentException`, no `OPEN` sent): `TRUNC` / `EXCL` without `CREAT` (draft-02 §6.3 requires them together),
+or neither read nor write. To shorten an existing file only (.NET's `FileMode.Truncate`), open it for writing and then `SetLengthAsync(0)` —
+adding `CREAT` literally would create the file when it does not exist.
 
 **Ask for the length right after opening.** A non-truncating open (read, resume, write without `TRUNC`) sends one `FSTAT` on the handle as soon as it has it;
 the size becomes the starting value of the stream's `Length` — `Seek(SeekOrigin.End)`, the read-ahead bound of §5.5 and the resume prefix of §6.6 all depend on it.
