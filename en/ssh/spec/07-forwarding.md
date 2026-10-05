@@ -250,6 +250,12 @@ If the SSH connection is already gone (the cancel request cannot be sent, or the
 〔History〕The early implementation marked itself "disposed" as soon as disposal began, and the handler rejected everything once that flag was set —
 the grace period did nothing, and in-flight forwarded channels were rejected anyway.
 
+〔Decision〕**If setup is abandoned, a listener the server grants afterwards is withdrawn.** When `tcpip-forward` (or the streamlocal variant) is already on the wire,
+the caller cancels while waiting for the reply (or waiting fails), and the server then replies `REQUEST_SUCCESS`,
+a cancel request with `want_reply = false` is sent (no reply is registered, so nothing hangs on a reply nobody waits for).
+Which arrives first — the reply or "the caller gave up" — is settled by an atomic state, and whichever comes second sends the cancel, so even simultaneous arrival is covered.
+It used to only remove the local handler: the server's listener stayed open until the connection dropped and every incoming connection was refused; an immediate retry on a fixed port always failed with "port already in use".
+
 ### 4.4 Unix socket variant
 
 `streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com`
