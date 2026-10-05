@@ -591,9 +591,16 @@ Either side may initiate rekeying at any time by sending `SSH_MSG_KEXINIT`.
 | Bytes sent/received | **1 GiB** (in either direction) | Recommendation of RFC 4253 §9 |
 | Duration | **1 hour** | Same as above |
 | AES-GCM invocation counter | **Forced** when approaching 2⁶⁴ | Counter wraparound would reuse nonces, which is catastrophic |
+| Packets in one direction under the same keys | **2³¹**, **independent of the policy and cannot be turned off** | The sequence number is 32 bits: chacha20-poly1305's nonce is the sequence number, so wrapping under the same keys reuses nonces and lets messages be forged; HMAC suites become open to replay (RFC 4344 §3.1) |
 
 〔Decision〕**Thresholds are configurable but have lower bounds**: bytes no lower than 64 MiB, duration no lower than 1 minute.
 Overly frequent rekeying is itself a denial-of-service surface (each one requires asymmetric operations).
+The packet threshold also has an **upper bound** of 2³¹ (`SshRekeyPolicy.MaximumPackets`); larger values are rejected at construction.
+
+〔Decision〕**The packet count is a hard constraint, not an item of the policy.** Whatever `SshRekeyPolicy` says (`Disabled` included),
+the session rekeys as soon as either direction reaches 2³¹ packets under the same keys; the transport has a last line of defense as well: the 2³²-th packet under the same keys
+(one more and the sequence number would wrap to a value these keys have already used) is refused in both directions and the connection is dropped. The packet count used to be just an item of the policy,
+and `Disabled` or a threshold above 2³² could switch it off — a cryptographic hard constraint that the public API could turn off.
 
 ### 8.2 Send gate
 
