@@ -368,6 +368,10 @@ introduced by RFC 8332.
 the content of the outer string is the concatenation "`mpint r` followed by `mpint s`",
 not r and s concatenated directly as fixed-length bytes. DER encoding is also wrong.
 
+〔Decision〕**A signature blob must be exactly these two fields; a single extra byte after them makes it invalid** (likewise after the two inner mpints of ECDSA);
+**the signature algorithm must be one this key can produce** (a P-256 key does not verify an `ecdsa-sha2-nistp384` signature, an RSA key does not verify an `ssh-ed25519` one).
+〔History〕Early versions did not look at the end of the outer blob, and the binding held only indirectly through "does this key have the matching native object".
+
 ### 5.3 Verification order (the order itself is a security property)
 
 ```mermaid
