@@ -386,6 +386,12 @@ helps", and the UI relies on it to decide whether to show the input box again; f
 Such files used to be handed to the BCL, which did not recognize them, yet the verdict was reported as "the passphrase is probably wrong"
 with `NeedsPassphrase = true` — the user kept re-entering the correct passphrase and the UI kept prompting again.
 
+〔Decision〕**Two integrity checks for `.ppk`**:
+① `Private-MAC` is mandatory in v2 / v3, and a missing one is reported as `KeyFormatInvalid` — the check used to be skipped entirely when it was missing, so deleting that line let the public part
+(RSA's n and e, ECDSA's curve and point all come from there) be altered undetected, and a wrong passphrase could not be detected either;
+② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
+so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
+
 ---
 
 ## 5 `password` (RFC 4252 §8)
