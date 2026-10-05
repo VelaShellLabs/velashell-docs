@@ -287,6 +287,8 @@ sequenceDiagram
   and fabricating a realistic-looking address would only mislead the server's logs.
 - A rejected channel is judged `ProxyRefused`, with `Detail` carrying the reason code and description from `CHANNEL_OPEN_FAILURE`;
   a failure to connect to the jump host is thrown as-is, but `Hops` marks the failure as being at the jump hop.
+  〔Decision〕**Only `CHANNEL_OPEN_FAILURE` means "refused to forward".** If the jump host itself drops or violates the protocol while the tunnel is being opened, report its own reason code
+  (`ClosedByPeer` is retryable, `ProtocolError` is not), with `Hops` still marking the forwarding hop. This used to be rewritten to `ProxyRefused` every time, so a dropped connection was described as "the jump host refused".
 - 〔Decision〕The returned stream **owns** the jump connection: when the stream is disposed, first close the channel, then dispose the jump connection.
   The jump connection is not shared with other dials — sharing would make one connection's lifetime depend on another's.
 - When the jump connection drops mid-way, reads on the stream throw the jump connection's failure (**not** end-of-stream, `05-connection.md` §4.4) and writes fail —
