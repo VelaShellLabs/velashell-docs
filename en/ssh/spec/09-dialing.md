@@ -386,8 +386,11 @@ on Windows that meant reading and writing a file named `none` in the current dir
 
 ### 7.1 Evaluating `Include` and `Match`
 
+〔Decision〕**A `#` starts a comment only at the start of a line, or when preceded by whitespace and outside quotes**: a `#` inside a word is part of the value (`IdentityFile ~/.ssh/id_#work`),
+while a trailing comment such as `Port 22 # note` is still removed. 〔History〕Early versions treated a `#` anywhere on the line as a comment, cutting `id_#work` down to `id_`.
+
 `Include` is expanded only in `SshConfigFile.LoadAsync` (`Parse` is pure text parsing and does not touch the file system).
-One line may list several paths; `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
+One line may list several paths (whitespace inside quotes does not separate them: write a path with spaces as `"~/my dir/x"`; 〔History〕the quotes used to be removed before splitting on whitespace, cutting it in two); `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
 and wildcard matches are sorted ordinally — directory enumeration order differs between file systems, and under "first value wins" an undetermined order means an undetermined result.
 
 - 〔Decision〕**Expanded in place, as a conditional include.** The included file's contents land at the position of the `Include` line:
