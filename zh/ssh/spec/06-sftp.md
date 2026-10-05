@@ -483,6 +483,10 @@ flowchart LR
 （`SftpTransferInterruptedException.DurableLength`），
 让上层不必再去 stat 一次、更不必盲退。
 
+〔决策〕**截短文件（`SetLengthAsync`）时，截断点之后的确认一律作废**，`DurableLength` 跟着回退；截之前先等在途的写落地
+（截断之后才到的写会把文件又撑长、中间留一个空洞）。扩长不动它 —— 服务端补的零不是我们写的数据。
+曾经不回退：之后再断开，报出的续传点会跨过已经被截掉的数据。
+
 ### 6.3 顺序保证的另一条路
 
 〔决策〕同时提供 `SftpWriteMode.Sequential`：

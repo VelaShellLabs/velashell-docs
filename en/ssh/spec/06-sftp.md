@@ -485,6 +485,10 @@ and its upper bound is the number of in-flight requests (N ≤ 256) — fully un
 (`SftpTransferInterruptedException.DurableLength`),
 so upper layers need not stat again, much less roll back blindly.
 
+〔Decision〕**When the file is shortened (`SetLengthAsync`), every acknowledgement past the cut is void** and `DurableLength` moves back; in-flight writes land first
+(a write arriving after the truncation would extend the file again, leaving a hole). Extending does not change it — the zeros the server fills in are not data we wrote.
+It used not to move back: after a later disconnect, the reported resume point skipped data that had already been cut off.
+
 ### 6.3 Another route to ordering guarantees
 
 〔Decision〕Also provide `SftpWriteMode.Sequential`:
