@@ -47,6 +47,9 @@ sequenceDiagram
 
 〔决策〕**`SftpOptions` 先核对、再开通道。**单个字段（`MaxInFlight`、`MaxPipelineDepth` 至少为 1，`BlockSize` 不为负）在设值时就抛 `ArgumentOutOfRangeException`；
 跨字段的（`MaxPipelineDepth` 不小于 `MaxInFlight`）在 `ConnectAsync` 开通道之前核对。曾经是 sftp 通道开了才在建流水线时抛，那条通道一直挂在连接上没人关。
+通道的接收窗口（`Channel.WindowPolicy` 的下限）**至少装得下一整个 SFTP 报文**（4 + 256 KiB + 1024 字节），否则同样在开通道之前抛
+`ArgumentException`：报文收齐之前收包循环一个字节都不消费，而窗口只随消费回补 —— 窗口比报文小，就是双方死等、没有任何报错。
+通道的默认窗口（256 KiB）恰好装不下一块 256 KiB 的 `DATA` 应答，所以 `SftpOptions` 自带一个更大的窗口。
 
 ---
 

@@ -49,6 +49,9 @@ Everything used to be rewritten as "sshd_config is missing Subsystem": users wen
 
 〔Decision〕**`SftpOptions` are checked before the channel opens.** Single fields (`MaxInFlight` and `MaxPipelineDepth` at least 1, `BlockSize` not negative) throw `ArgumentOutOfRangeException` when set;
 cross-field rules (`MaxPipelineDepth` not below `MaxInFlight`) are checked in `ConnectAsync` before opening the channel. It used to throw only while building the pipeline after the sftp channel was open, leaving that channel attached to the connection with nobody to close it.
+The channel's receive window (the lower bound of `Channel.WindowPolicy`) **must hold one whole SFTP message** (4 + 256 KiB + 1024 bytes), otherwise `ArgumentException` is likewise thrown before the channel opens:
+the receive loop consumes nothing until a message is complete, and the window is replenished only by consumption — a window smaller than a message means both sides wait forever, with no error.
+The channel's default window (256 KiB) is just too small for a 256 KiB `DATA` reply, which is why `SftpOptions` carries a larger window of its own.
 
 ---
 
