@@ -395,7 +395,7 @@ take the minimum of it and the caps below, then clamp to [1, 256 KiB]:
 | Cap | Why it counts |
 | --- | --- |
 | `max-write-length` | An over-long `WRITE` is rejected — OpenSSH drops the SFTP session outright on an over-long message, along with every other in-flight request |
-| `max-read-length` | An over-long `READ` is truncated, and sequential reads treat a short read as "a hole in between" (§5.5): every block discards the queue and read-ahead never builds up |
+| `max-read-length` | An over-long `READ` is truncated: sequential reads first have to request the gaps and learn the length the server actually returns before they run smoothly (§5.5); when it is announced, requests use it from the start |
 | `max-packet-length` minus 1 KiB | Besides the data, the request header (length, type, id, a handle of up to 256 bytes, offset) must fit; 1 KiB is ample |
 | 256 KiB | The largest message we accept (256 KiB + 1024 in §2): one `DATA` reply plus protocol header must fit |
 
@@ -469,8 +469,10 @@ and none of the depth the pipelined write side uses comes into play. Downloads t
   Callers that read only the first few bytes of a file don't trigger a burst of needless requests.
 - **No read-ahead past the known length**: requests are sent ahead only for offsets within the known length; beyond it, at most one request —
   to reach `EOF`, or to notice that the file grew after it was opened. The known length comes from `FSTAT` at open time and is pushed forward by the data read.
-- **Short read** (the server returns fewer bytes than requested, and it is not `EOF`): hand out those bytes and discard the rest of the queue —
-  there is a hole between those requests' offsets and the read position, and restarting from the read position is the simplest and least error-prone option (the read-in-a-loop semantics of §4.3 are unchanged).
+- **Short read** (the server returns fewer bytes than requested, and it is not `EOF`): hand out those bytes; 〔Decision〕**request only the gap, at the front of the queue, keep the requests already sent behind it, and leave the window as it is** (Q11).
+  When a block lying entirely within the known length still comes back short, the server's read limit is smaller than the block (and was not announced): later requests use the length it actually returned (no less than 4 KiB), and gaps are split at that length too.
+  If the gap reaches the end of the file, the request for it returns `EOF`, which counts as the end of reading as usual (the read-in-a-loop semantics of §4.3 are unchanged).
+  〔History〕It used to discard the whole queue, drop the window back to 1, and restart from the read position —— with a server that short-reads every block, throughput collapsed to one block per RTT, and the later blocks already read back were wasted.
 - **Discarded requests must not be abandoned**: their replies still arrive, and are released when they do (the payload is rented from a pool).
 - **Cancellation cancels only that wait**: read-ahead requests belong to the stream, not to a single `ReadAsync`; when the caller cancels one read, the queue stays as it is and the next read continues from it.
 - On `EOF` or an error status: the whole queue is discarded; `EOF` returns 0, errors are thrown as usual.
