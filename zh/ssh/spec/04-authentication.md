@@ -197,7 +197,8 @@ RFC 4252 §5 允许中途改用户名，但服务端行为未定义 —— 我�
 | `CredentialLabel` | 使用者给凭据起的名字（如私钥路径），**不含任何密钥材料** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | 这一步之后服务端给出的方法列表 |
-| `Detail` | 例如「私钥文件读不出来」「服务端不接受这把公钥」 |
+| `Detail` | 例如「私钥文件读不出来」「服务端不接受这把公钥」；证书被拒时的线索见 §4.5 |
+| `SignatureAlgorithm` | `publickey` 这一步用的签名算法（降级重试过的记重试那一个）；别的方法、没签就跳过的为 `null` |
 
 它的存在理由很具体：**要让「这台机器需要动态码」和「密码打错了」在 UI 上能区分开。**
 
@@ -311,7 +312,9 @@ string    公钥 blob
 理由：无条件降级会把 Terrapin 那类降级攻击的收益还回去。
 需要连老服务器的人显式打开 —— 最需要它的恰恰是不发 `server-sig-algs` 的老服务器，所以上表第三行的重试不可少。
 降级重试时，尝试记录（`SshAuthAttempt.Detail`）写明「`rsa-sha2-512` 被拒后降级为 `ssh-rsa`（SHA-1）重试」。
-〔未实现〕没有降级、直接按 `server-sig-algs` 选中 SHA-1 时，选中的签名算法还不进尝试记录。
+〔决策〕**每一步 `publickey` 都把用的签名算法记进 `SshAuthAttempt.SignatureAlgorithm`**；没有降级、直接挑中 SHA-1 的
+`ssh-rsa`（`server-sig-algs` 里能用的只有它，或这把钥只给得出它）时，`Detail` 也写一笔「用的是 SHA-1 签名」。
+〔历史〕早期只有降级重试才进记录，直接选中 SHA-1 时记录里看不出来。
 
 〔注意〕**判断「是不是 SHA-1」之前先去掉证书后缀**（`SshPublicKey.StripCertificateSuffix`）。
 RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`、`rsa-sha2-256-cert-v01@openssh.com`
@@ -341,9 +344,12 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 与 §2.2 第 1 条一致：不读使用者没点名的文件。
 
 〔决策〕**客户端不校验自己证书的有效期。** 那是服务端的职责；
-本地校验只会在时钟不同步时制造假阴性。〔未实现〕设计是**把过期事实放进
-`SshAuthAttempt.Detail`** —— 认证失败时这是头号线索。今天认证器不看证书的有效期，`Detail` 里没有这一条；
-有效期由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者，要在界面上说「证书过期了」得自己判断。
+本地校验只会在时钟不同步时制造假阴性。〔决策〕**证书被拒时，把本地看得出的事实放进 `SshAuthAttempt.Detail`**
+—— 认证失败时这是头号线索：按本机时钟已过期 / 还没生效（带 Key ID 与时刻，话里带着「按本机时钟」）、是主机证书、
+登录用户不在 principals 里（列出证书签给了谁；principals 为空表示对所有用户有效，不算）。只在被拒之后写，不在本地拦着不发。
+agent 里的证书身份（签名器只交得出 blob）同样从 blob 解出证书来看。
+〔历史〕早期认证器不看证书，`Detail` 里没有这些；要在界面上说「证书过期了」得使用者自己拿 `IsTimeValid` 判断。
+有效期仍由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者。
 换算成时刻的那两个属性不会因为 9999 年以后的值抛异常（规则同 [03 §5.5](03-key-exchange.md)）。
 
 **agent 里的证书。** `ssh-add` 加 `id_*` 时会顺手把同名的 `id_*-cert.pub` 一起加进去，

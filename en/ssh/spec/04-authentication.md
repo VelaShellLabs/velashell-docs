@@ -202,7 +202,8 @@ on failure in `SshAuthenticationException.Attempts`:
 | `CredentialLabel` | Name the caller gave the credential (e.g. the private key path), **containing no key material** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | Method list the server offered after this step |
-| `Detail` | E.g. "private key file could not be read", "server does not accept this public key" |
+| `Detail` | E.g. "private key file could not be read", "server does not accept this public key"; clues for a rejected certificate are in §4.5 |
+| `SignatureAlgorithm` | The signature algorithm this `publickey` step used (the retried one after a downgrade); `null` for other methods and for steps skipped before signing |
 
 Its reason to exist is concrete: **so that "this machine requires a one-time code" and "the password was mistyped" can be distinguished in the UI.**
 
@@ -318,7 +319,9 @@ Rules:
 Rationale: unconditional downgrade hands back the gains of Terrapin-style downgrade attacks.
 Those who need to connect to old servers turn it on explicitly — and the ones that need it most are exactly the old servers that send no `server-sig-algs`, which is why the retry in the table's third row is indispensable.
 When the retry happens, the attempt record (`SshAuthAttempt.Detail`) says "`rsa-sha2-512` was refused, downgraded to `ssh-rsa` (SHA-1) and retried".
-〔Not implemented yet〕When SHA-1 is picked directly from `server-sig-algs` without a downgrade, the chosen signature algorithm is not yet recorded in the attempt record.
+〔Decision〕**Every `publickey` step records the signature algorithm it used in `SshAuthAttempt.SignatureAlgorithm`**; when SHA-1 `ssh-rsa` is picked directly without a downgrade
+(it is the only usable one in `server-sig-algs`, or the only one the key can produce), `Detail` also says "SHA-1 signature used".
+〔History〕Early versions recorded it only for the downgrade retry; when SHA-1 was picked directly, the record did not show it.
 
 〔Note〕**Strip the certificate suffix before deciding "is this SHA-1"** (`SshPublicKey.StripCertificateSuffix`).
 An RSA certificate (§4.5) has three algorithm names: `rsa-sha2-512-cert-v01@openssh.com`, `rsa-sha2-256-cert-v01@openssh.com`
@@ -348,9 +351,12 @@ is the server's `Permission denied`, indistinguishable from "CA not trusted" or 
 `id_*-cert.pub` next to the private key, consistent with §2.2 item 1: it does not read files the caller did not name.
 
 〔Decision〕**The client does not validate the validity period of its own certificate.** That is the server's job;
-local validation only produces false negatives when clocks are out of sync. 〔Not implemented yet〕The design is to **put the expiry fact into
-`SshAuthAttempt.Detail`** — when authentication fails, it is the number-one clue. Today the authenticator does not look at the certificate's validity period and `Detail` says nothing about it;
-the validity period is exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`, and saying "your certificate has expired" in the UI is up to the caller.
+local validation only produces false negatives when clocks are out of sync. 〔Decision〕**When a certificate is rejected, the facts visible locally go into `SshAuthAttempt.Detail`**
+— when authentication fails, they are the number-one clue: expired / not yet valid by the local clock (with the Key ID and the time, and the words "by the local clock"), a host certificate,
+the login user not among the principals (listing who the certificate was issued to; empty principals mean valid for every user and do not count). This is written only after a rejection; nothing is held back locally.
+A certificate identity in the agent (whose signer can only hand out the blob) is decoded from the blob and checked the same way.
+〔History〕Early versions did not look at the certificate, and `Detail` said none of this; saying "your certificate has expired" in the UI meant the caller checking `IsTimeValid` itself.
+The validity period is still exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`.
 The two properties that convert to a point in time do not throw on values past the year 9999 (same rule as [03 §5.5](03-key-exchange.md)).
 
 **Certificates in the agent.** When `ssh-add` adds `id_*`, it also adds the matching `id_*-cert.pub`,
