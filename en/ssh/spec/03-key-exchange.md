@@ -438,7 +438,17 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 | `KeyBlob` / `KeyType` / `KeyBits` | Raw material |
 | `Sha256Fingerprint` / `Md5Fingerprint` | For display. SHA-256 is base64 without padding, consistent with OpenSSH |
 | `Key.IsCertificate` / `Key.Certificate` | Host certificate issued by a CA (§5.5). A certificate's fingerprint is the fingerprint of **the key inside it**, consistent with `ssh-keygen -l` |
-| `RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture. It genuinely helps with visual comparison |
+| `Key.RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture (algorithm below). It genuinely helps with visual comparison |
+
+**How the fingerprint picture (`SshPublicKey.RandomArt`) is drawn**, byte-for-byte identical to `ssh-keygen -lv` (tests compare against real `ssh-keygen` output):
+
+- The input is the 32-byte SHA-256 digest behind the fingerprint (the same one as `Sha256Fingerprint`: for a certificate, the key inside the certificate).
+- The canvas is 17 columns × 9 rows with one counter per cell; the walk starts in the middle (column 8, row 4, counting from 0).
+- Byte by byte, each byte yields four 2-bit groups starting from the least significant bits: bit 0 set moves right, clear moves left; bit 1 set moves down, clear moves up —
+  every step is diagonal. At a wall that direction stays put (coordinates are clamped to 0–16 and 0–8). The cell reached has its counter incremented.
+- Counts 0–14 are drawn as one character of ` .o+=*BOX@%&#/^` in order, larger counts also as `^`; the start cell is drawn `S` and the end cell `E` (`E` when they coincide).
+- The top border is `+`, a centred `[TYPE BITS]` (`ED25519 256`, `ECDSA 384`, `RSA 3072`) padded with `-` to 17 characters, `+`;
+  centring puts `(17 − length) / 2` rounded down on the left and the rest on the right. The bottom border centres `[SHA256]` the same way. The sides are `|`. Lines are joined with `\n`.
 
 An `SshHostKeyVerdict` can only be obtained from four factory members: `Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`.
 **A rejection MUST carry a reason text**, which goes verbatim into `SshConnectException.Message` ——

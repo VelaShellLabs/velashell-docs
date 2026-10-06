@@ -437,7 +437,17 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 | `KeyBlob` / `KeyType` / `KeyBits` | 原始材料 |
 | `Sha256Fingerprint` / `Md5Fingerprint` | 展示用。SHA-256 是 base64 无填充，与 OpenSSH 一致 |
 | `Key.IsCertificate` / `Key.Certificate` | CA 签发的主机证书（§5.5）。证书的指纹是**证书里那把钥**的指纹，与 `ssh-keygen -l` 一致 |
-| `RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图。它对人眼比对确实有效 |
+| `Key.RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图（算法见下）。它对人眼比对确实有效 |
+
+**指纹图（`SshPublicKey.RandomArt`）的画法**，与 `ssh-keygen -lv` 逐字节一致（用例拿真 `ssh-keygen` 的输出比对）：
+
+- 输入是 SHA-256 指纹的 32 字节摘要（与 `Sha256Fingerprint` 同一个：证书画的是证书里那把钥）。
+- 画布 17 列 × 9 行，每格一个计数，起点在正中（第 8 列、第 4 行，从 0 数）。
+- 按字节顺序，每个字节从最低位起取四组 2 位：第 0 位为 1 往右、为 0 往左；第 1 位为 1 往下、为 0 往上 ——
+  每一步都是斜着走。撞墙时那个方向不动（坐标夹在 0–16、0–8 之间）。走到的格子计数加 1。
+- 计数 0–14 依次画成 ` .o+=*BOX@%&#/^` 里的一个字符，更多的也画 `^`；起点画 `S`、终点画 `E`（重合时画 `E`）。
+- 上框是 `+`、居中的 `[类型 位数]`（`ED25519 256`、`ECDSA 384`、`RSA 3072`）用 `-` 补到 17 个字符、`+`；
+  居中时左边取 `(17 − 长度) / 2` 向下取整，其余补在右边。下框同样居中 `[SHA256]`。左右两边是 `|`。行与行之间用 `\n`。
 
 `SshHostKeyVerdict` 只能由四个工厂成员得到：`Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`。
 **拒绝必须带原因文本**，它会原样进 `SshConnectException.Message` ——
