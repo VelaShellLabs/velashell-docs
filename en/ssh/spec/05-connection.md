@@ -571,11 +571,43 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
 
 | Type | Handling |
 | --- | --- |
-| `hostkeys-00@openssh.com` | 〔Not implemented yet〕The design: the server proactively announces all its host keys, for rotation (OpenSSH's `UpdateHostKeys`), and they are parsed and handed to the host key policy. Today it is handled like any other unknown request — OpenSSH sends it with `want_reply = false`, so it is simply ignored; `IHostKeyPolicy` has no corresponding member yet either |
+| `hostkeys-00@openssh.com` | After authentication the server announces all its host keys, for rotation (OpenSSH's `UpdateHostKeys`). When the host key policy does rotation it is handled per §6.4.1, otherwise ignored (OpenSSH sends it with `want_reply = false`) |
 | Other unknown | Reply `REQUEST_FAILURE` when `want_reply = true`, otherwise ignore |
 
 〔Important〕**Replying `REQUEST_FAILURE` to unknown global requests is mandatory**; staying silent is not allowed.
 Silence would permanently misalign the peer's FIFO queue — the reply to its next request would be taken as the reply to this one.
+
+### 6.4.1 Host key rotation (`UpdateHostKeys`)
+
+> Basis: the `hostkeys-00@openssh.com` / `hostkeys-prove-00@openssh.com` section of OpenSSH `PROTOCOL`; the session identifier is in RFC 4253 §7.2.
+
+| Direction | Message | Content |
+| --- | --- | --- |
+| S → C | `GLOBAL_REQUEST "hostkeys-00@openssh.com"`, `want_reply = false` | `string` public key blob, repeated (all of the server's host keys) |
+| C → S | `GLOBAL_REQUEST "hostkeys-prove-00@openssh.com"`, `want_reply = true` | `string` public key blob, repeated (the keys to be proven) |
+| S → C | `REQUEST_SUCCESS` | `string` signature, one per key in request order |
+
+Each signature covers: `string "hostkeys-prove-00@openssh.com"` ‖ `string session_id` (the `H` of the initial exchange) ‖ `string public key blob`.
+
+The benefit comes later: when operators replace an RSA host key with Ed25519, or rotate keys regularly, the client already knows the new key —— the user does not see "the host key changed, possibly a man in the middle",
+and does not have to delete lines by hand, so that warning regains its weight.
+
+〔Decision〕**The policy decides, and it is off by default**: rotation happens only when the host key policy implements `IHostKeyRotationPolicy` and `UpdateHostKeys` is true (`KnownHostsPolicy.UpdateHostKeys`, default `false`).
+
+〔Decision〕**Only add keys for "known hosts"**:
+- Hosts presenting a certificate (CA-managed) are skipped —— their trust comes from the CA, not from any key in `known_hosts`;
+- The announcement must include the key this connection used, and that key must be **recorded in `known_hosts` as a plain key** (`GetKnownHostKeysAsync`) —— otherwise it is unclear on whose behalf to record
+  (a key accepted by TOFU in this session but not recorded, or a pinned fingerprint, does not count);
+- Only the keys **not yet recorded** are sent for proof; certificates, types the library does not know, and duplicates are ignored; at most 16 keys are looked at.
+
+〔Decision〕**Strict verification**: RSA only accepts SHA-2 signatures (`ssh-rsa`'s SHA-1 is not accepted); **if one signature fails, none of the keys is recorded** —— with one forgery in the reply, the rest cannot be trusted either.
+
+〔Decision〕**Add only, never remove**: proven new keys are appended to `known_hosts` (`RecordHostKeysAsync`); removing keys no longer presented would require rewriting the file, which is not done (`known_hosts` is append-only).
+
+〔Decision〕**In the background, best effort**: the receive loop only parses; proving and writing the file happen in the background (they send a global request and wait for its reply); once per connection.
+The result is in `SshConnection.LastHostKeyUpdate` (which keys were added, or why nothing was done); a failure does not affect the connection.
+
+〔Verified〕Against a real sshd (three host keys): the first connection records the negotiated key by TOFU, and rotation adds the other two; with the request name in the signed data altered, the real sshd's proofs no longer verify.
 
 ---
 

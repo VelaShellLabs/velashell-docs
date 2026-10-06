@@ -569,11 +569,43 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 
 | 类型 | 处理 |
 | --- | --- |
-| `hostkeys-00@openssh.com` | 〔未实现〕设计是：服务端主动告知它的全部主机密钥，用于轮换（OpenSSH 的 `UpdateHostKeys`），解析后交给主机密钥策略。目前与其它未知请求一样处理 —— OpenSSH 发它时 `want_reply = false`，于是直接忽略；`IHostKeyPolicy` 上也还没有对应的成员 |
+| `hostkeys-00@openssh.com` | 服务端认证之后宣告它的全部主机密钥，用于轮换（OpenSSH 的 `UpdateHostKeys`）。主机密钥策略做轮换时按 §6.4.1 处理，否则忽略（OpenSSH 发它时 `want_reply = false`） |
 | 其它未知 | `want_reply = true` 时回 `REQUEST_FAILURE`，否则忽略 |
 
 〔重要〕**对未知全局请求回 `REQUEST_FAILURE` 是必须的**，不能沉默。
 沉默会让对端的 FIFO 队列永远错位 —— 它下一个请求的应答会被认成这一个的。
+
+### 6.4.1 主机密钥轮换（`UpdateHostKeys`）
+
+> 依据：OpenSSH `PROTOCOL` 的 `hostkeys-00@openssh.com` / `hostkeys-prove-00@openssh.com` 一节；会话标识见 RFC 4253 §7.2。
+
+| 方向 | 报文 | 内容 |
+| --- | --- | --- |
+| S → C | `GLOBAL_REQUEST "hostkeys-00@openssh.com"`，`want_reply = false` | `string` 公钥 blob，重复若干个（服务端的全部主机密钥） |
+| C → S | `GLOBAL_REQUEST "hostkeys-prove-00@openssh.com"`，`want_reply = true` | `string` 公钥 blob，重复（要它证明的那几把） |
+| S → C | `REQUEST_SUCCESS` | `string` 签名，按请求的顺序每把一个 |
+
+每个签名签的是：`string "hostkeys-prove-00@openssh.com"` ‖ `string session_id`（首次交换的 `H`）‖ `string 公钥 blob`。
+
+用处在「之后」：运维把 RSA 主机密钥换成 Ed25519、或者定期轮换时，客户端已经认得新钥 —— 用户不会看到「主机密钥变了，可能有中间人」，
+也不用去手工删行，那条告警才能重新变得有分量。
+
+〔决策〕**策略说了算、默认关**：主机密钥策略实现 `IHostKeyRotationPolicy` 且 `UpdateHostKeys` 为真时才做（`KnownHostsPolicy.UpdateHostKeys`，默认 `false`）。
+
+〔决策〕**只替「认得的主机」补记**：
+- 出示证书的主机（CA 管理）不做 —— 它的信任来自 CA，不来自 `known_hosts` 里的某一把钥；
+- 宣告里得有这次连接用的那把钥，且它**作为普通钥记在 `known_hosts` 里**（`GetKnownHostKeysAsync`）—— 否则不知道该替谁记
+  （刚在这次 TOFU 里接受、但没记下来的，pinned 指纹的，都不算）；
+- 只请服务端证明**没记过的**那几把；证书、本库认不得的类型、重复的不算；一次最多看 16 把。
+
+〔决策〕**验证从严**：RSA 只认 SHA-2 的签名（`ssh-rsa` 的 SHA-1 不认）；**一把签不过就一把都不记** —— 同一个应答里有假的，其余的也不可信。
+
+〔决策〕**只增不删**：证实了的新钥追加进 `known_hosts`（`RecordHostKeysAsync`）；删掉不再出示的旧钥要改写文件，不做（`known_hosts` 只追加）。
+
+〔决策〕**在后台做、尽力而为**：接收循环上只解析，证明与写文件放到后台（要发全局请求、等应答）；每条连接只做一次。
+结果在 `SshConnection.LastHostKeyUpdate`（补记了哪些，或者为什么没做）；没做成不影响连接。
+
+〔已核对〕对真 sshd（三把主机密钥）：头一次按 TOFU 记下谈成的那把，轮换补记另外两把；把签名数据里的请求名改错，真 sshd 的证明就验不过。
 
 ---
 

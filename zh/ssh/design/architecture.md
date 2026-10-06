@@ -660,7 +660,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesRe
 | 6 | 认证方法 | 新认证方式，含堡垒机的私有扩展 | 🔒 凭据是公开的 `SshCredential` 家族；新方法在库里加一个凭据类型与认证器分支。设计时的 `IAuthMethod` 没有做 |
 | 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 | ✅ 公开。内置 `KnownHostsPolicy`、`PinnedFingerprintHostKeyPolicy`、`DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` | 🔒 库内接缝。三种都已内置（`AgentForwarder`、`X11Forwarder`、`RemotePortForwarder`，它们对这个接口是显式实现） |
-| 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ❌ 没有做。发全局请求是库内部的一个方法 |
+| 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ✅ 主机密钥轮换由主机密钥策略开启（`IHostKeyRotationPolicy`，spec/05 §6.4.1）；发全局请求仍是库内部的方法 |
 | 10 | SFTP 扩展 | 厂商 SFTP 扩展 | ✅ 库内封装：`posix-rename`、`hardlink`、`fsync`、`limits`、`statvfs`、`copy-data`、`expand-path`、`lsetstat`、`users-groups-by-id`（spec/06 §7.1）；厂商私有的经 `SftpFileSystem.SendExtendedAsync`（spec/06 §7.3） |
 | 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 度量走 `System.Diagnostics.Metrics`：连接与通道的一组（`SshMetrics.MeterName`）、转发的一组（`ForwardMetrics.MeterName`），见 spec/08 §7；报文旁路 `IPacketTap` 已做（spec/08 §9）；`ActivitySource` 还没有做 |
 | 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`，没有另设接口 |
