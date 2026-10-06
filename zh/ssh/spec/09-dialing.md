@@ -366,7 +366,7 @@ sequenceDiagram
 | `ssh_config` 项 | 连接参数 |
 | --- | --- |
 | `HostName` / `Port` / `User` | 目标端点与用户名（`User` 缺省时用调用方给的默认用户名）。`HostName` 里的 `%h` 换成使用者输入的名字、`%%` 换成 `%`（`Host *.prod` 配 `HostName %h.example.com`）；〔历史〕曾经只在 `Match host` 的比对里展开，建连拿字面量 `%h.example.com` 去连。`Port`（以及 `ProxyJump host:port` 里的端口）不是 1–65535 之间的整数时报 `InvalidConfiguration`，说出主机与那个值（`SshHostConfig.Port` 本身交出 22）；〔历史〕曾经原样交给连接参数，抛的是 BCL 的参数异常 |
-| `IdentityFile` | 逐个读取私钥（`~` 与 `%d` `%u` `%h` `%r` `%%` 展开 —— 展开好的路径经 `SshHostConfig.ExpandIdentityFiles` 公开，`none` 不算；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectOptions.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
+| `IdentityFile` | 逐个读取私钥（`~` 与记号展开，见表后 —— 展开好的路径经 `SshHostConfig.ExpandIdentityFiles` 公开，`none` 不算；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectOptions.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
 | `IdentitiesOnly` | 无需额外动作：本库从不自动去 agent 里取钥，用哪些钥完全由凭据清单决定。配置里的密钥排在调用方模板凭据**之前**（与 `ssh` 先试 `IdentityFile` 的行为一致） |
 | `Compression yes` | 算法清单打开 `zlib@openssh.com` |
 | `ServerAliveInterval` / `ServerAliveCountMax` | 保活策略 |
@@ -375,12 +375,23 @@ sequenceDiagram
 | `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝。`AskUnknownHost` 只在「问」时交给策略：`yes` / `accept-new` 下不调用它（`spec/03` §5） |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。第一跳照它自己的 `ProxyJump` / `ProxyCommand` 到达，**之后的每一跳经前一跳到达，它们自己的 `ProxyJump` / `ProxyCommand` 不解析**（〔历史〕曾经先解析一遍再丢掉：白批准一次 `ProxyCommand`，用不上的链里有环也报错）；〔决策〕`ProxyJump` 只有它自己一跳（`Host *.corp` 带出来、跳板忘了写 `ProxyJump none`）当成直连，不报「链有环」。跳板拿到哪些调用方凭据见下 |
 | `ProxyCommand` | 代理命令拨号器，**要调用方批准才执行**（见下）；`none` 表示不用 |
+| `CertificateFile` | 证书，与读出来的私钥按证书里的公钥配对；每把钥旁边的「钥-cert.pub」也自动配（ssh 的默认行为）。**证书排在那把钥前面**：先出示证书，服务端不认 CA 时再退到裸钥。证的钥不在读出来的 `IdentityFile` 里、或者读不出来的，报给 `IdentityFileSkipped` |
+| `ConnectionAttempts` | 拨号失败时一共试几次（每次隔一秒，上限 100）：拨号器包一层，只重试拨号本身（TCP、DNS、代理、跳板这一层），跳板链与代理命令一起重来；拨通之后的失败不重试 |
+| `SetEnv` / `SendEnv` / `RemoteCommand` | 会话参数（`SshHostConfig.ApplyToShell`）：`SetEnv 名=值`（多个、多行，先出现的赢）加上 `SendEnv` 通配选中的本机环境变量（`-模式` 不处理）；`RemoteCommand` 成了伪终端里跑的命令（`none` 不算）。模板里显式给了的不动 |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数。由它们打开的转发按 `Continue` 请求（`07-forwarding.md` §7.5.8）：本机没有 agent / 显示、服务端拒绝时 shell 照常启动 |
 | `ForwardAgent` 的取值 | 四种写法（`ssh_config(5)`）：`yes` → 转发默认的 agent；`no`（缺省）→ 不转发；agent 套接字路径（展开 `~` 与 `%d` `%u` `%h` `%r`）→ 转发那一个；`$环境变量名` → 转发变量值指的那一个，变量没设或为空时不转发。`yes` / `no` 不分大小写。〔历史〕曾经只认 `yes`：写了路径的配置被当成 `no`，转发悄悄没开 |
 | `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
 | `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | 按 §7.2 的写法作用到默认算法清单上（加密与 MAC 两个方向一起）；写错报 `InvalidConfiguration`，说出主机与原因 |
 | `PubkeyAcceptedAlgorithms`（旧名 `PubkeyAcceptedKeyTypes`） | 按 §7.2 的写法作用到本库公钥认证默认的签名算法上；结果里留着 `ssh-rsa` 时放开 SHA-1 的 RSA 签名（`AllowSha1RsaSignatures`）—— 老服务器最常见的那一行 `+ssh-rsa`。其余写法目前只用于校验 |
 | `LocalForward` / `RemoteForward` / `DynamicForward` 及 `GatewayPorts`、`ExitOnForwardFailure`、`ClearAllForwardings`、`PermitRemoteOpen` | 不是连接参数：连上之后由 `SshConfigFile.StartForwardsAsync` 起，见 §7.3 |
+
+**路径里的记号**（`IdentityFile`、`CertificateFile`、`UserKnownHostsFile`、`ForwardAgent` 的路径共用，`SshHostConfig.Expand`）：
+`%d` 本机家目录、`%u` 本机用户、`%h` 主机（经 `HostName` 改写之后）、`%r` 登录用户、`%p` 端口、`%n` 使用者输入的名字、
+`%l` / `%L` 本机主机名（完整 / 第一段）、`%C`（`%l%h%p%r` 的 SHA-1，十六进制小写）、`%j`（`ProxyJump`）、`%k`（`HostKeyAlias`，没有就是主机）、`%%`。
+不认识的原样留着。
+
+**还没有的常用键**：`IdentityAgent`、`HostKeyAlias`（只用于 `%k`，还不参与 `known_hosts` 的查找）、`GlobalKnownHostsFile`、`AddressFamily`、
+`BindAddress` / `BindInterface`、`RequestTTY`，以及记号 `%i`（本机 uid）。
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
