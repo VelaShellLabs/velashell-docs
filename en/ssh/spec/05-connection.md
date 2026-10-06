@@ -181,6 +181,17 @@ its bytes still count toward the pending total, so data-plane senders see them. 
   during a rekey it is still stashed by the send gate, and the stash preserves order;
 - It has no ordering constraint relative to the data we send — it is about our **receiving**, not our **sending**.
 
+〔Decision〕**Interactive channels use an interactive lane that takes turns with the normal queue** (Q7). Each channel has at most one data frame in the queue at a time (the stdin pump sends the next frame only after the previous one has been flushed),
+but when a pile of tunnel connections and SFTP are sending at once, the normal queue holds one frame from each of them; a keystroke in a terminal queued behind them has to wait until they are all on the wire ——
+over 3 seconds with a 2 MiB backlog on a 5 Mbit/s uplink. Frames sent by interactive channels (`SshChannelOptions.IsInteractive`; channels opened by `OpenShellAsync` are interactive automatically) go into the interactive lane,
+and after the window adjustments the send pump **takes turns** between the interactive lane and the normal queue (taking from the other when one is empty), so a keystroke waits for at most one frame from the normal queue.
+
+- **Taking turns, not priority**: when a large paste goes into a terminal, or many terminals are scrolling at once, the normal queue still gets every other turn and is never starved;
+- **All** of a channel's frames go through the same lane —— those it sends itself and those the receive loop sends on its behalf (`CHANNEL_CLOSE`, request replies) —— so the order of its own frames is unchanged,
+  `CLOSE` still follows its data, and request replies still line up in FIFO order; the lane is fixed when the channel is opened and never changes (switching lanes midway would reorder its own frames);
+- There was never an ordering constraint relative to other channels or to connection-level messages; during a rekey, frames from the interactive lane are still stashed by the send gate, and the stash preserves order.
+- Not solved: bytes already handed to the operating system's socket send buffer still go out first. 〔History〕There used to be a single FIFO (plus the priority lane for window adjustments).
+
 ### 3.3 Adaptive window
 
 The problem with a fixed window is that **it also determines the throughput ceiling**:
