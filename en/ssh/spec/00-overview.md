@@ -204,6 +204,11 @@ Callers may also build their own lists, but no category may be empty, and every 
 must be one this library implements. This is checked **when connecting starts, before dialing**; a bad list throws `ArgumentException` right away,
 without dialing. The rule and its rationale are in 03 §2.2.
 
+〔Decision〕**The algorithm catalog is public** (`SshAlgorithmCatalog`): for each category (`SshAlgorithmCategory`), which names are implemented (`Implemented`,
+in preference order: the default list first, legacy algorithms after) and which common names are not (`KnownUnimplemented`, e.g. CBC, `umac-*`, `ssh-dss`).
+Consumers that let users write their own lists use it to say on the spot "not implemented" versus "not recognized". It shares one source of truth with the validation above and with the factory tables, checked name by name in the tests.
+〔History〕Without this catalog the host inferred what was implemented from `Default.WithLegacyInterop()` and maintained its own hand-written "known but unimplemented" list.
+
 ## 7 How algorithm priority is ordered
 
 〔Decision〕**The order of the client list is our order of preference**; the choice is "the first entry in the client list that both sides support"
