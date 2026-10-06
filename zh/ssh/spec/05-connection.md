@@ -716,7 +716,8 @@ sequenceDiagram
 | 通道请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步）；本端已收尾的通道除外，照单吸收（§5.1） |
 | 全局请求应答队列空时收到 SUCCESS/FAILURE | `ProtocolError`，断开（FIFO 失步） |
 | 收到未知编号的报文 | 回 `UNIMPLEMENTED`，**带被拒报文的序号**（RFC 4253 §11.4），不断开 |
-| 收到 `UNIMPLEMENTED` / `IGNORE` / `DEBUG` / `EXT_INFO` | 忽略（对 `UNIMPLEMENTED` 再回 `UNIMPLEMENTED` 只会让两边互相回声） |
+| 收到 `UNIMPLEMENTED` / `IGNORE` / `EXT_INFO` | 忽略（对 `UNIMPLEMENTED` 再回 `UNIMPLEMENTED` 只会让两边互相回声） |
+| 收到 `DEBUG` | 标着 `always_display` 的清洗之后交给 `SshConnectionOptions.DebugMessageHandler`（RFC 4253 §11.3「应当展示」）：认证期间在认证流程里依次交出、回调抛的照实交还；连上之后在线程池上交出、不挡接收循环，回调抛的丢掉。不带 `always_display` 的、格式不对的忽略。〔历史〕曾经一律丢掉 |
 | 收到 `DISCONNECT` | 会话判死；异常里带**原因码与对端原话**（`DisconnectReason` / `PeerDescription`） |
 | 对端一直发要应答的报文、却不读我们发回去的 | 接收循环投递的应答排队超过 `MaxQueuedReplyBytes`（默认 16 MiB）→ `ProtocolError`，断开。接收循环不能在背压上等，所以这里只能设硬上限；应答同时计入背压，数据面的发送方会因此等 |
 | 对端灌不认识的通道请求 | 事件流里没读走的未知请求最多留 64 条，之后的丢掉（照样回 `FAILURE`）。退出状态、`EOF`、关闭不受这个上限影响 |
