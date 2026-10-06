@@ -274,12 +274,26 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 // ssh-add -t 3600 -c: deleted automatically after an hour, every signature must be confirmed
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
     new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
+
+// ssh-add -h bastion.example.com -h "bastion.example.com>deploy@db.internal":
+// only bastion directly from the local machine, and db as deploy through bastion; hosts are identified by host key, looked up in known_hosts
+IReadOnlyList<KnownHostEntry> knownHosts = await KnownHostsFile.LoadAsync(cancellationToken: ct);
+SshAgentHopHost bastion = SshAgentHopHost.FromKnownHosts(knownHosts, "bastion.example.com")
+    ?? throw new InvalidOperationException("bastion.example.com is not in known_hosts: connect once and trust it first");
+SshAgentHopHost db = SshAgentHopHost.FromKnownHosts(knownHosts, "db.internal")
+    ?? throw new InvalidOperationException("db.internal is not in known_hosts: connect once and trust it first");
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", new SshAgentKeyConstraints
+{
+    AllowedHops = [new SshAgentHop(bastion), new SshAgentHop(db, userName: "deploy", via: bastion)],
+}, ct);
 ```
 
 - Only in-process private keys (`InMemorySshSigner`) are accepted; adding certificates is not supported yet.
 - **The library never adds keys on its own**; when to put something into the user's agent is the caller's decision.
 - Some agents do not support constraints and reject the whole request (`SshAgentException`). How long an added key lives is up to the agent —
   the Windows OpenSSH agent stores it in the registry, so it survives a reboot. Specification: [spec/07 §7.3](spec/07-forwarding.md).
+- Destination constraints (`AllowedHops`) are enforced by the agent: use through forwarding needs every hop spelled out (the second hop in the example), and a constrained key cannot sign git commits;
+  an agent without support rejects the whole request (`AgentRefused`), and the library never falls back to adding the key without the constraint. Specification: [spec/07 §7.3.2](spec/07-forwarding.md).
 
 ---
 

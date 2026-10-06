@@ -272,12 +272,26 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 // ssh-add -t 3600 -c：一小时后自动删除、每次签名都要确认
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
     new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
+
+// ssh-add -h bastion.example.com -h "bastion.example.com>deploy@db.internal"：
+// 只许本机直接登 bastion、经 bastion 以 deploy 登 db；主机靠主机钥认，从 known_hosts 里找
+IReadOnlyList<KnownHostEntry> knownHosts = await KnownHostsFile.LoadAsync(cancellationToken: ct);
+SshAgentHopHost bastion = SshAgentHopHost.FromKnownHosts(knownHosts, "bastion.example.com")
+    ?? throw new InvalidOperationException("known_hosts 里没有 bastion.example.com：先连一次、信任它");
+SshAgentHopHost db = SshAgentHopHost.FromKnownHosts(knownHosts, "db.internal")
+    ?? throw new InvalidOperationException("known_hosts 里没有 db.internal：先连一次、信任它");
+await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", new SshAgentKeyConstraints
+{
+    AllowedHops = [new SshAgentHop(bastion), new SshAgentHop(db, userName: "deploy", via: bastion)],
+}, ct);
 ```
 
 - 只接受进程内私钥（`InMemorySshSigner`）；证书加钥暂不支持。
 - **库从不自动加钥**，什么时候往使用者的 agent 里放东西由调用方决定。
 - 有的 agent 不支持约束，会整条拒绝（`SshAgentException`）。加进去的钥活多久由 agent 决定 ——
   Windows 的 OpenSSH agent 会存进注册表，重启后仍在。规格见 [spec/07 §7.3](spec/07-forwarding.md)。
+- 目的地约束（`AllowedHops`）由 agent 执行：经转发使用要逐跳写全（上例的第二跳），带约束的钥不能拿来签 git 提交；
+  agent 不支持时整条拒绝（`AgentRefused`），库绝不退回去不带约束地加。规格见 [spec/07 §7.3.2](spec/07-forwarding.md)。
 
 ---
 

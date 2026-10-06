@@ -669,16 +669,18 @@ or what was given is not a certificate at all, it is an immediate `ArgumentExcep
 | :-: | --- | --- | --- |
 | `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires. A fraction of a second is rounded up; 〔Decision〕a lifetime of 0, negative, or beyond uint32 throws `ArgumentOutOfRangeException` when set (it used to be silently clamped to 1 second, so the added key vanished a second later) |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | none | The agent asks the user to confirm every signature (`ssh-add -c`) |
+| `255` | `SSH_AGENT_CONSTRAIN_EXTENSION` | string extension name + the extension's own content | This library sends only one: the destination constraint `restrict-destination-v00@openssh.com` (`ssh-add -h`), see §7.3.2. Placed after `1` and `2` |
 
 **Response**: `6` `SSH_AGENT_SUCCESS` means success; `5` `SSH_AGENT_FAILURE` throws `SshAgentException`.
 The agent gives no reason, so the exception message names the three common ones: the agent does not support constraints (some agents reject `25` outright),
-the agent is locked (`ssh-add -x`), or the agent does not support this key type.
+the agent is locked (`ssh-add -x`), or the agent does not support this key type. With destination constraints there is one more (§7.3.2).
 
 〔Decision〕
 
 1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all.
    Certificates go through a separate overload that takes the certificate and the private key separately (see above).
 2. **No constraints means `17`**; never send a `25` with an empty constraint list — some agents accept `17` but not `25`.
+   Conversely, **constraints present always means `25`**: the agent does not read bytes left over at the end of a `17`, so constraints appended to a `17` are silently dropped (the ⚠️ in §7.3.2).
 3. **The request buffer is zeroed right after use.** The buffer is reserved at its upper bound up front, so growth never leaves unzeroed copies on the heap.
 4. **No duplicate check.** What happens when the same key is added twice is the agent's business (OpenSSH updates the comment and constraints);
    whether to look first with `REQUEST_IDENTITIES` is up to the caller.
@@ -703,12 +705,260 @@ Remove-all can only fail because the agent is locked or does not support it, so 
 A locked agent (measured against a real OpenSSH 10.3) answers the identity list with an empty list and refuses signing and remove-all until it is unlocked with the same passphrase —
 a forwarded agent cannot sign during that time either; use it when stepping away from the machine.
 
+### 7.3.2 Destination constraints (`restrict-destination-v00@openssh.com`, `ssh-add -h`)
+
+> Basis: OpenSSH `PROTOCOL.agent` §2; RFC 9987 (the published form of draft-miller-ssh-agent) §5.2.7 "Key Constraints" and §5.2.7.3 "Constraint Extensions";
+> OpenSSH's "SSH agent restriction" design note (openssh.com/agent-restrict.html); `-h` / `-H` in `ssh-add(1)`.
+> `PROTOCOL.agent` only lists the fields and does not say how the layers nest. The nesting below and the agent's behavior were checked black-box against OpenSSH 10.3's `ssh-add` / `ssh-agent` / `ssh` / `sshd`
+> (capturing the bytes on the agent socket, hand-built requests, real connections and real forwarding), marked 〔Verified〕.
+
+〔History〕§7.4 has long said "the agent relies on session binding to enforce `ssh-add -h` constraints", and this library does send the binding — but that only **cooperates with** constraints someone else added:
+when this library adds a key to the agent itself (§7.3) it cannot express such a constraint; `SshAgentKeyConstraints` only has lifetime and per-use confirmation.
+Anyone who wanted "this key may only log in to these hosts" had to fall back to the command line.
+
+**What it governs**: restricting a key to "only through where, only to which host, only as which user". The agent enforces the restriction, not this library —
+this library only writes the restriction into the add request (the constraint table in §7.3) and makes session bindings during authentication and forwarding (§7.4), so the agent knows which host on which path each signature is for.
+
+#### What a hop is
+
+A destination constraint consists of a number of "hops"; each hop permits one leg of a path:
+
+| Part of a hop | Meaning |
+| --- | --- |
+| Start | Empty = starting directly from the local machine (the one running the agent); otherwise a **forwarding host**: the key reached it through agent forwarding and is used onward from there |
+| End | The host this leg arrives at |
+| User name | Which user to log in as on the end host; empty = any |
+
+Hosts are identified by **host key**, not by name: what session binding (§7.4) hands to the agent is the server's host public key, and that is what the agent compares.
+
+| Goal | Hops needed |
+| --- | --- |
+| Log in to bastion directly from the local machine, any user | (local → bastion) |
+| Log in to prod directly from the local machine as `deploy` | (local → prod, `deploy`) |
+| Log in to bastion, forward the agent there, then log in from bastion to db as `deploy` | (local → bastion) **and** (bastion → db, `deploy`) |
+
+How the agent decides (the 〔Verified〕 points were measured against OpenSSH 10.3):
+
+1. **Every leg of the path a signature travels must be permitted by some hop.** Direct authentication from the local machine has a single leg; through forwarding, the first leg is "local → first forwarding host",
+   each forwarding host adds one more leg, and the last leg reaches the destination host. 〔Verified〕With only (local → A) and (local → B) permitted, logging in to B after forwarding to A is refused — (A → B) is missing.
+2. **For the key to be visible on a forwarding host, some hop must start at that host.** 〔Verified〕With only (local → A), `ssh-add -l` on A after forwarding says the agent has no identities;
+   adding (A → B) makes it list the key.
+3. **How a host is recognized**: the host public key in the session binding is among this hop host's "host keys"; or it is a host certificate whose signing CA is among this hop host's "CA keys",
+   and the certificate's principals accept this hop host's **name**.
+   - When recognized by host key alone, the name takes no part in the comparison. 〔Verified〕The same host key recorded in `known_hosts` under a different name, with the constraint added under that name, is still permitted; connecting to the same host through an alias is permitted too.
+   - When recognized by CA, the name is compared as-is against the certificate's principals. 〔Verified〕Name `other` against principal `host-c` is refused; the name itself is **not a wildcard pattern**
+     (`host-*` against `host-c` is refused), and it is **case-sensitive** (`HOST-C` against `host-c` is refused); when the certificate's principal itself has a wildcard (`*.example.org`),
+     both a concrete host name (`web.example.org`) and a copy of that principal are permitted.
+4. **The user name is only checked on the leg where this key logs in**, and may contain `*` / `?` wildcards. 〔Verified〕`alice` against login user `probe` is refused, `pro*` is permitted;
+   when (local → A) is restricted to `alice` but the key is only forwarded through A and used to log in to B as `probe`, that `alice` has no effect.
+5. **A connection without session binding**: the agent still lists the key but refuses to sign with it. 〔Verified〕`ssh-add -l` directly on the local machine lists it, `ssh-add -T` is refused.
+   Authentication is refused just the same (the 9.9p2 measurement in §7.4) — which is why this library must bind.
+6. **User authentication only.** The design note says so: the agent has to parse the signed data as a public key login to get at the session identifier and user name it checks; other signatures (SSHSIG and the like) cannot be checked and are always refused.
+   〔Verified〕A local `ssh-keygen -Y sign` (which is what git's SSH commit signing uses) with this key is refused. Destination-constrained keys cannot sign commits; the host's UI should make that clear to the user.
+7. **Constraints cannot be changed once added; to change them, add the key again.** 〔Verified〕Adding the same key again replaces the old constraints entirely with the new ones (consistent with §7.3 decision 4, "no duplicate check").
+
+The path the agent sees when the key is used through forwarding:
+
+```mermaid
+sequenceDiagram
+    participant G as Local agent
+    participant C as This library (local)
+    participant A as ssh on forwarding host A
+    participant B as Destination host B
+
+    C->>G: Session binding (A's host key, is_forwarding = true)
+    Note over C,A: Agent forwarding channel (§7.1)
+    A->>G: Forwarded: session binding (B's host key, is_forwarding = false)
+    A->>G: Forwarded: sign request (log in to B, user deploy)
+    Note over G: Path local → A → B:<br/>needs (local → A) and (A → B, deploy or any)
+    G-->>A: Signature, or FAILURE
+    A->>B: USERAUTH_REQUEST
+```
+
+#### Message
+
+The destination constraint is one extension constraint (`255`) in the constraint table of §7.3, placed after lifetime and confirmation — 〔Verified〕that is the order `ssh-add -t … -c -h …` uses.
+**All hops go into a single extension constraint** (〔Verified〕several `-h` options still send just one).
+In the `PROTOCOL.agent` pseudo-structure every variable-length layer is **wrapped in a string of its own** (uint32 length + content), four layers in all:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| Constraint number | byte | `255` `SSH_AGENT_CONSTRAIN_EXTENSION` (RFC 9987 §8.2) |
+| Extension name | string | `restrict-destination-v00@openssh.com` |
+| Hop list | string | Its content is the hops back to back, each one a string; **there is no count field**, read until this string ends |
+
+One hop (the content of each string in the hop list):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| Start | string | Its content is a "host description" (next table). Starting from the local machine it is an **empty host description**: three empty strings and no keys, 12 bytes in all |
+| End | string | Host description |
+| Reserved | string | Empty |
+
+Host description (the content of the start and end strings):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| User name | string | Start: **must be empty**; end: `UserName`, empty for any |
+| Host name | string | UTF-8. Start: the start host's `Name` (empty when starting from the local machine); end: the end host's `Name` |
+| Reserved | string | Empty |
+| Host keys | zero or more groups of "string public key blob ‖ boolean is CA" | One group after another, **no count field**, until this string ends. `HostKeys` first (false), then `CertificateAuthorities` (true), each in list order. The boolean is only ever written as `0` / `1` |
+
+Example: (local → host-c, one ed25519 host key, any user). 〔Verified〕Identical to the bytes `ssh-add -h host-c` sends:
+start 12 bytes; end 74 bytes (4 + 0, 4 + 6, 4 + 0, then 4 + 51 for the public key blob and 1 byte of false);
+hop 98 bytes (4 + 12, 4 + 74, 4 + 0); hop list 102 bytes (4 + 98); the whole constraint 147 bytes (1 + 4 + 36 + 4 + 102).
+
+〔Verified〕What the agent checks in the content (hand-built requests):
+
+| Request | Agent's reply |
+| --- | --- |
+| Non-empty start user name | FAILURE |
+| Empty end host name; end with no keys | FAILURE |
+| Start with a name but no keys, or keys but no name | FAILURE |
+| Any reserved field non-empty | FAILURE |
+| Hop list not wrapped in a string (hops directly after the extension name) | FAILURE |
+| Unknown extension name | FAILURE (`5`, not `28`) |
+| Empty hop list; "is CA" written as `2`; a certificate as a host key; a `,` in the host name | All answered SUCCESS — this library blocks every one of these at construction / set time (see below), so they are never sent |
+
+⚠️ **Constraints require `25`.** 〔Verified〕Append the same constraint bytes to a `17` (`SSH_AGENTC_ADD_IDENTITY`) and the agent answers SUCCESS,
+but the key it adds carries **no constraint at all** — it does not read the bytes left over at the end of a `17`. §7.3 decision 2, "no constraints means `17`", read backwards is "constraints present always means `25`";
+for destination constraints this is a security matter: the user believes the key can only log in to bastion, when in fact it can log in anywhere. A unit test must pin it down.
+
+#### Public API
+
+〔Decision〕One property on `SshAgentKeyConstraints` and two new small records; the three `AddIdentityAsync` overloads stay as they are.
+
+| Member | Shape | Notes |
+| --- | --- | --- |
+| `SshAgentKeyConstraints.AllowedHops` | `IReadOnlyList<SshAgentHop>?`, `init` | `null` (the default) = no destination constraint; when given, "only these hops are allowed" |
+| `SshAgentHop` | `sealed record`, `Keys/SshAgentHop.cs` | Constructor parameters in order: end, user name (default `null`), start (default `null`); properties `Destination`, `UserName`, `Via`, read-only |
+| `SshAgentHopHost` | `sealed record`, `Keys/SshAgentHopHost.cs` | Constructor parameters in order: name, host key list, CA key list (default `null`, treated as empty); properties `Name`, `HostKeys`, `CertificateAuthorities` (both lists are `IReadOnlyList<SshPublicKey>`), read-only |
+| `SshAgentHopHost.FromKnownHosts` | static method returning `SshAgentHopHost?` | Builds a host from `known_hosts` (next subsection) |
+
+- The start is called `Via` (`null` is the local machine), not "source": the design note's reminder is right — a hop means "used **through** this host", not "coming from this host".
+- The two new records have read-only properties without `init`: all validation happens once in the constructor, and `with` cannot produce an invalid combination (`src/VelaShell.Ssh/AGENTS.md` §4.3, "invalid values throw at construction").
+- Lists are copied into a read-only copy at construction / set time (like `AgentForwardOptions.AllowedKeys`); equality of `SshAgentHopHost`, `SshAgentHop` and `SshAgentKeyConstraints`
+  compares **content**, order included (like `SshAlgorithmSet`).
+- `SshAgentKeyConstraints` counts `AllowedHops` when deciding "are there any constraints": `AllowedHops` alone also sends `25`.
+- Constraint number `255` and the extension name become named constants in `SshAgentMessage` (next to `SessionBindExtension`).
+
+〔Decision〕Validation happens at construction / set time and throws on violation:
+
+| Where | Rule | Throws |
+| --- | --- | --- |
+| Name of `SshAgentHopHost` | Not `null` | `ArgumentNullException` |
+| Same | Non-empty; at most 255 bytes of UTF-8; no whitespace, control characters or `,` | `ArgumentException` |
+| Host key list | Not `null` (the CA key list may be `null`) | `ArgumentNullException` |
+| Elements of both lists | Not `null`; **not a certificate** (a host key is given as the key inside the certificate, a CA as the CA public key itself) | `ArgumentException` |
+| Both lists together | After removing duplicates within each list by blob (keeping the first occurrence's position), 1–32 keys in total | `ArgumentException` |
+| End of `SshAgentHop` | Not `null` | `ArgumentNullException` |
+| User name of `SshAgentHop` | `null` = any; when given, non-empty, at most 255 bytes of UTF-8, no whitespace, control characters, `,` or `!` | `ArgumentException` |
+| `AllowedHops` | `null`, or 1–64 entries with no `null` element; entries kept as given, not deduplicated | `ArgumentException` |
+| The whole add message | Within the agent message limit (256 KiB, §7.1) | Throw `SshAgentException` (`LimitExceeded`) before sending; not a byte is sent |
+
+Why these rules:
+
+- **An empty list must not mean "any".** `AllowedHops = []` is either "allowed nowhere" — the added key would be useless — or the user unticked every box;
+  treating it as "any" is exactly the trap `AgentForwardOptions.AllowedKeys` once fell into (§7.2). For "any", pass `null`. (The agent itself does accept an empty hop list, 〔Verified〕.)
+- **No `,`, whitespace or control characters in host names.** In a host name they can only be a mistake (certificate principals are separated by `,` and never contain one),
+  yet the agent accepts them all (〔Verified〕), and the key quietly becomes usable nowhere. `*` / `?` are accepted: a principal can itself be a wildcard pattern, and a name that copies it is permitted —
+  but the name is **never** expanded as a pattern (point 3 above).
+- **No `,` or `!` in user names.** `*` / `?` wildcards were verified; pattern lists and negation were not, and callers should not depend on semantics nobody can vouch for.
+- **No certificates.** The agent does accept a certificate blob as a host key (〔Verified〕), but a host certificate's blob changes every time it is re-signed, so pinning one certificate means the key stops working a while later.
+  What belongs there is the key inside the certificate, or the CA that signs it (`@cert-authority` in `known_hosts`, 03 §5.5).
+- The limits (64 hops, 32 keys per host, 255-byte names) are sized so that normal use never comes near them and a mistake cannot drag out a giant request; the real hard limit is the 256 KiB of the whole message.
+
+#### Building a host from `known_hosts` (`SshAgentHopHost.FromKnownHosts`)
+
+〔Decision〕**Provided.** This is what `ssh-add -h` does: the user gives host names, and the host keys are looked up in `known_hosts`.
+Collecting host keys by hand easily misses a type (the server presents ECDSA this time, while the list only has Ed25519), and the consequence of a miss is that the key is refused on that host.
+
+Parameters: parsed entries (the result of `KnownHostsFile.LoadAsync` / `Parse`), host name, port (default 22). Which lines count:
+
+| Line in `known_hosts` | How it counts |
+| --- | --- |
+| Plain line | If the host matches, its key goes into `HostKeys`. "Matches" uses **exactly the same rules** as `KnownHostsFile.Lookup` (03 §5.4): plain, hashed lines (`HashKnownHosts`), wildcards and negation, case-insensitive; for a port other than 22 only the `[host]:port` form counts |
+| `@cert-authority` | If the host matches, the CA public key goes into `CertificateAuthorities` |
+| `@revoked` | If the host matches, its key is **removed** from both lists, whether it comes earlier or later in the file |
+| A key this library cannot decode; a certificate on a plain line | Skipped |
+| An unrecognized `@` marker | The whole line is skipped (`KnownHostsFile.Parse` never accepts it anyway) |
+
+- Each list is deduplicated by blob, keeping the order of first appearance in the file.
+- **Name** = the given host name lower-cased (invariant), **without the port**. The name is only used against certificate principals, and principals carry no port; the port only decides which lines count.
+  Lower-casing because the agent compares principals case-sensitively (point 3 above) and principals are lower-case by convention — consistent with `known_hosts`'s own rules (03 §5.4).
+- Both lists empty: return `null`, and let the caller tell the user "this host is not in `known_hosts`; connect once and trust it first".
+  〔Verified〕`ssh-add -h` exits with an error in this case (`No host keys found for destination`) and sends nothing to the agent.
+- A host name that breaks the rules above, or more than 32 keys in total after deduplication: the same `ArgumentException` as the constructor; a port outside 1–65535: `ArgumentOutOfRangeException`.
+- Only the entries passed in are looked at. Without `-H`, `ssh-add` searches four files (`~/.ssh/known_hosts`, `~/.ssh/known_hosts2`, `/etc/ssh/ssh_known_hosts`, `/etc/ssh/ssh_known_hosts2`);
+  which files to search is the caller's decision — concatenate the entries of several files and pass them in.
+
+〔Decision〕**Revoked keys are removed — this differs from `ssh-add`.** 〔Verified〕OpenSSH 10.3's `ssh-add -h` sends a host key that is also `@revoked` to the agent all the same.
+This library's `KnownHostsFile.Lookup` always rules a revoked key `Revoked` and refuses it (03 §5.4); keeping it in the permit list would open a door in the agent for a key we ourselves do not accept.
+
+#### Responses and errors
+
+| Case | Result |
+| --- | --- |
+| `6` SUCCESS | Added |
+| `5` FAILURE, or `28` EXTENSION_FAILURE | `SshAgentException` (`AgentRefused`). With `AllowedHops`, the message names, in addition to the three common reasons in §7.3, "the agent does not support destination constraints (`restrict-destination-v00@openssh.com`, available since OpenSSH 8.9; non-OpenSSH agents most likely lack it)" |
+| Message larger than 256 KiB | Throw `SshAgentException` (`LimitExceeded`) before sending; the message says "the key or the destination constraints are too large" |
+
+〔Decision〕
+
+1. **Refused means refused; never fall back to adding the key without the constraint.** RFC 9987 §5.2.7 requires an agent to reject the whole request on an unrecognized constraint precisely so that "failure is safe";
+   a client that quietly drops the constraint and retries tears that safeguard down.
+2. **No probing whether the agent supports it.** 〔Verified〕OpenSSH 10.3 answers the `query` extension (`ssh-add -Q`) with only `session-bind@openssh.com` and does not list constraint extensions — asking tells nothing. Just send it and handle a refusal.
+3. **`28` counts as a refusal too.** RFC 9987 says adding a key answers only SUCCESS / FAILURE (〔Verified〕OpenSSH answers `5` to every malformed constraint);
+   if some other agent answers extension failure, that is still a refusal, not a protocol error.
+4. **No new `SshFailureReason`.** The agent gives no reason, so `AgentRefused` is the truth; the caller knows it passed `AllowedHops` and the UI can add a hint on that basis
+   without parsing the message. The host's `SshInterop.Localize` needs no change.
+5. **One more hint when a signature is refused.** When a destination-constrained key is used on a host, user or path it does not permit, the agent refuses to sign, and the authenticator records `SkippedNoMaterial` for that credential
+   and moves on to the next (04 §3.4). The message of a refused `SignAsync` adds, next to "the key is no longer in the agent" and "per-use confirmation was declined", "this key carries destination constraints (`ssh-add -h`)
+   that do not permit this host, this user or this forwarding path".
+
+#### How it works with session binding (§7.4) and agent forwarding (§7)
+
+- **Authentication**: this library binds before a key in the agent signs for the first time (`is_forwarding = false`, §7.4) — exactly what the agent needs to judge the "local → destination" hop.
+  This library lists keys first and binds afterwards: on an unbound connection the agent still lists constrained keys (point 5 above), so the key is also tried against a host that is not permitted —
+  the server accepts the public key, the agent refuses to sign, it is recorded, and the next credential is tried. OpenSSH's `ssh` binds as soon as it connects to the agent (the design note);
+  〔Verified〕against a host that is not permitted its output has no signing refusal for this key (it does when the user name is wrong) — on a bound connection the agent does not list the key to it. The only difference is one extra probe.
+- **Forwarding**: each agent channel connects to the local agent on its own and binds with `is_forwarding = true`, and the remote hop's binding is passed through (§7.4) — the agent judges by points 1 and 2 above; the forwarding path needs no change.
+  `AgentForwardOptions.AllowedKeys` still filters once more at this library's layer: one is the user's choice for this particular forwarding, the other a restriction the key carries with it and that holds for everyone; the two stack.
+
+〔Decision〕**One agent connection authenticates for one session only.** The agent does not accept binding another session on a connection already bound for authentication (`PROTOCOL.agent` §1),
+yet the same `SshAgentClient` may authenticate several SSH connections in turn — when connecting with `ProxyJump` from `ssh_config`, the library hands the same agent credential to every hop, jump hosts and target alike.
+The later hop's binding is then refused, the agent connection still records the earlier hop, and a destination-constrained key refuses to sign on the later hop even though its constraints permit it. Therefore:
+
+- When authentication needs to bind a new session, and the last **accepted** authentication binding on this connection belongs to a different session, a client connected with `ConnectAsync` first reopens an agent connection to the same endpoint,
+  binds on the new connection and closes the old one; listing and signing afterwards go over the new connection. When the previous binding was not accepted (the agent does not support binding), nothing is reopened — reopening would change nothing.
+- Closing the old connection does no harm: the earlier hop's authentication finished before the later hop started (the later hop is dialed through the earlier one).
+- A stream handed over through `FromStream` cannot be reopened, so the binding is still sent on the original connection and yields `false`; with such clients, constrained keys need one client per SSH connection.
+- When one client is used by several connections to authenticate **at the same time**, constrained keys are not guaranteed to work (the sessions swap the connection out from under each other).
+
+#### 〔To be verified〕Checks against a real agent during implementation
+
+As interop cases against OpenSSH 10.3's `ssh-agent` in Docker:
+
+1. **Bytes**: add (local → host-c, one ed25519 host key, any user) with `AddIdentityAsync`, capture the request on the agent socket, and match it against the bytes `ssh-add -H … -h host-c` sends
+   for the same key, the same host key and the same name (the 12 / 74 / 98 / 102 above); repeat once each with a user name, with a start host, with two keys on one host, and with a CA.
+2. After adding, `ListIdentitiesAsync` on this (unbound) connection lists the key.
+3. **Authentication**: a permitted host connects; for a host that is not permitted, the credential is recorded as an agent signing refusal (`AgentRefused`, the message carries the destination-constraint hint) and authentication moves on to the next one; a wrong user name is refused the same way.
+4. **CA**: when the server presents a host certificate and `known_hosts` has only the `@cert-authority` line, a hop built with `FromKnownHosts` connects.
+5. **Forwarding**: forward the agent to A with the key carrying (local → A) and (A → B): `ssh-add -l` on A lists it and `ssh` from A to B succeeds; drop (A → B): A lists nothing and logging in to B is refused.
+6. **Jump hosts**: one agent client authenticating jump host J and then target T through `ProxyJump` in `ssh_config`, the key carrying (local → J) and (local → T): both hops succeed.
+   Also check that without the reopen it really fails — i.e. that the agent really refuses a second authentication binding on the same connection (`PROTOCOL.agent` says so; not measured yet).
+7. **Unconstrained keys are not dragged in**: after a reopen unconstrained keys still sign; and on an agent connection bound for authentication to session X, an unconstrained key still signs session Y's login request
+   (this decides whether unconstrained keys are affected when several connections share one client at the same time).
+8. **Message number**: with `AllowedHops`, always `25` (pinned by a unit test, see the ⚠️).
+9. **Refusal**: through `FromStream`, a fake agent that answers the add with `5` / `28` yields `AgentRefused` in both cases, the message carries the destination-constraint hint, and no second add request follows.
+10. Optional, not blocking: whether the Windows OpenSSH agent and Pageant accept this constraint; record the result in this section.
+
 ### 7.4 Session binding (`session-bind@openssh.com`)
 
 > Basis: OpenSSH `PROTOCOL.agent` §1; `SSH_AGENTC_EXTENSION` in draft-miller-ssh-agent; the session identifier in RFC 4253 §7.2;
 > the semantics of the constraints in OpenSSH's "SSH agent restriction" design note (openssh.com/agent-restrict.html).
 
-`ssh-add -h` adds **destination constraints** to a key (usable only for certain hosts, forwardable only along certain paths). To enforce them, the agent has to know
+`ssh-add -h` adds **destination constraints** to a key (usable only for certain hosts, forwardable only along certain paths; this library can add them too when adding keys, §7.3.2). To enforce them, the agent has to know
 "which SSH session this agent connection is serving" — and that is what session binding tells it.
 
 **Request message**:
@@ -731,7 +981,7 @@ a signature from rekeying signs that round's own `H`, which does not match the s
 
 | Purpose | Timing | `is_forwarding` |
 | --- | --- | :-: |
-| Authentication (`publickey`, key held in the agent) | Before a key on this agent connection is asked to sign for the first time; sent only once per connection and session | false |
+| Authentication (`publickey`, key held in the agent) | Before a key on this agent connection is asked to sign for the first time; sent only once per connection and session. One connection makes an authentication binding for one session only; a different session reopens the connection (§7.3.2) | false |
 | Forwarding | After each `auth-agent@openssh.com` channel has connected to the local agent, before the channel is confirmed (§7.1) | true |
 
 〔Decision〕**The remote hop's own session binding is passed through**, and it is the only extension let through. Each hop along a forwarding chain appends its own binding after the previous hop's,
@@ -1009,6 +1259,8 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | The local agent cannot be reached when agent forwarding is requested | Do not send `auth-agent-req`; throw or start normally per `FailureMode` (§7.1, §7.5.8); the reason code is carried over from the agent side (`AgentNotRunning` / `AgentUnavailable`) |
 | The local agent cannot be reached when an `auth-agent@openssh.com` channel arrives | Reply `CHANNEL_OPEN_FAILURE(2)`, with the description saying only "local ssh-agent unavailable"; the session and the forwarder are unaffected (§7.1) |
 | The local agent does not support session binding / drops the connection because of it | Forward as usual; on a drop, reconnect once without binding (§7.4) |
+| The agent refuses to add a key with destination constraints (`5` / `28`) | Throw `SshAgentException` (`AgentRefused`), the message names "the agent may not support destination constraints"; **never** retry by adding it without the constraint (§7.3.2) |
+| A destination-constrained key is used on a host, user or path it does not permit | The agent refuses to sign; authentication records `SkippedNoMaterial` for that credential and moves on to the next, a forwarding remote gets `FAILURE` (§7.3.2) |
 | The remote sends an agent extension other than `session-bind@openssh.com` | Reply `FAILURE`; it never reaches the local agent (§7.4) |
 
 〔Decision〕**A single connection's failure must never affect the forwarder itself.**
