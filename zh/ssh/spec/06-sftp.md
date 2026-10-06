@@ -624,8 +624,8 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | `limits@openssh.com` | §5.2；宣告了 `max-open-handles` 就按它排队：每个开着的文件、目录占一个额度，关了还回来，额度用完时新的 `OPEN` / `OPENDIR` 等着，而不是撞上服务端的上限得到一个随机的「操作失败」 | 用保守默认；句柄不限 |
 | `statvfs@openssh.com` | 文件系统用量：`GetFileSystemInfoAsync(路径)` 交回与 POSIX `statvfs` 一一对应的 11 个字段（顺序已与真 OpenSSH 的 `stat -f` 核对），加上按 `f_frsize`（为 0 时按 `f_bsize`，与 `df` 一致）算出的总容量、空闲、普通用户还能写多少（`AvailableBytes`，上传前预检看这个）、是否只读；字节数溢出时饱和 | 抛 `Unsupported`（看 `HasStatVfs`） |
 | `copy-data` | **服务端内**复制，不经过网络 | 〔现状〕能力位可查（`HasCopyData`），**还没有封装**；宿主的远端复制走「下载再上传」 |
-| `home-directory` | 取指定用户的家目录 | 〔现状〕能力位可查，**还没有封装**；工作目录取自 `REALPATH "."`（§4.6） |
-| `expand-path@openssh.com` | 展开 `~` | 〔现状〕能力位可查，**还没有封装** |
+| `home-directory` | 取指定用户的家目录：`ExpandPathAsync("~用户名…")` 在没有 `expand-path` 时用它 | `~用户名` 报 `Unsupported`；`~`、`~/…` 不需要它（用 `REALPATH "."`，§4.6） |
+| `expand-path@openssh.com` | 展开 `~`：`ExpandPathAsync(路径)` 把 `~`、`~/…`、`~用户名`、`~用户名/…` 整条交给服务端（顺带规范化，已与真 OpenSSH 的 `$HOME` 核对）；不以 `~` 开头的等同 `GetRealPathAsync`。`REALPATH` 本身不展开 `~` | `~`、`~/…` 用登录时的工作目录拼、再 `REALPATH`；`~用户名` 改用 `home-directory` |
 
 ### 7.2 能力查询是公开 API
 

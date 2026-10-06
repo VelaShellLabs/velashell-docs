@@ -626,8 +626,8 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 | `limits@openssh.com` | §5.2; when it announces `max-open-handles`, opens queue on it: each open file or directory takes one slot and returns it on close, and a new `OPEN` / `OPENDIR` waits when the slots run out, instead of hitting the server's limit and getting a random "operation failed" | Use conservative defaults; handles unlimited |
 | `statvfs@openssh.com` | File system usage: `GetFileSystemInfoAsync(path)` returns the 11 fields matching POSIX `statvfs` one to one (their order checked against a real OpenSSH's `stat -f`), plus the total, free, and still-writable-by-a-normal-user sizes (`AvailableBytes`, what an upload precheck looks at) computed from `f_frsize` (or `f_bsize` when that is 0, as `df` does), and whether it is read-only; byte counts saturate on overflow | Throws `Unsupported` (see `HasStatVfs`) |
 | `copy-data` | Copy **within the server**, without going over the network | 〔Status〕Queryable (`HasCopyData`), **not wrapped yet**; the host's remote copy downloads then uploads |
-| `home-directory` | Get a given user's home directory | 〔Status〕Queryable, **not wrapped yet**; the working directory comes from `REALPATH "."` (§4.6) |
-| `expand-path@openssh.com` | Expand `~` | 〔Status〕Queryable, **not wrapped yet** |
+| `home-directory` | Get a given user's home directory: used by `ExpandPathAsync("~user…")` when `expand-path` is missing | `~user` throws `Unsupported`; `~` and `~/…` do not need it (they use `REALPATH "."`, §4.6) |
+| `expand-path@openssh.com` | Expand `~`: `ExpandPathAsync(path)` hands `~`, `~/…`, `~user` and `~user/…` to the server whole (canonicalized along the way, checked against a real OpenSSH's `$HOME`); a path not starting with `~` behaves like `GetRealPathAsync`. `REALPATH` itself does not expand `~` | `~` and `~/…` are joined onto the login working directory and then `REALPATH`ed; `~user` falls back to `home-directory` |
 
 ### 7.2 Capability query is a public API
 
