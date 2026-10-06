@@ -12,7 +12,7 @@
 > **Why v3 and not a higher version**: v3 is draft-02, and OpenSSH implements only it,
 > while OpenSSH is the implementation or behavioral baseline for the vast majority of SFTP servers. v4–v6 are
 > almost never seen in the real world; writing code for them is paying costs for peers that do not exist.
-> 〔Decision〕**Implement v3 only**; when a higher version is negotiated, downgrade to 3.
+> 〔Decision〕**Implement v3 only**; if the server replies with any version other than 3, do not connect (lower: too different; higher: see §9).
 
 ---
 
@@ -722,7 +722,7 @@ and the local platform's path functions must not be used (on Windows they treat 
 | handle exceeds 256 bytes | `ProtocolError` (the limit specified by draft-02) |
 | Reply received for an unknown `request-id` | 〔Decision〕Ignore + debug log (may be a late reply to a cancelled request, §5.3) |
 | Unknown message type received | `ProtocolError` (the SFTP layer has no `UNIMPLEMENTED` mechanism) |
-| Server version > 3 | Downgrade to 3 and continue |
+| Server version > 3 | 〔Decision〕**Refuse**, `SftpUnavailableException` (`ProtocolError`): draft-02 §4 requires the server to reply with the lower of the two versions, and we send 3; a server replying with a higher one is either buggy or will speak its own version (ATTRS differs from v4 on), and parsing it as v3 silently misreads fields. 〔History〕It used to downgrade to 3 and continue |
 | Server version < 3 | 〔Decision〕**Refuse**, throw `SftpUnsupportedVersion`. v0–v2 differ too much to be worth supporting |
 | `READ` returns more data than the requested length | `ProtocolError` |
 | `count` returned by `READDIR` does not match the actual number of entries | `ProtocolError` |

@@ -10,7 +10,7 @@
 > **为什么是 v3 而不是更高版本**：v3 是 draft-02，OpenSSH 只实现它，
 > 而 OpenSSH 是绝大多数 SFTP 服务端的实现或行为基准。v4–v6 在真实世界里
 > 几乎见不到；为它们写代码是为不存在的对端付成本。
-> 〔决策〕**只实现 v3**，协商到更高版本时降级到 3。
+> 〔决策〕**只实现 v3**；服务端回的版本不是 3 就不连（更低：差异太大；更高：见 §九）。
 
 ---
 
@@ -720,7 +720,7 @@ SftpCapabilities Capabilities { get; }
 | handle 超过 256 字节 | `ProtocolError`（draft-02 规定的上限） |
 | 收到未知 `request-id` 的应答 | 〔决策〕忽略 + debug 日志（可能是已取消请求的迟到应答，§5.3） |
 | 收到未知报文类型 | `ProtocolError`（SFTP 层没有 `UNIMPLEMENTED` 机制） |
-| 服务端 version > 3 | 降到 3 继续 |
+| 服务端 version > 3 | 〔决策〕**拒绝**，`SftpUnavailableException`（`ProtocolError`）：draft-02 §4 要求服务端回双方版本里较小的那个，我们发的是 3；回得更大的服务端要么有缺陷、要么会按自己的版本说话（v4 起 ATTRS 结构不同），按 v3 解析就是静默错位。〔历史〕曾经降到 3 继续 |
 | 服务端 version < 3 | 〔决策〕**拒绝**，抛 `SftpUnsupportedVersion`。v0–v2 差异过大，不值得支持 |
 | `READ` 返回的数据多于请求的 length | `ProtocolError` |
 | `READDIR` 返回的 `count` 与实际项数不符 | `ProtocolError` |
