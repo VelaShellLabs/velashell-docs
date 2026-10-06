@@ -364,6 +364,14 @@ CLOSE 发出、账本关掉、在途的请求以「没成」结算，通道号�
 | `signal` | **false**（RFC 要求） | `string signal_name`（**不带 `SIG` 前缀**） |
 | `auth-agent-req@openssh.com` | true | 无 |
 | `x11-req` | true | 见 `07-forwarding.md` §7.5.3 |
+| `eow@openssh.com` | **false** | 无。只发给 OpenSSH（见下） |
+
+〔决策〕**输出读够了就告诉服务端：`eow@openssh.com`**（OpenSSH `PROTOCOL` 的 channel write close 扩展，`StopStandardOutputAsync`）。
+场景是只要输出的前几行（`head`、`grep -m 1` 那样）：本端把标准输出收尾、之后到的数据丢弃（窗口照常回补），
+OpenSSH 服务端收到后关掉远端进程的输出端，进程再写就收到 `SIGPIPE` 提前结束，不再白跑完、白占带宽。
+与 `CHANNEL_EOF` 方向相反、同样不是关闭通道：退出状态照常回来，标准输入也还能写；标准错误不受影响。
+**只发给 OpenSSH**（按服务端的版本标识串 `SSH-2.0-OpenSSH_` 判断）：有的实现收到不认识的通道请求会直接断开（违反 RFC 4254 §5.4，但确实有）。
+对别的实现只在本端丢弃，返回值说请求发没发出去。真 OpenSSH 上实测：`yes` 读几 KB 之后发出，很快以 `PIPE` 信号结束；不发的话它一直跑。
 
 〔决策〕**一个 session 通道上的请求顺序是固定的**：
 

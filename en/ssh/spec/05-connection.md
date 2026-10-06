@@ -366,6 +366,14 @@ Likewise, once the ledger is closed no further `want_reply = true` request is se
 | `signal` | **false** (required by RFC) | `string signal_name` (**without the `SIG` prefix**) |
 | `auth-agent-req@openssh.com` | true | None |
 | `x11-req` | true | See `07-forwarding.md` §7.5.3 |
+| `eow@openssh.com` | **false** | None. Sent to OpenSSH only (see below) |
+
+〔Decision〕**Once enough output has been read, tell the server: `eow@openssh.com`** (the channel write close extension in OpenSSH's `PROTOCOL`, `StopStandardOutputAsync`).
+The use case is wanting only the first few lines of output (like `head` or `grep -m 1`): the local end completes standard output and discards whatever arrives afterwards (the window is replenished as usual),
+and an OpenSSH server, on receiving it, closes the output end of the remote process, which gets `SIGPIPE` on its next write and ends early instead of running to completion and wasting bandwidth.
+It is the opposite direction of `CHANNEL_EOF` and likewise does not close the channel: the exit status still arrives and standard input can still be written; standard error is not affected.
+**It is sent to OpenSSH only** (judged by the server's identification string `SSH-2.0-OpenSSH_`): some implementations disconnect on a channel request they do not know (against RFC 4254 §5.4, but they exist).
+For other implementations the output is only discarded locally, and the return value says whether the request was sent. Measured against a real OpenSSH: sent after reading a few KB of `yes`, the process soon ends with signal `PIPE`; without it, `yes` keeps running.
 
 〔Decision〕**The order of requests on a session channel is fixed**:
 

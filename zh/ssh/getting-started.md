@@ -308,6 +308,9 @@ SshExitStatus status = await cmd.WaitAsync(ct);
 `await cmd.CompleteStandardInputAsync(ct)` 效果一样 —— 都会先把已写的内容冲干净，再发 `CHANNEL_EOF`，
 远端等着读完的程序（`cat`、`sort`）才会结束。EOF 不是关通道，之后照样收得到输出。
 
+反方向：只要输出的前几行，读够了就 `await cmd.StopStandardOutputAsync(ct)` —— 之后的输出丢弃，
+服务端是 OpenSSH 时远端进程再写就收到 `SIGPIPE` 提前结束（退出状态是信号 `PIPE`），不再白跑完。
+
 ---
 
 ## 五 交互式 shell

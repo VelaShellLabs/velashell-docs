@@ -310,6 +310,9 @@ When you are done writing to `cmd.StandardInput`, **completing it is EOF**: `awa
 `await cmd.CompleteStandardInputAsync(ct)` do the same thing — both flush what was written and then send `CHANNEL_EOF`,
 so remote programs waiting for end of input (`cat`, `sort`) can finish. EOF does not close the channel; output keeps arriving.
 
+The other direction: when you only want the first few lines of output, call `await cmd.StopStandardOutputAsync(ct)` once you have read enough —
+later output is discarded, and with an OpenSSH server the remote process gets `SIGPIPE` on its next write and ends early (the exit status is signal `PIPE`) instead of running to completion.
+
 ---
 
 ## 5. Interactive shell
