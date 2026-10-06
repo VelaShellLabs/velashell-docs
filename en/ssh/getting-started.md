@@ -458,7 +458,14 @@ Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.
 `Algorithms` exposes all algorithms actually negotiated for this session (key exchange, host key,
 encryption and integrity for both directions, compression for both directions, whether strict KEX was enabled).
 Showing "what we connected with" on a status bar, or answering "what exactly did this connection negotiate" when troubleshooting,
-both come from here — no need to probe again yourself.
+both come from here — no need to probe again yourself. Other read-only information of the same kind:
+
+```csharp
+Console.WriteLine(conn.PeerVersion);                 // SSH-2.0-OpenSSH_10.3 (sanitized)
+Console.WriteLine(conn.AuthenticationMethod);        // publickey / password / keyboard-interactive / none
+Console.WriteLine(string.Join(",", conn.ServerSignatureAlgorithms));   // server-sig-algs
+Console.WriteLine(conn.ConnectTimings);              // time spent dialing, exchanging versions, exchanging keys (incl. waiting for the decision), authenticating
+```
 
 ---
 

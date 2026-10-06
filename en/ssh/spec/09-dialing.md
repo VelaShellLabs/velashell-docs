@@ -104,6 +104,8 @@ Therefore:
   or while the jump host was forwarding to the target, and `Hops` marks that hop. 〔Decision〕It is not reported as "TCP connect timed out": the outer connection is indeed still "dialing",
   but what is stuck is the jump host's handshake or forwarding, not the local TCP. If the caller cancelled, that propagates as cancellation, not as a timeout —
   the inner hop sees the same cancelled token, so only the timer itself remembering "did I expire" can tell the two apart.
+- 〔Decision〕After connecting, the time spent in each phase is exposed (`SshConnection.ConnectTimings`: dialing, version exchange, first key exchange, authentication). Key exchange and authentication **include the time spent waiting for a person**
+  (the host key decision, typing a password or one-time code) — the timer pauses during that time, but the elapsed time is recorded as it is: troubleshooting asks "how long did this step actually take".
 
 ### 2.5 Direct TCP: staggered concurrent attempts for multiple addresses (RFC 8305)
 

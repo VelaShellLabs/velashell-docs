@@ -456,7 +456,14 @@ Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.
 `Algorithms` 交出的是这条会话实际协商出来的全部算法（密钥交换、主机密钥、
 两个方向的加密与完整性、两个方向的压缩、是否启用了严格 KEX）。
 状态栏上要显示「连上了什么」、排障时要回答「这条连接到底谈成了什么」，
-都从这里取，不用再自己探一次。
+都从这里取，不用再自己探一次。同一类只读信息还有：
+
+```csharp
+Console.WriteLine(conn.PeerVersion);                 // SSH-2.0-OpenSSH_10.3（已清洗）
+Console.WriteLine(conn.AuthenticationMethod);        // publickey / password / keyboard-interactive / none
+Console.WriteLine(string.Join(",", conn.ServerSignatureAlgorithms));   // server-sig-algs
+Console.WriteLine(conn.ConnectTimings);              // 拨号、版本交换、密钥交换（含等裁决）、认证各用了多久
+```
 
 ---
 
