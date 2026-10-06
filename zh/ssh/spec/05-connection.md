@@ -33,6 +33,9 @@ stateDiagram-v2
 `Closing` 只在**本端先关**时出现；对端先发 `CLOSE` 时收到即回、直接 `Closed`。`Closed` 是「本端已经收尾」，
 **不等于通道号已经还给会话** —— 本端释放通道时对端的 `CLOSE` 可能还在路上，号一直扣着等它（第 2 条）。
 `Closed` 事件的原因看**谁先发的 `CLOSE`**：本端先发是 `ClosedLocally`，对端先发是 `ClosedByPeer`，会话没了是 `SessionClosed`。
+〔决策〕同一个原因也记在 `SshChannel.CloseReason` 上（还没关时是 `Unknown`），**在 stdout / stderr 读到头之前就已经记下** ——
+读端看到结尾时来看它，就分得出远端进程退了、会话没了还是本端关的；只收到 EOF、还没收到 `CLOSE` 时它仍是 `Unknown`。
+事件流是单读者的，属性谁来问、问几次都一样。〔历史〕曾经只在事件流里，宿主只好从读管道的结束方式反推「远端退出 / 断线 / 本端拆除」。
 〔2026-10-05 修正〕图里原有一个实现中不存在的 `Failed` 态（没开成直接进 `Closed`），并写着「发/收 `CLOSE` → `Closing`」。
 同时修正的还有实现：本端 `CloseAsync` 先发、对端照规矩回 `CLOSE` 时，事件流曾一律报 `ClosedByPeer`。
 

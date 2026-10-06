@@ -35,6 +35,9 @@ stateDiagram-v2
 `Closing` appears only when **we close first**; when the peer sends `CLOSE` first we answer it on receipt and go straight to `Closed`. `Closed` means "finished on our side";
 it **does not mean the channel number has been returned to the session** — when we dispose a channel the peer's `CLOSE` may still be in flight, and the number stays reserved until it arrives (rule 2).
 The reason on the `Closed` event depends on **who sent `CLOSE` first**: `ClosedLocally` if we did, `ClosedByPeer` if the peer did, `SessionClosed` if the session went away.
+〔Decision〕The same reason is also recorded on `SshChannel.CloseReason` (`Unknown` while the channel is open), **already set before stdout / stderr reach their end** —
+a reader that sees the end can look at it to tell whether the remote process exited, the session went away, or we closed it; after only an EOF, with no `CLOSE` yet, it is still `Unknown`.
+The event stream has a single reader; the property gives the same answer to anyone, any number of times. 〔History〕It used to live only in the event stream, so the host had to infer "remote exited / connection lost / local teardown" from how the read pipe ended.
 〔2026-10-05 correction〕The diagram used to have a `Failed` state that does not exist in the implementation (a failed open goes straight to `Closed`), and said "send/receive `CLOSE` → `Closing`".
 The implementation was corrected at the same time: when our `CloseAsync` sent first and the peer duly answered with `CLOSE`, the event stream used to report `ClosedByPeer` regardless.
 
