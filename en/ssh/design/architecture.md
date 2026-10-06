@@ -551,7 +551,7 @@ Used for: the connection diagnostics panel, protocol-level troubleshooting, reco
 | --- | --- | --- |
 | `SshClient` | **`SshConnection`** | A different metaphor: a "client" is an object; a "connection" is a thing with a lifecycle, and the latter is what VelaShell actually has to manage. It can only be obtained through the static `SshConnection.ConnectAsync(options, ct)`, and by the time it is handed back the handshake and authentication are done — there is no public constructor, and no "new it first, then Open" intermediate state |
 | `SshClientSettings` | `SshConnectionOptions` | The .NET `*Options` convention |
-| `Credential` | `SshCredential` | The concrete credentials are `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `Credential` | `SshCredential` | The concrete credentials are `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential`; it cannot be subclassed outside the library (its constructor is `private protected`). The authenticator sends the `none` probe itself, and `NoneCredential` is an internal type |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **Split in two.** A one-shot command and an interactive shell differ in lifecycle, read/write shape and exit semantics; crammed into one class, properties like `HasTerminal` are what that cramming squeezes out. Running to completion and getting all the output is `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | It is not a "client"; it is a view of a file system |
 | `SftpFile` | `SftpFileStream` | It is a subclass of `Stream`, and the name should say so |

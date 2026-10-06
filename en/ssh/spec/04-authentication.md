@@ -128,6 +128,11 @@ throw AuthenticationMethodExhausted, with the per-attempt record attached
    Every rescan is triggered by a partial success of a credential not tried before, so the number of scans never exceeds the number
    of credentials. The cost is that one credential may leave several "skipped" entries in the attempt record, one per scan.
 
+〔Decision〕**The only credentials are the library's own: `PasswordCredential`, `PublicKeyCredential`, `KeyboardInteractiveCredential`.**
+`SshCredential` has a `private protected` constructor, so no subclass can be written outside the library — it used to be possible, and such a credential could be put in the list,
+but the authenticator did not recognize it and silently skipped it as "no material": a credential that never takes effect, with no hint at all. The `none` probe (§2.1) is sent by the authenticator itself,
+and `NoneCredential` is an internal type; it used to be public, and putting it in the list only got it skipped.
+
 ### 2.3 Common fields of `USERAUTH_REQUEST`
 
 | # | Type | Field |

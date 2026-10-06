@@ -551,7 +551,7 @@ enum SshFailureReason {
 | --- | --- | --- |
 | `SshClient` | **`SshConnection`** | 换一个隐喻：「客户端」是个物件，「连接」是个有生命周期的东西，后者才是 VelaShell 要管的。只能经静态的 `SshConnection.ConnectAsync(options, ct)` 得到，交回来时已经完成握手与认证 —— 没有公开构造，也没有「先 new 再 Open」的中间态 |
 | `SshClientSettings` | `SshConnectionOptions` | .NET 的 `*Options` 惯例 |
-| `Credential` | `SshCredential` | 具体凭据是 `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `Credential` | `SshCredential` | 具体凭据是 `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential`；库外不能继承（构造函数 `private protected`）。`none` 探测由认证器自己发，`NoneCredential` 是内部类型 |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **拆成两个。** 一次性命令与交互式 shell 的生命周期、读写形状、退出语义都不一样，挤在一个类里，`HasTerminal` 这种属性就是挤出来的。一次跑完拿全部输出是 `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | 它不是一个「客户端」，它是一个文件系统视图 |
 | `SftpFile` | `SftpFileStream` | 它是 `Stream` 的子类，名字就该说这件事 |

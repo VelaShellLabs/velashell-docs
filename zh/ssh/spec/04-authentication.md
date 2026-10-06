@@ -123,6 +123,11 @@ sequenceDiagram
    换个时机也不会变成对的，再试只是白耗服务端的 `MaxAuthTries`。每次重扫都由一条新凭据的部分成功触发，
    所以扫描次数不会超过凭据条数。代价是同一条凭据可能在尝试记录里留下多条「跳过」，每次扫描一条。
 
+〔决策〕**凭据只有库里的几种：`PasswordCredential`、`PublicKeyCredential`、`KeyboardInteractiveCredential`。**
+`SshCredential` 的构造函数是 `private protected`，库外写不出子类 —— 曾经能写、也能放进凭据列表，认证器不认识，
+把它当成「取不到材料」静默跳过：一条永远不会生效的凭据，没有任何提示。`none` 探测（§2.1）由认证器自己发，
+`NoneCredential` 是内部类型；它曾经公开，放进列表也只会被跳过。
+
 ### 2.3 `USERAUTH_REQUEST` 的通用字段
 
 | # | 类型 | 字段 |
