@@ -655,8 +655,20 @@ SftpCapabilities Capabilities { get; }
 | 4 | `string` | 扩展名 |
 | 5+ | 扩展相关 | |
 
-〔现状〕**还没有公开的扩展点**（规划中的 `ISftpExtension`，架构 §8 第 10 项）：厂商私有扩展目前只能在库内用
-`SftpWire.WriteExtended` 发，使用者加不了。
+**公开的扩展点**：`SftpFileSystem.SendExtendedAsync(扩展名, 载荷)` —— 本库没有内置的厂商私有扩展（群晖、某些 NAS、插件要用的东西）走这里。
+
+| 应答 | 结果 |
+| --- | --- |
+| `SSH_FXP_EXTENDED_REPLY` | 载荷（request-id 之后的部分）原样交回 |
+| `SSH_FXP_STATUS` OK | 交回空 |
+| `SSH_FXP_STATUS` 其它 | 抛 `SftpException`（`Operation = Extension`，消息带扩展名）；不认识这个扩展是 `OperationUnsupported` |
+
+〔决策〕**扩展点只到「扩展名 + 载荷 → 应答」这一层。**请求照样走同一条流水线：request-id、在途额度、取消之后迟到的应答都由本库管，
+管线的时序约束不交出去（AGENTS 4.1「协议管道永不公开」）。要类型化，在调用方包一层即可 ——
+规划里的 `ISftpExtension` 接口因此不做：接口在「名字 + 字节」之上加不了任何东西。
+
+〔决策〕**不先查宣告**（`SftpCapabilities.RawExtensions`）：有的服务端支持却不宣告，要不要先看一眼由调用方决定。应答是对端给的字节，按不可信输入解析。
+〔已核对〕对真 sftp-server：经它发 `limits@openssh.com`，应答与库内置的解读一致；不认识的名字回 `OperationUnsupported`。
 
 ---
 

@@ -657,8 +657,20 @@ nor can they warn in the UI that "this server does not support atomic overwrite;
 | 4 | `string` | Extension name |
 | 5+ | Extension-specific | |
 
-〔Status〕**There is no public extension point yet** (the planned `ISftpExtension`, architecture §8 item 10): vendor-private extensions can currently only be sent inside the library
-with `SftpWire.WriteExtended`; consumers cannot add them.
+**The public extension point**: `SftpFileSystem.SendExtendedAsync(name, payload)` —— vendor-private extensions the library does not build in (Synology, some NAS boxes, whatever a plugin needs) go through it.
+
+| Reply | Result |
+| --- | --- |
+| `SSH_FXP_EXTENDED_REPLY` | The payload (after the request-id) is returned as-is |
+| `SSH_FXP_STATUS` OK | Returns empty |
+| Any other `SSH_FXP_STATUS` | Throws `SftpException` (`Operation = Extension`, the message names the extension); an unknown extension is `OperationUnsupported` |
+
+〔Decision〕**The extension point stops at "name + payload → reply".** The request goes through the same pipeline: request-ids, the in-flight allowance and late replies after cancellation are all handled by the library,
+and the pipeline's ordering constraints are not handed out (AGENTS 4.1, "the protocol pipeline is never public"). To make it typed, wrap it at the call site ——
+which is why the planned `ISftpExtension` interface is not built: an interface adds nothing on top of "a name and bytes".
+
+〔Decision〕**The announcement is not checked first** (`SftpCapabilities.RawExtensions`): some servers support an extension without announcing it; whether to look first is the caller's call. The reply is the peer's bytes and is parsed as untrusted input.
+〔Verified〕Against a real sftp-server: `limits@openssh.com` sent through it returns a reply matching the library's built-in reading; an unknown name gets `OperationUnsupported`.
 
 ---
 

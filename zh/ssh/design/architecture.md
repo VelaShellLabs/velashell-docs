@@ -661,7 +661,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesRe
 | 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 | ✅ 公开。内置 `KnownHostsPolicy`、`PinnedFingerprintHostKeyPolicy`、`DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` | 🔒 库内接缝。三种都已内置（`AgentForwarder`、`X11Forwarder`、`RemotePortForwarder`，它们对这个接口是显式实现） |
 | 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ❌ 没有做。发全局请求是库内部的一个方法 |
-| 10 | SFTP 扩展 | 厂商 SFTP 扩展 | 🔒 库内：`posix-rename`、`hardlink`、`fsync`、`limits` 由 `SftpFileSystem` 按能力查询直接用；`statvfs`、`copy-data`、`home-directory`、`expand-path` 只探测（`SftpCapabilities`），还没有封装 |
+| 10 | SFTP 扩展 | 厂商 SFTP 扩展 | ✅ 库内封装：`posix-rename`、`hardlink`、`fsync`、`limits`、`statvfs`、`copy-data`、`expand-path`、`lsetstat`、`users-groups-by-id`（spec/06 §7.1）；厂商私有的经 `SftpFileSystem.SendExtendedAsync`（spec/06 §7.3） |
 | 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 度量走 `System.Diagnostics.Metrics`：连接与通道的一组（`SshMetrics.MeterName`）、转发的一组（`ForwardMetrics.MeterName`），见 spec/08 §7；报文旁路 `IPacketTap` 已做（spec/08 §9）；`ActivitySource` 还没有做 |
 | 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`，没有另设接口 |
 
@@ -919,7 +919,7 @@ SFTP 三层落地，**287 个用例全绿**（其中 23 条是 `SftpWire` 的逐
   的封装 —— 能力位已经能查到，但还没给出便捷方法。它们都不在 VelaShell 的既有用法里。
 - `ISftpExtension` 公开扩展点（架构 §8 第 10 项）——
   目前加厂商扩展要直接用 `SftpRequestPipeline.SendAsync` + `SftpWire.WriteExtended`，
-  可用但不够体面。
+  可用但不够体面。**→ 已补：`SftpFileSystem.SendExtendedAsync`（spec/06 §7.3），接口不做。**
 - SFTP 层的 BDP 自适应（在途请求数按 RTT 调整）—— 与 M2 的自适应窗口是同一条待办，
   都要等链路特征模拟。**→ 已补，见 §11.2.9。**
 
@@ -1387,7 +1387,7 @@ pwsh scripts/ssh/interop/Stop-TestServer.ps1
 - 加密的 OpenSSH 私钥 —— `bcrypt_pbkdf` 拿不到。**→ 已补，见 §11.2.18。**
 - `streamlocal-forward@openssh.com` **→ 已补，见 §11.2.12。**
 - `ssh_config` 的 `Include` 与 `Match` **→ 已补，见 §11.2.12。**
-- `ISftpExtension` 公开扩展点；`statvfs@openssh.com` 等扩展的便捷封装。
+- `ISftpExtension` 公开扩展点；`statvfs@openssh.com` 等扩展的便捷封装。**→ 已补（spec/06 §7.1、§7.3）。**
 - 取消远程转发后的宽限期写死 2 秒，未做成可配置。
 
 ### 11.2.10 压缩改走原生 zlib（2026-09-21）

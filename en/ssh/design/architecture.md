@@ -661,7 +661,7 @@ while handing timing constraints over to callers (the rules are in §4.1 of `src
 | 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist | ✅ Public. Built in: `KnownHostsPolicy`, `PinnedFingerprintHostKeyPolicy`, `DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` | 🔒 Seam inside the library. All three are built in (`AgentForwarder`, `X11Forwarder`, `RemotePortForwarder`, which implement this interface explicitly) |
 | 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ❌ Not built. Sending global requests is an internal method of the library |
-| 10 | SFTP extensions | Vendor SFTP extensions | 🔒 Inside the library: `posix-rename`, `hardlink`, `fsync` and `limits` are used directly by `SftpFileSystem` according to the capability query; `statvfs`, `copy-data`, `home-directory` and `expand-path` are only probed (`SftpCapabilities`) and not wrapped yet |
+| 10 | SFTP extensions | Vendor SFTP extensions | ✅ Wrapped in the library: `posix-rename`, `hardlink`, `fsync`, `limits`, `statvfs`, `copy-data`, `expand-path`, `lsetstat`, `users-groups-by-id` (spec/06 §7.1); vendor-private ones go through `SftpFileSystem.SendExtendedAsync` (spec/06 §7.3) |
 | 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Metrics go through `System.Diagnostics.Metrics`: the connection and channel set (`SshMetrics.MeterName`) and the forwarding set (`ForwardMetrics.MeterName`), see spec/08 §7; the packet tap `IPacketTap` is built (spec/08 §9); `ActivitySource` is not built yet |
 | 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`, with no separate interface |
 
@@ -919,7 +919,7 @@ The three SFTP tiers landed, **287 cases all green** (23 of them are byte-for-by
   — their capability bits can already be queried, but no convenience methods yet. None of them are in VelaShell's existing usage.
 - The public `ISftpExtension` extension point (architecture §8 item 10) —
   for now, adding a vendor extension means using `SftpRequestPipeline.SendAsync` + `SftpWire.WriteExtended` directly,
-  which works but isn't elegant.
+  which works but isn't elegant. **→ Done: `SftpFileSystem.SendExtendedAsync` (spec/06 §7.3); no interface.**
 - BDP adaptation at the SFTP layer (in-flight request count tuned by RTT) — the same to-do as M2's adaptive window;
   both have to wait for link characteristics simulation. **→ Done since, see §11.2.9.**
 
@@ -1406,7 +1406,7 @@ not forgotten):
 - Encrypted OpenSSH private keys — `bcrypt_pbkdf` isn't available. **→ Done, see §11.2.18.**
 - `streamlocal-forward@openssh.com` **→ Done, see §11.2.12.**
 - `Include` and `Match` in `ssh_config` **→ Done, see §11.2.12.**
-- A public `ISftpExtension` extension point; convenience wrappers for extensions such as `statvfs@openssh.com`.
+- A public `ISftpExtension` extension point; convenience wrappers for extensions such as `statvfs@openssh.com`. **→ Done (spec/06 §7.1, §7.3).**
 - The grace period after cancelling a remote forward is hard-coded to 2 seconds, not configurable.
 
 ### 11.2.10 Compression switched to native zlib (2026-09-21)
