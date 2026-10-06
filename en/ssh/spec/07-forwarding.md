@@ -17,6 +17,7 @@
 | **Local forwarding** | `-L` | Us (local machine) | A `direct-tcpip` channel |
 | **Dynamic forwarding** | `-D` | Us (local machine, running SOCKS5) | A `direct-tcpip` channel, target given by the SOCKS handshake |
 | **Remote forwarding** | `-R` | The server | The server opens a `forwarded-tcpip` channel; we connect to the local target |
+| **Remote dynamic forwarding** | `-R [bind:]port` (no target) | The server | The server opens a `forwarded-tcpip` channel carrying SOCKS5; we connect to the target it asks for, subject to an allowlist (§4.6) |
 | **Direct tunnel** | None (`-W` is close) | Nobody listens | `direct-tcpip` / `direct-streamlocal`; the stream is handed straight to the caller |
 
 **The fourth is the easiest to overlook, yet it is often the one you should be using.**
@@ -300,6 +301,36 @@ Tied only to the connection, a forwarder's connections would keep relaying after
 
 Once the SSH connection drops, the server's listener disappears with it, and there is no local port to release; the forwarder object must still be disposed (disposal sees that the connection is gone and skips the grace period).
 
+### 4.6 Remote dynamic forwarding and the allowlist (`PermitRemoteOpen`)
+
+> Basis: RFC 1928 (SOCKS5); the target-less form of ssh(1) `-R` (OpenSSH 7.6 and later) and ssh_config(5) `PermitRemoteOpen`.
+
+Use: the remote server needs to reach places only this machine can reach (an internal package mirror, an internal API) and there is no VPN —— programs on the remote side use the server's port as a SOCKS5 proxy,
+and this machine connects on their behalf. On the server side it is an ordinary `tcpip-forward` (§4.1); nothing extra is required of the server.
+
+`RemotePortForwarder.StartDynamicAsync(connection, permitRemoteOpen, options)`:
+
+1. Ask the server to listen, as in §4.1 (with port 0 the actual port comes in the reply). The forwarder's kind is `ForwardKind.RemoteDynamic` (the `kind` tag of metrics and events follows it).
+2. A forwarded channel is **confirmed first** (the target is only known after the handshake, so it cannot be connected beforehand as in §4.1); it takes a concurrency slot as usual.
+3. Run the server side of SOCKS5 on the channel: the same subset as §3.1 (`CONNECT` only, no authentication), with the same handshake time limit
+   (`RemotePortForwardOptions.SocksHandshakeTimeout`, 30 seconds by default).
+4. A target not on the allowlist: reply `0x02` (not allowed) and raise `Error` (`ForwardErrorReason.TargetNotPermitted`).
+5. On the allowlist: resolve and connect **on this machine** (names resolve locally —— reaching what this machine can reach is the whole point). A failed connect replies by cause: refused `0x05`,
+   network unreachable `0x03`, host unreachable or not resolvable `0x04`, timed out `0x06`, anything else `0x01`, and raises `Error` (`TargetConnect`).
+6. Once connected, reply `0x00`, then the same relay loop as every other forward (§6).
+
+〔Decision〕**The allowlist must be given; there is no default.** This turns this machine into the remote side's SOCKS proxy: whatever internal network this machine reaches, the remote side reaches too.
+What to let out must be stated by the caller; to allow everything, pass `RemoteOpenPolicy.Any` explicitly (OpenSSH's `PermitRemoteOpen any`); to allow nothing, `None`.
+
+〔Decision〕**How rules are written and matched**: each rule is `host:port`; the host may use `*` / `?` wildcards and is case-insensitive, IPv6 goes in brackets (`[::1]:22`), the port is a number or `*`.
+**Matching uses the name the remote side gave in the handshake, without resolving it first**: a rule with an IP does not match a request with a name, and vice versa —— better a wrong refusal
+than letting a name that resolves to an internal address bypass the list.
+
+〔Decision〕**A failure reply must actually go out**: after the reply, drain stdin and send `EOF` before closing the channel; **record the event before replying** ——
+the remote side may come back with another request as soon as it sees the reply, and the event must not trail it.
+
+〔Verified〕Against a real OpenSSH: OpenBSD `nc -X 5 -x 127.0.0.1:port` on the remote side reaches a service on this machine through it, in both directions; a target not on the list is refused.
+
 ---
 
 ## 5. Metering — in the library, not in the caller
@@ -324,7 +355,7 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // a single c
 ```
 
 `ForwardErrorEventArgs.Reason` is the enum `ForwardErrorReason` (`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay` / `SetupSkipped`; the zero value is `Unknown`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
+`TargetConnect` / `Relay` / `SetupSkipped` / `TargetNotPermitted`; the zero value is `Unknown`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
 
 Also published through `System.Diagnostics.Metrics`:
 

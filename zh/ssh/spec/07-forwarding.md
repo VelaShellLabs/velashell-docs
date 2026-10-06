@@ -15,6 +15,7 @@
 | **本地转发** | `-L` | 我们（本机） | `direct-tcpip` 通道 |
 | **动态转发** | `-D` | 我们（本机，跑 SOCKS5） | `direct-tcpip` 通道，目标由 SOCKS 握手给出 |
 | **远程转发** | `-R` | 服务端 | 服务端发起 `forwarded-tcpip` 通道，我们连本地目标 |
+| **远程动态转发** | `-R [bind:]port`（不给目标） | 服务端 | 服务端发起 `forwarded-tcpip` 通道，通道里跑 SOCKS5，我们按放行名单连它要的目标（§4.6） |
 | **直连隧道** | 无（`-W` 近似） | 无人监听 | `direct-tcpip` / `direct-streamlocal`，流直接交给调用方 |
 
 **第四种最容易被忽略，但常常是最该用的那一种。**
@@ -298,6 +299,36 @@ SSH 连接已经断了（取消请求发不出去，或者宽限期里断了）�
 
 SSH 连接断了之后，服务端的监听随之消失，本机没有要放的端口；转发器对象照样要释放（释放时发现连接已断，不等宽限期）。
 
+### 4.6 远程动态转发与放行名单（`PermitRemoteOpen`）
+
+> 依据：RFC 1928（SOCKS5）；ssh(1) 的 `-R` 不给目标的那种写法（OpenSSH 7.6 起）、ssh_config(5) 的 `PermitRemoteOpen`。
+
+用途：远端服务器要访问只有本机到得了的地方（公司内网的包镜像、内部 API），又没有 VPN —— 远端程序把服务端上的那个端口当 SOCKS5 代理用，
+本机替它去连。服务端那头只是一个普通的 `tcpip-forward`（§4.1），不需要服务端额外支持什么。
+
+`RemotePortForwarder.StartDynamicAsync(connection, permitRemoteOpen, options)`：
+
+1. 请服务端监听，与 §4.1 相同（端口 0 时实际端口在应答里）。转发器的种类是 `ForwardKind.RemoteDynamic`（度量与事件的 `kind` 标签按它分）。
+2. 回连来了**先确认**（目标要等握手才知道，没法像 §4.1 那样先连好），并发名额照常占。
+3. 在通道上跑 SOCKS5 的服务端一侧：与 §3.1 同一个子集（只有 `CONNECT`、不认证），同样有握手时限
+   （`RemotePortForwardOptions.SocksHandshakeTimeout`，默认 30 秒）。
+4. 目标不在放行名单里：回 `0x02`（规则不允许），报 `Error`（`ForwardErrorReason.TargetNotPermitted`）。
+5. 在名单里：**本机**解析、连接（域名在本机解析 —— 远端要的正是本机能到的地方）。连不上按原因回码：拒绝 `0x05`、
+   网络不可达 `0x03`、主机不可达或解析不了 `0x04`、超时 `0x06`、其余 `0x01`，报 `Error`（`TargetConnect`）。
+6. 连上了回 `0x00`，之后与别的转发同一个搬运循环（§6）。
+
+〔决策〕**放行名单必须给，没有默认值。**这等于把本机变成远端的 SOCKS 代理：本机能到的内网，远端都能到。
+放哪些出去必须由调用方明说；要全放，显式给 `RemoteOpenPolicy.Any`（OpenSSH 的 `PermitRemoteOpen any`），全不放是 `None`。
+
+〔决策〕**名单的写法与比法**：每条 `主机:端口`，主机可带 `*` / `?` 通配、不分大小写，IPv6 写在方括号里（`[::1]:22`），端口是数字或 `*`。
+**按远端在握手里给的名字比，不先解析**：名单写 IP、远端给域名就对不上，反之亦然 —— 宁可错拒，
+也不让一个解析到内网地址的域名绕过名单。
+
+〔决策〕**失败的应答要确实发出去**：回码之后先冲干净 stdin、发 `EOF`，再关通道；**先记事件、再回应答** ——
+远端一收到应答就可能再来一条，事件不该落在它后面。
+
+〔已核对〕对真 OpenSSH：远端的 OpenBSD `nc -X 5 -x 127.0.0.1:端口` 经它连回本机的服务、双向搬运；名单外的目标被拒。
+
 ---
 
 ## 五 计量 —— 在库里，不在调用方
@@ -322,7 +353,7 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // 单条连�
 ```
 
 `ForwardErrorEventArgs.Reason` 是枚举 `ForwardErrorReason`（`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay` / `SetupSkipped`；零值是 `Unknown`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
+`TargetConnect` / `Relay` / `SetupSkipped` / `TargetNotPermitted`；零值是 `Unknown`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
 
 同时走 `System.Diagnostics.Metrics`：
 
