@@ -480,6 +480,9 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 `SSH_AUTH_SOCK`；Windows 上 `SSH_AUTH_SOCK` 是命名管道（`\\.\pipe\…`）时采纳它 —— 1Password、KeePassXC 这类 agent 会这样配 ——
 否则用 OpenSSH agent 服务的管道。它更常指向 Git Bash / WSL 的 Unix 套接字，那是另一套 agent，.NET 连不上，所以不是管道就不认。
 〔历史〕曾经 Windows 上一律无视 `SSH_AUTH_SOCK`，宿主只好自己再判断一遍。
+OpenSSH agent 服务没在跑（它的管道不在）而当前用户开着 **Pageant** 时用 Pageant：PuTTY 0.75 起它在 `\\.\pipe\pageant.用户名.…`
+上说同一套 agent 协议，管道名后半截随机器而变，所以按「`pageant.` + 当前用户名 + `.`」这个前缀在管道列表里找。两个都在仍用 OpenSSH 的（与以前一致）；
+别的用户的 Pageant 不认。属主检查照旧适用。
 
 〔决策〕**我们只做转发，不做 agent 服务端。**
 本机 agent 由操作系统提供（OpenSSH agent / Pageant / 1Password 等）。
@@ -545,6 +548,19 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 ⚠️ RSA 这里是 **n 在前、e 在后**，与公钥 blob（e 在前）相反。写反了 agent 照样回 SUCCESS，
 直到第一次签名才露馅。
 
+**「证书 + 私钥」一起加**（`ssh-add` 遇到同名 `-cert.pub` 时做的事，`AddIdentityAsync(私钥, 证书, …)`）：密钥类型换成证书的
+（`ssh-ed25519-cert-v01@openssh.com` 之类），紧跟 string 整张证书；之后**只放证书里没有的私钥部分**：
+
+| 证书类型 | 证书之后的字段（按顺序） |
+| --- | --- |
+| `ssh-ed25519-cert-v01@openssh.com` | string 公钥（32 字节）；string 种子 ‖ 公钥（64 字节）—— 与普通 ed25519 相同 |
+| `ssh-rsa-cert-v01@openssh.com` | mpint d；mpint iqmp；mpint p；mpint q（n、e 在证书里） |
+| `ecdsa-sha2-*-cert-v01@openssh.com` | mpint 私钥标量 d（曲线名与公钥点在证书里） |
+
+加进去之后 agent 的身份列表里是那张证书，签名请求带证书 blob。〔决策〕证书证的不是这把私钥（证书里的公钥与私钥的对不上）、
+或者给的根本不是证书，当场 `ArgumentException`，不发给 agent。〔已核对〕三种证书对真 OpenSSH 10.3 的 `ssh-agent`：
+`ssh-add -l` 列成 `*-CERT`，经它签的名用原公钥验得过。
+
 **约束**：
 
 | 编号 | 名称 | 参数 | 含义 |
@@ -558,8 +574,8 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 
 〔决策〕
 
-1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里；
-   证书签名器（`*-cert-v01@openssh.com`）要「证书 + 私钥」的组合格式，暂不做。其余一律 `ArgumentException`。
+1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里。
+   证书走单独的重载，把证书与私钥分开给（见上）。
 2. **没有约束就发 `17`**，不发约束为空的 `25` —— 有的 agent 认 `17` 却不认 `25`。
 3. **请求缓冲用完即清零**。缓冲按上限一次性预留，不让扩容在堆上留下未清零的旧副本。
 4. **不查重**。同一把钥加两次时怎么处理是 agent 的事（OpenSSH 会更新注释与约束）；
@@ -567,6 +583,23 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 5. **库从不自动加钥**。什么时候往使用者的 agent 里放东西是使用者的决定 ——
    与 04 §2.2「不自动连 agent」是同一条原则。加进去的钥活多久由 agent 决定
    （Windows 的 OpenSSH agent 会把它存进注册表，重启后仍在）。
+
+### 7.3.1 管理 agent 里的钥（删、清空、锁）
+
+> 依据：draft-miller-ssh-agent 的「删除密钥」「锁定与解锁」两节。
+
+| 请求 | 消息号 | 内容 | 方法 | 应答 |
+| --- | :-: | --- | --- | --- |
+| 删一把（`ssh-add -d`） | `18` `SSH_AGENTC_REMOVE_IDENTITY` | string 公钥 blob（证书就给证书 blob） | `RemoveIdentityAsync` | SUCCESS → `true`；FAILURE（没有这把、agent 锁着）→ `false` |
+| 清空（`ssh-add -D`） | `19` `SSH_AGENTC_REMOVE_ALL_IDENTITIES` | 无 | `RemoveAllIdentitiesAsync` | FAILURE 抛 `SshAgentException`（`AgentRefused`，消息点出「锁定」） |
+| 锁（`ssh-add -x`） | `22` `SSH_AGENTC_LOCK` | string 口令 | `LockAsync` | SUCCESS → `true`；FAILURE（已经锁着）→ `false` |
+| 解锁（`ssh-add -X`） | `23` `SSH_AGENTC_UNLOCK` | string 口令 | `UnlockAsync` | SUCCESS → `true`；FAILURE（口令不对、本来没锁 —— agent 不区分）→ `false` |
+
+〔决策〕删一把与锁 / 解锁回 `bool` 而不是抛：「agent 里本来就没有这把」「已经锁着」是正常结果，调用方据此改界面即可。
+清空失败只可能是 agent 锁着或不支持，报错。报文里的口令用完清零。
+
+锁着的 agent（真 OpenSSH 10.3 实测）列身份回空列表、拒绝签名与清空，直到用同一个口令解锁 —— 转发出去的 agent 在这期间也签不了名，
+离开座位时用。
 
 ### 7.4 会话声明（`session-bind@openssh.com`）
 

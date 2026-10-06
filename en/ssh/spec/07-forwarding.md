@@ -482,6 +482,9 @@ This is not defended by lowering the impersonation level to Identification: the 
 `SSH_AUTH_SOCK`; on Windows, `SSH_AUTH_SOCK` is adopted when it is a named pipe (`\\.\pipe\…`) — agents such as 1Password and KeePassXC are configured that way —
 and otherwise the OpenSSH agent service's pipe is used. It more often points at a Git Bash / WSL Unix socket, which is a different agent that .NET cannot reach, so anything that is not a pipe is ignored.
 〔History〕Windows used to ignore `SSH_AUTH_SOCK` altogether, and the host had to make the same check itself.
+When the OpenSSH agent service is not running (its pipe is absent) and the current user has **Pageant** open, Pageant is used: since PuTTY 0.75 it speaks the same agent protocol on `\\.\pipe\pageant.<user name>.…`,
+and the tail of the pipe name varies per machine, so the pipe list is searched for the prefix "`pageant.` + current user name + `.`". When both are present the OpenSSH one still wins (as before);
+another user's Pageant is never picked. The owner check applies as usual.
 
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
@@ -551,6 +554,19 @@ Purpose: decrypt an encrypted private key once and hand it to the agent; later a
 ⚠️ For RSA it is **n first, then e** — the reverse of the public key blob (e first). Get it backwards and the agent still answers SUCCESS;
 it only shows up on the first signature.
 
+**Adding "certificate + private key" together** (what `ssh-add` does when it finds a matching `-cert.pub`; `AddIdentityAsync(key, certificate, …)`): the key type becomes the certificate's
+(`ssh-ed25519-cert-v01@openssh.com` and so on), followed by string the whole certificate; after that come **only the private parts the certificate does not already carry**:
+
+| Certificate type | Fields after the certificate (in order) |
+| --- | --- |
+| `ssh-ed25519-cert-v01@openssh.com` | string public key (32 bytes); string seed ‖ public key (64 bytes) — same as plain ed25519 |
+| `ssh-rsa-cert-v01@openssh.com` | mpint d; mpint iqmp; mpint p; mpint q (n and e are in the certificate) |
+| `ecdsa-sha2-*-cert-v01@openssh.com` | mpint private scalar d (the curve name and public point are in the certificate) |
+
+Once added, the agent's identity list shows the certificate, and sign requests carry the certificate blob. 〔Decision〕If the certificate certifies a different key (its public key does not match the private key's),
+or what was given is not a certificate at all, it is an immediate `ArgumentException` and nothing is sent to the agent. 〔Verified〕All three certificate types against a real OpenSSH 10.3 `ssh-agent`:
+`ssh-add -l` lists them as `*-CERT`, and signatures made through it verify with the original public key.
+
 **Constraints**:
 
 | Number | Name | Argument | Meaning |
@@ -564,8 +580,8 @@ the agent is locked (`ssh-add -x`), or the agent does not support this key type.
 
 〔Decision〕
 
-1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all;
-   certificate signers (`*-cert-v01@openssh.com`) need the combined "certificate + private key" format and are not done yet. Everything else is an `ArgumentException`.
+1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all.
+   Certificates go through a separate overload that takes the certificate and the private key separately (see above).
 2. **No constraints means `17`**; never send a `25` with an empty constraint list — some agents accept `17` but not `25`.
 3. **The request buffer is zeroed right after use.** The buffer is reserved at its upper bound up front, so growth never leaves unzeroed copies on the heap.
 4. **No duplicate check.** What happens when the same key is added twice is the agent's business (OpenSSH updates the comment and constraints);
@@ -573,6 +589,23 @@ the agent is locked (`ssh-add -x`), or the agent does not support this key type.
 5. **The library never adds keys on its own.** When to put something into the user's agent is the user's decision —
    the same principle as "never connect to the agent implicitly" in 04 §2.2. How long an added key lives is up to the agent
    (the Windows OpenSSH agent stores it in the registry, so it survives a reboot).
+
+### 7.3.1 Managing the keys in the agent (remove, remove all, lock)
+
+> Basis: the "Removing keys" and "Locking and unlocking" sections of draft-miller-ssh-agent.
+
+| Request | Message number | Content | Method | Response |
+| --- | :-: | --- | --- | --- |
+| Remove one (`ssh-add -d`) | `18` `SSH_AGENTC_REMOVE_IDENTITY` | string public key blob (the certificate blob for a certificate) | `RemoveIdentityAsync` | SUCCESS → `true`; FAILURE (no such key, agent locked) → `false` |
+| Remove all (`ssh-add -D`) | `19` `SSH_AGENTC_REMOVE_ALL_IDENTITIES` | none | `RemoveAllIdentitiesAsync` | FAILURE throws `SshAgentException` (`AgentRefused`, the message names "locked") |
+| Lock (`ssh-add -x`) | `22` `SSH_AGENTC_LOCK` | string passphrase | `LockAsync` | SUCCESS → `true`; FAILURE (already locked) → `false` |
+| Unlock (`ssh-add -X`) | `23` `SSH_AGENTC_UNLOCK` | string passphrase | `UnlockAsync` | SUCCESS → `true`; FAILURE (wrong passphrase, or not locked — the agent does not distinguish) → `false` |
+
+〔Decision〕Removing one key and lock / unlock return a `bool` rather than throwing: "the key was not in the agent" and "already locked" are normal outcomes the caller just reflects in the UI.
+Remove-all can only fail because the agent is locked or does not support it, so it throws. The passphrase in the request is zeroed after use.
+
+A locked agent (measured against a real OpenSSH 10.3) answers the identity list with an empty list and refuses signing and remove-all until it is unlocked with the same passphrase —
+a forwarded agent cannot sign during that time either; use it when stepping away from the machine.
 
 ### 7.4 Session binding (`session-bind@openssh.com`)
 
