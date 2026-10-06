@@ -342,6 +342,8 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 `Create` 当场核对证书与私钥是不是一对，配错了立刻报 —— 否则表现只是服务端一句 `Permission denied`，
 与「CA 不被信任」「主体不匹配」分不开。库**不会**去私钥旁边找同名的 `id_*-cert.pub`，
 与 §2.2 第 1 条一致：不读使用者没点名的文件。
+私钥签名器默认交进来就归合成的签名器，释放它时一并释放（清零）；同一把私钥还要单独用、或者配别的证书时传 `ownsSigner: false`。
+`InMemorySshSigner.FromRsa` / `FromEcdsa` 对交进来的 `RSA` / `ECDsa` 同理（`ownsKey`），`SshAgentClient.FromStream` 对流同理（`ownsStream`）。
 
 〔决策〕**客户端不校验自己证书的有效期。** 那是服务端的职责；
 本地校验只会在时钟不同步时制造假阴性。〔决策〕**证书被拒时，把本地看得出的事实放进 `SshAuthAttempt.Detail`**

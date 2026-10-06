@@ -349,6 +349,8 @@ pairing the certificate file with the private key. 〔Decision〕**The caller do
 `Create` checks on the spot that the certificate and the private key belong together and fails immediately on a mismatch — otherwise the only symptom
 is the server's `Permission denied`, indistinguishable from "CA not trusted" or "principal mismatch". The library **does not** look for a matching
 `id_*-cert.pub` next to the private key, consistent with §2.2 item 1: it does not read files the caller did not name.
+By default the private key signer passed in belongs to the combined signer and is disposed (zeroed) with it; pass `ownsSigner: false` when the same private key is still used on its own or with another certificate.
+`InMemorySshSigner.FromRsa` / `FromEcdsa` do the same for the `RSA` / `ECDsa` passed in (`ownsKey`), and `SshAgentClient.FromStream` for the stream (`ownsStream`).
 
 〔Decision〕**The client does not validate the validity period of its own certificate.** That is the server's job;
 local validation only produces false negatives when clocks are out of sync. 〔Decision〕**When a certificate is rejected, the facts visible locally go into `SshAuthAttempt.Detail`**
