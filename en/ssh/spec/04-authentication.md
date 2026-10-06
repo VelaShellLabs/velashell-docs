@@ -395,7 +395,7 @@ Curves other than the three NIST ones are reported as `Unsupported`.
 | --- | --- | --- | --- |
 | OpenSSH (`openssh-key-v1`, the `ssh-keygen` default since OpenSSH 7.8) | `BEGIN OPENSSH PRIVATE KEY` | None; or `bcrypt` KDF + `aes{128,192,256}-ctr`, `aes{128,192,256}-cbc`, `aes{128,256}-gcm@openssh.com`, `chacha20-poly1305@openssh.com` | This library |
 | PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | None; or `aes256-cbc` (v2 derives with SHA-1, v3 with Argon2id) | This library |
-| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | None; or PKCS#8's own passphrase encryption | Decrypted with BouncyCastle, imported with the BCL (Ed25519 in PKCS#8 cannot be read and is reported as `Unsupported`) |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | None; or PKCS#8's own passphrase encryption | Decrypted with BouncyCastle; RSA / ECDSA imported with the BCL, Ed25519 (RFC 8410) has its seed extracted by this library |
 | PKCS#1 RSA / SEC1 EC, unencrypted | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | None | BCL |
 | Legacy encrypted PEM | Header of the previous row + `Proc-Type: 4,ENCRYPTED` | Passphrase derived with a single MD5 + 3DES / AES-CBC | **Refused** (see below) |
 
@@ -438,8 +438,13 @@ decrypts, which is where the checks above happen. The use case is importing a fi
 and a larger count is reported as `KeyFormatInvalid`. The count comes from the file, and **.NET sets no limit when importing encrypted PKCS#8** (3 million iterations import fine in testing): a file altered to `int.MaxValue`
 runs for about five minutes at roughly seven million iterations per second, synchronously and uncancellably. Common values are OpenSSL's 2048 and OWASP's recommended 600,000.
 〔Decision〕**An encrypted PKCS#8 key is decrypted once** (BouncyCastle recovers the plaintext PrivateKeyInfo inside): a failed padding check means a wrong passphrase (`KeyPassphraseIncorrect`);
-once decrypted, **dispatch is by the algorithm identifier in the PrivateKeyInfo** — RSA and ECDSA on the NIST curves are imported by the BCL, while Ed25519 / Ed448 / DSA / other curves are reported as `Unsupported`
+once decrypted, **dispatch is by the algorithm identifier in the PrivateKeyInfo** — RSA and ECDSA on the NIST curves are imported by the BCL, Ed25519 is covered by the next item, and Ed448 / DSA / other curves are reported as `Unsupported`
 (`NeedsPassphrase = false`, naming the key type). A plaintext PKCS#8 key is dispatched the same way.
+〔Decision〕**Ed25519 in PKCS#8 is read per RFC 8410 §7** (the BCL cannot import such a key): `privateKey` wraps one more layer, `CurvePrivateKey` (an OCTET STRING),
+holding the 32-byte seed; it is read as BER (required by RFC 5958; RFC 8410 Appendix A has an indefinite-length example), and attributes `[0]` and later extension fields are skipped.
+When a v2 key carries a public key `[1]`, **it is checked to be the one the seed derives**, and a mismatch is `KeyFormatInvalid` (the same rule as for `openssh-key-v1` and `.ppk` above) —
+a real `ssh-keygen` still reads the two incorrect examples in RFC 8410 Appendix A (a public key one byte short) and hands out the public key written in the file. A seed that is not 32 bytes is likewise `KeyFormatInvalid`.
+〔History〕It used to be reported as `Unsupported` across the board, and the encrypted form was reported as "wrong passphrase" even earlier (see below).
 〔History〕An encrypted PKCS#8 key does not reveal its key type, so early versions handed it to the BCL as RSA, then as ECDSA, running the whole KDF on each attempt, and reported "the passphrase is probably wrong" when both failed —
 with an Ed25519 / DSA key inside, the passphrase was in fact right and the UI kept asking for it again. Encryption schemes BouncyCastle does not know still take that old path:
 when the ciphertext is at most 320 bytes ECDSA is tried first (an elliptic-curve key, even P-521 with its public key, is under 260 bytes; the smallest 512-bit RSA key is over 340).

@@ -385,7 +385,7 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 | --- | --- | --- | --- |
 | OpenSSH（`openssh-key-v1`，OpenSSH 7.8 起 `ssh-keygen` 的默认） | `BEGIN OPENSSH PRIVATE KEY` | 不加密；或 `bcrypt` KDF + `aes{128,192,256}-ctr`、`aes{128,192,256}-cbc`、`aes{128,256}-gcm@openssh.com`、`chacha20-poly1305@openssh.com` | 本库 |
 | PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | 不加密；或 `aes256-cbc`（v2 用 SHA-1 派生，v3 用 Argon2id） | 本库 |
-| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | 解密用 BouncyCastle，导入用 BCL（PKCS#8 里的 Ed25519 读不了，报 `Unsupported`） |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | 解密用 BouncyCastle；RSA / ECDSA 导入用 BCL，Ed25519（RFC 8410）由本库取出种子 |
 | PKCS#1 RSA / SEC1 EC，不加密 | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | 无 | BCL |
 | 传统加密 PEM | 上一行的文件头 + `Proc-Type: 4,ENCRYPTED` | 口令经一次 MD5 派生 + 3DES / AES-CBC | **拒绝**（见下） |
 
@@ -427,8 +427,13 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 超了报 `KeyFormatInvalid`。迭代数来自文件，而 **.NET 导入加密 PKCS#8 不设上限**（实测 300 万次照常导入）：被改成 `int.MaxValue` 的文件
 按每秒约七百万次要跑五分钟，同步、停不下来。常见取值是 OpenSSL 的 2048、OWASP 建议的 60 万。
 〔决策〕**加密 PKCS#8 只解密一次**（BouncyCastle 解出里面的明文 PrivateKeyInfo）：填充校验失败就是口令不对（`KeyPassphraseIncorrect`）；
-解开之后**按 PrivateKeyInfo 里的算法标识分派** —— RSA 与 NIST 曲线上的 ECDSA 交给 BCL 导入，Ed25519 / Ed448 / DSA / 别的曲线报 `Unsupported`
+解开之后**按 PrivateKeyInfo 里的算法标识分派** —— RSA 与 NIST 曲线上的 ECDSA 交给 BCL 导入，Ed25519 见下一条，Ed448 / DSA / 别的曲线报 `Unsupported`
 （`NeedsPassphrase = false`，说出是什么钥）。明文 PKCS#8 同样按算法分派。
+〔决策〕**PKCS#8 里的 Ed25519 按 RFC 8410 §7 读**（BCL 导入不了这种钥）：`privateKey` 里再包一层 `CurvePrivateKey`（OCTET STRING），
+里面是 32 字节种子；按 BER 读（RFC 5958 要求，RFC 8410 附录 A 有一个不定长编码的例子），属性 `[0]` 与以后扩展的字段跳过。
+v2 带着公钥 `[1]` 时**核对它是不是种子导出的那一把**，对不上报 `KeyFormatInvalid`（与上面 `openssh-key-v1`、`.ppk` 同一口径）——
+RFC 8410 附录 A 的两个错例（公钥少一个字节）真 `ssh-keygen` 照样读得出，交出来的是文件里写的那个公钥。种子不是 32 字节同样是 `KeyFormatInvalid`。
+〔历史〕曾经一律报 `Unsupported`，加密的在更早时还被报成「口令不对」（见下）。
 〔历史〕早期加密 PKCS#8 看不出钥的类型，逐个按 RSA、ECDSA 交给 BCL 去试、每试一次 KDF 都整个跑一遍，都失败就报「口令多半不对」——
 装的是 Ed25519 / DSA 时口令明明是对的，界面一遍遍弹口令框。BouncyCastle 不认的加密方案仍走那条老路：
 密文不超过 320 字节的先按 ECDSA 试（椭圆曲线钥连 P-521 带公钥也不到 260 字节，最小的 512 位 RSA 钥也有三百四十多字节）。
