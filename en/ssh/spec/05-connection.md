@@ -468,8 +468,10 @@ the RFC requires `exit-status` to be sent **before** `CHANNEL_CLOSE`.
 But the case "CLOSE received while there is still no exit status" **must** still be handled (non-conforming peer implementation or a broken connection);
 in that case `ExitCode` is `null`, and the reason is carried in `SshChannelEvent.Closed`.
 
-〔Decision〕**The exit status is cached on the channel**, not kept only in the event stream: the event stream has a single reader, and once read it is gone. After reading `Closed`, `WaitAsync`
+〔Decision〕**The exit status is cached on the channel**, not kept only in the event stream: the event stream has a single reader, and once read it is gone. Once the channel has closed, `WaitAsync`
 returns the cached value — however many times it is called, whether after `ReadToEndAsync` or after the caller has read the events itself, the answer is the same. It used to be `null` on the second ask.
+〔Decision〕**`WaitAsync` does not read the event stream**; it waits on the channel's own close signal, and the event stream belongs to the caller (`ReadEventAsync`). It used to loop reading events until `Closed`,
+competing with the caller's own reader for the same single-reader stream — when both ran concurrently it was anyone's guess who got the exit status, and waiting first then reading found the events already consumed.
 
 ---
 
