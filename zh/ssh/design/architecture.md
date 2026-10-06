@@ -838,6 +838,7 @@ L1–L4 全部落地，**197 个用例全绿**。完整握手与认证在内存�
   目前只有 `InMemorySshSigner`（进程内持有私钥）。
 - `known_hosts` 与 `ssh_config` → M5。目前只有 `IHostKeyPolicy` 抽象。
 - 改密码流程（`PASSWD_CHANGEREQ`）—— **明确不做**，但给出可读的失败原因。
+  **→ 后来做了（2026-10-05）：`PasswordCredential.NewPasswordProvider`，见 [spec 04 §5.1](../spec/04-authentication.md)。**
 - 与真实 OpenSSH 的互操作矩阵 —— 需要 CI runner，本地跑不了。
   **→ 已补，见 §11.2.9。**
 

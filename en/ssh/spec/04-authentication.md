@@ -484,12 +484,31 @@ The server may reply with `SSH_MSG_USERAUTH_PASSWD_CHANGEREQ` (**60**, a method-
 | 2 | `string` | Prompt text (UTF-8) |
 | 3 | `string` | Language tag (ignored) |
 
-〔Decision〕**Recognize it, but do not implement the password-change flow** — receiving it is always recorded as one failure of that password credential,
-with the reason in `Detail` ("the server requires the password to be changed first; this library does not implement the password-change flow yet"),
-rather than treated as an incomprehensible message. There is no password-change callback to configure, and the request's "change password" flag is always sent as `FALSE`.
+〔Decision〕**With a new-password callback configured the password is changed; without one the reason is spelled out.** `PasswordCredential.NewPasswordProvider`
+(`Func<SshPasswordChangeRequest, CancellationToken, ValueTask<string?>>`, `null` by default) is called when this message arrives;
+`SshPasswordChangeRequest` carries the server's prompt (as sent; the consumer sanitizes it before putting it on screen) and which attempt this is (`Attempt`, starting at 1).
+Once the callback returns a new password, the library sends a change-password request:
+
+| # | Type | Field |
+| :-: | --- | --- |
+| 1–4 | | Common, method name `"password"` |
+| 5 | `boolean` | `TRUE` |
+| 6 | `string` | Old password (this credential's password) |
+| 7 | `string` | New password |
+
+The server's replies (RFC 4252 §8): success = changed, and signed in; `FAILURE` with partial = changed, more authentication needed;
+`FAILURE` without partial = **not changed** (password change unsupported, or the old password is wrong); another `PASSWD_CHANGEREQ` = the new password was not accepted (too simple, and so on),
+so the callback is asked again with `Attempt` incremented, **at most `PasswordCredential.MaxNewPasswordAttempts` (3) times**.
+No callback, the callback returning `null` (not changing it this time), not changed, or out of attempts are each recorded as one failure of that password credential, with `Detail` saying which;
+when the methods run out the reason is `PasswordExpired` (not the generic "methods exhausted"). A callback throwing `OperationCanceledException` is treated like the keyboard-interactive callback (`Aborted`).
+
+〔Decision〕**The protocol has no "type it again" step**: a mistyped new password becomes the account's password as is. So having the user enter it twice and comparing is the UI's job;
+the library sends exactly the one it is given. Once changed, the password the consumer has saved is stale, and whether to update it is the consumer's call.
 
 Rationale: password expiry is very common in enterprise environments, and "the client simply disconnects without saying why"
-is the kind of failure users find hardest to recover from on their own.
+is the kind of failure users find hardest to recover from on their own; changing it on the spot saves a trip to the administrator or to another client.
+〔History〕Early versions only recognized this message without implementing the password-change flow, and the request's "change password" flag was always sent as `FALSE`.
+OpenSSH's `sshd` never sends this message (expired passwords go through PAM's keyboard-interactive), so the test server plays out the four replies of RFC 4252 §8.
 
 ### 5.2 Security requirements
 

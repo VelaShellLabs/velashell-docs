@@ -190,7 +190,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 
 | `AuthenticationMethodExhausted` | 所有方法试完 | ✘ | **见 §5.3** |
 | `TwoFactorRequired` | 服务端要 keyboard-interactive 而我们没配 | ✘ | 提示「这台机器需要动态码」 |
-| `PasswordExpired` | 服务端要求改密码 | ✘ | |
+| `PasswordExpired` | 服务端要求先改密码，没改成（没配取新密码的回调、这次不改、服务端没改成或问够了次数，04 §5.1） | ✘ | |
 | `KeyFileUnreadable` | 私钥 / 证书 / 公钥文件读不出来（不存在、没有权限、IO 错误） | ✘ | 消息里有路径 |
 | `KeyFormatInvalid` | 私钥 / 证书 / 公钥的内容格式不对（损坏、截断、参数不成立） | ✘ | |
 | `KeyPassphraseRequired` | 加密的私钥需要口令，而没有给 | ✘ | 弹口令输入框（`SshPrivateKeyException.NeedsPassphrase`） |

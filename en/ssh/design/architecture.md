@@ -838,6 +838,7 @@ a contentless "authentication failed", and that explanation is exactly the sente
   For now there is only `InMemorySshSigner` (holds the private key in-process).
 - `known_hosts` and `ssh_config` → M5. For now there is only the `IHostKeyPolicy` abstraction.
 - Password change flow (`PASSWD_CHANGEREQ`) — **explicitly not doing it**, but a readable failure reason is given.
+  **→ Done later (2026-10-05): `PasswordCredential.NewPasswordProvider`, see [spec 04 §5.1](../spec/04-authentication.md).**
 - Interop matrix against real OpenSSH — needs a CI runner, can't run locally.
   **→ Done since, see §11.2.9.**
 

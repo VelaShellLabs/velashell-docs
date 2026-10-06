@@ -860,6 +860,17 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     removed; on a reconnect it counts as a user disconnect (otherwise auto-reconnect would bring the same dialog back a
     few seconds later); an SFTP document connection removes its placeholder. Closing the connecting tab or an
     authentication timeout closes the dialog on the spot and is handled as the usual cancel / timeout.
+  - **"Change password" dialog (since 2026-10-05)**: when the server requires a password change during password
+    authentication (an expired password, `PASSWD_CHANGEREQ`), the same dialog asks for it: the title is “Change
+    password”, the instructions are “The server requires the password to be changed before you sign in. A saved password
+    is not updated automatically.” plus the server's own words (sanitized), and there are two masked inputs, “New
+    password” and “Confirm new password”. Entries that differ or are empty are not handed over; the dialog asks again
+    with “The two entries do not match, or are empty” — the protocol has no confirmation step, so a mistyped one would
+    become the account's password as is. When the server rejects the previous new password the instructions change to
+    “Choose a different one” (at most 3 attempts). Cancel works as above and reports “Password change was cancelled”.
+    Once changed, the password saved with the connection is stale: the next rejection goes through the credential dialog
+    to re-enter and save it. Private-key / certificate / agent authentication never shows this dialog; without a dialog
+    service the password is not changed and the error says the server requires a change and it was not changed.
 - **Connections that use a shared credential (#550, since 2026-10-03)**: they **never prompt up front** — the username and
   authentication material come from the credential. Only when the credential cannot be resolved (deleted, no password on
   this device) or the server rejects it does the flow fall back to the credential dialog, with a notice under the

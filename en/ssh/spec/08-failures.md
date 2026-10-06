@@ -192,7 +192,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 
 | `AuthenticationMethodExhausted` | All methods tried | ✘ | **See §5.3** |
 | `TwoFactorRequired` | Server wants keyboard-interactive but we have none configured | ✘ | Prompt "this machine requires a one-time code" |
-| `PasswordExpired` | Server requires a password change | ✘ | |
+| `PasswordExpired` | Server requires a password change first, and it was not changed (no new-password callback, not changing it this time, the server did not change it, or out of attempts; 04 §5.1) | ✘ | |
 | `KeyFileUnreadable` | A private key / certificate / public key file cannot be read (does not exist, no permission, I/O error) | ✘ | The message contains the path |
 | `KeyFormatInvalid` | The content of a private key / certificate / public key is malformed (corrupt, truncated, invalid parameters) | ✘ | |
 | `KeyPassphraseRequired` | An encrypted private key needs a passphrase, and none was given | ✘ | Show a passphrase prompt (`SshPrivateKeyException.NeedsPassphrase`) |
