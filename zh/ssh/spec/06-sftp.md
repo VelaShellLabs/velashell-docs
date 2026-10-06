@@ -627,6 +627,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | `home-directory` | 取指定用户的家目录：`ExpandPathAsync("~用户名…")` 在没有 `expand-path` 时用它 | `~用户名` 报 `Unsupported`；`~`、`~/…` 不需要它（用 `REALPATH "."`，§4.6） |
 | `expand-path@openssh.com` | 展开 `~`：`ExpandPathAsync(路径)` 把 `~`、`~/…`、`~用户名`、`~用户名/…` 整条交给服务端（顺带规范化，已与真 OpenSSH 的 `$HOME` 核对）；不以 `~` 开头的等同 `GetRealPathAsync`。`REALPATH` 本身不展开 `~` | `~`、`~/…` 用登录时的工作目录拼、再 `REALPATH`；`~用户名` 改用 `home-directory` |
 | `lsetstat@openssh.com` | 设属性但**不跟随**符号链接（`touch -h` / `chown -h`）：`SetLinkAttributesAsync`，同步目录时保留链接自身的时间戳 | 抛 `Unsupported`（看 `HasLSetStat`），**不退化**成跟随链接的 `SETSTAT` —— 那会改到目标 |
+| `users-groups-by-id@openssh.com` | 把数字 uid / gid 翻成名字：`LookupUserAndGroupNamesAsync(uid 们, gid 们)`，与问的一一对应、不认识的为 `null`（线上是空串，已与真 OpenSSH 的 `id` 核对）。请求是两个 `string`，各装着一串 `uint32`；应答是两个 `string`，各装着一串 `string`。回的条数对不上报格式不对（不让名字错位安到别的 id 上）；一次最多各 4096 个 | 抛 `Unsupported`（看 `HasUsersGroupsById`）；宿主照旧显示数字 |
 
 〔决策〕**按句柄设时间**（v3 的 `FSETSTAT`，不是扩展）：`SftpFileStream.SetTimesAsync(访问时间, 修改时间)` 在关闭之前用同一个句柄设，
 一次往返；`SetLastWriteTimeAsync(路径, …)` 要先 `STAT` 取回访问时间再 `SETSTAT`（两者共用一个标志位，只给一个会把另一个抹成 1970 年），两次往返。
