@@ -441,6 +441,9 @@ for work the host cannot see.
    - `Open SFTP File Manager` … `Ctrl+Shift+F`
    - `Open Settings` … `Ctrl+,`
    - (Extensions) `Open Tunnel Manager`, `Split Pane`, `Switch Theme`, `Record Session`, `Connection Diagnostics`, `Operations Orchestration`…
+   - `Send Break` (session category, since 2026-10-05): available when the active tab is a connected SSH session (local and plugin terminals cannot use it); it sends a BREAK (RFC 4335),
+     which is how serial console servers and network device consoles get into ROMMON / the boot menu. Whether the server performed it is reported in a toast: an ordinary toast when it did,
+     a yellow one, “The server did not perform the Break (it may not support it, or the session has no terminal)”, when it did not.
 5. **Footer (32px, `bg-input`)**: left = key hints `↑↓ Navigate` / `↵ Confirm` / `Esc Close`; right = result count `6 results`.
 
 **Interaction logic**:

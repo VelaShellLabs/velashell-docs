@@ -367,6 +367,7 @@ Likewise, once the ledger is closed no further `want_reply = true` request is se
 | `auth-agent-req@openssh.com` | true | None |
 | `x11-req` | true | See `07-forwarding.md` §7.5.3 |
 | `eow@openssh.com` | **false** | None. Sent to OpenSSH only (see below) |
+| `break` (RFC 4335) | 〔Decision〕**true** | `uint32 break-length` (milliseconds; `0` = the device's default length) |
 
 〔Decision〕**Once enough output has been read, tell the server: `eow@openssh.com`** (the channel write close extension in OpenSSH's `PROTOCOL`, `StopStandardOutputAsync`).
 The use case is wanting only the first few lines of output (like `head` or `grep -m 1`): the local end completes standard output and discards whatever arrives afterwards (the window is replenished as usual),
@@ -374,6 +375,11 @@ and an OpenSSH server, on receiving it, closes the output end of the remote proc
 It is the opposite direction of `CHANNEL_EOF` and likewise does not close the channel: the exit status still arrives and standard input can still be written; standard error is not affected.
 **It is sent to OpenSSH only** (judged by the server's identification string `SSH-2.0-OpenSSH_`): some implementations disconnect on a channel request they do not know (against RFC 4254 §5.4, but they exist).
 For other implementations the output is only discarded locally, and the return value says whether the request was sent. Measured against a real OpenSSH: sent after reading a few KB of `yes`, the process soon ends with signal `PIPE`; without it, `yes` keeps running.
+
+〔Decision〕**`break` asks for a reply** (`SshShell.SendBreakAsync(length)`, returning whether the server performed it). Reaching a serial console server or a network device's console over SSH,
+this is how one gets into ROMMON / the boot menu; RFC 4335 §3 requires the server to reply `SUCCESS` if it performed any kind of BREAK and `FAILURE` if not,
+and when the user presses "Send Break" the UI must be able to say it was not performed. The length defaults to `0` (the device's default length); the RFC suggests servers clamp it to 500 ms–3 s.
+A real OpenSSH performs it on a session with a pseudo-terminal and replies `SUCCESS`.
 
 〔Decision〕**The order of requests on a session channel is fixed**:
 
