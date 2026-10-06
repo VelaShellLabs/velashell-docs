@@ -217,6 +217,9 @@ Both names are sent, and they share one implementation.
 - **The peer's public key point MUST be verified to be on the curve** and not the point at infinity.
   .NET's `ECDiffieHellman.ImportSubjectPublicKeyInfo` / `ECParameters` validation does this,
   **but it MUST be confirmed that the exception is correctly translated into a protocol error rather than leaking out**.
+  〔Decision〕**The library checks first, before importing**: both coordinates are less than p, and y² = x³ − 3x + b (mod p) holds (the three SEC 2 curves all have a = −3).
+  The platform layer differs per platform (CNG on Windows, OpenSSL on Linux, Apple on macOS) and used to be verified only on Windows;
+  an encoding with a coordinate not less than p is congruent to the point minus p, so the equation still holds and it must be rejected separately. All zeros (the point at infinity cannot be written) gives 0 = b and is rejected along the way.
 - 〔Note〕The coordinates of nistp521 are 66 bytes (521 bits); `0x04 ‖ X ‖ Y` totals 133 bytes.
   Implementations that hard-code an assumption of 64 or 65 bytes will crash on this curve.
 

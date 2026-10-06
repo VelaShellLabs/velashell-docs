@@ -216,6 +216,9 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 - **必须验证对端公钥点在曲线上**且不是无穷远点。
   .NET 的 `ECDiffieHellman.ImportSubjectPublicKeyInfo` / `ECParameters` 校验会做这件事，
   **但必须确认异常被正确翻译成协议错误而不是漏出去**。
+  〔决策〕**导入之前库自己先查一遍**：两个坐标都小于 p，且满足 y² = x³ − 3x + b (mod p)（SEC 2 的三条曲线，a 都是 −3）。
+  平台那一层各是各的（Windows 的 CNG、Linux 的 OpenSSL、macOS 的 Apple），曾经只在 Windows 上验证过；
+  坐标不小于 p 的编码与减去 p 之后的点同余、方程照样成立，要单独拦。全零（无穷远点写不出来）代入方程得 0 = b，一并拒掉。
 - 〔注意〕nistp521 的坐标是 66 字节（521 位），`0x04 ‖ X ‖ Y` 共 133 字节。
   按 64 或 65 字节假设写死的实现会在这条曲线上崩掉。
 
