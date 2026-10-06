@@ -616,7 +616,7 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 | The peer floods channel requests we don't recognize | At most 64 unread unknown requests stay in the event stream; later ones are dropped (still answered with `FAILURE`). Exit status, `EOF` and close are not subject to this limit |
 | The peer repeats exit status / exit signal / `EOF` | Only the first is taken, later ones are dropped — each happens once per channel (RFC 4254 §6.10) and is not subject to the limit above, so accepting repeats would be memory amplification that bypasses window flow control. A repeated `EOF` does not change the state either |
 | The peer opens a channel type we don't recognize | Reply `CHANNEL_OPEN_FAILURE`; the description is truncated to 256 characters — an overlong type name from the peer is not echoed back verbatim |
-| Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException`, **do not disconnect the session** |
+| Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException` (`LimitExceeded` — a limit on this side, not the peer-refused `ChannelOpenFailed`), **do not disconnect the session** |
 | Channel count exceeds `MaxChannels` (〔Decision〕default 512) | Same as above |
 
 〔Decision〕**Invalid values for these limits throw `ArgumentOutOfRangeException` when they are set**, instead of causing trouble after the connection is up:

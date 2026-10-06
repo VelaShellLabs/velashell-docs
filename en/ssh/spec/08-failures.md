@@ -81,7 +81,7 @@ The types below have a fixed `Phase`, and their `Reason` is **reported as it act
 | `SshPrivateKeyException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyPassphraseRequired`, `KeyPassphraseIncorrect`, `Unsupported` | `None` |
 | `SshCertificateException` | `KeyFileUnreadable`, `KeyFormatInvalid`, `KeyMismatch`, `Unsupported` | `None` |
 | `SshAgentException` | `AgentNotRunning`, `AgentUnavailable`, `AgentRefused`, `LimitExceeded` (the key to add exceeds the message size limit), `ProtocolError` | `Authenticating` |
-| `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected`, `ProtocolError` (the peer announced a max packet of 0, so what is written to stdin cannot be sent) | `Open` |
+| `SshChannelException` | `ChannelOpenFailed` (with `OpenFailureReason`), `ChannelRequestRejected`, `LimitExceeded` (this side's channel count / session window budget reached its limit), `ProtocolError` (the peer announced a max packet of 0, so what is written to stdin cannot be sent) | `Open` |
 | `SshForwardException` | `ForwardRejected`, `ForwardBindFailed`, `ForwardSetupFailed`, `LimitExceeded`, `ProtocolError`; when agent forwarding cannot be set up because the local agent cannot be reached, the agent side's `AgentNotRunning` / `AgentUnavailable` is carried over | `Open` |
 | `SftpTransferInterruptedException` | Follows the cause of the interruption (the inner exception): a dropped connection is `ClosedByPeer`; a write the server rejected (disk full, quota, permission) takes the reason code of the inner `SftpException`; caller cancellation and local disposal are `Aborted`; a timeout waiting for acknowledgements on close is `Timeout`. 〔Decision〕It used to be fixed at `ClosedByPeer`, so callers deciding by reason code would treat "disk full" as a dropped connection and try to resume anyway | `Open` |
 
@@ -202,7 +202,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `ForwardRejected` | The server does not accept the forwarding request (`AllowTcpForwarding no`, `AllowAgentForwarding no` and the like), or this side refused an inbound channel that matches no forward | ✘ | |
 | `ForwardBindFailed` | The local listening port cannot be opened (in use, no permission) | ✘ | Use another port |
 | `ForwardSetupFailed` | Preparing the forward on the local side failed: no X display available, `xauth` could not run or failed | ✘ | |
-| `LimitExceeded` | One of this side's concurrency limits was reached (forwarded connections, agent / X11 channels) | ✘ | |
+| `LimitExceeded` | One of this side's limits was reached (concurrent channels, the session's total receive window budget, forwarded connections, agent / X11 channels) | ✘ | |
 | `CommandFailed` | A remote command did not end with exit code 0 (the `SshCommandFailedException` thrown by `SshCommandResult.EnsureSuccess`) | ✘ | Look at `Result`: stderr, exit code or signal |
 | `InvalidConfiguration` | The configuration itself does not hold: a `ProxyJump` cycle, too many hops, an invalid `ProxyCommand` template | ✘ | Fix the configuration —— otherwise the next attempt will fail the same way |
 | `Aborted` | Aborted locally (Dispose / cancellation); also a cancellation thrown by a callback itself during connection setup (the user clicked "Cancel" on a prompt, §2.1) | ✘ | |

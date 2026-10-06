@@ -614,7 +614,7 @@ sequenceDiagram
 | 对端灌不认识的通道请求 | 事件流里没读走的未知请求最多留 64 条，之后的丢掉（照样回 `FAILURE`）。退出状态、`EOF`、关闭不受这个上限影响 |
 | 对端重复发退出状态 / 退出信号 / `EOF` | 只收第一份，之后的丢掉 —— 它们每条通道只有一次（RFC 4254 §6.10），不受上面那个上限约束，重复的照收就是一条绕过窗口流控的内存放大。重复的 `EOF` 也不改状态 |
 | 对端开不认识的通道 | 回 `CHANNEL_OPEN_FAILURE`；描述文字截到 256 字符 —— 不把对端给的超长类型名原样回显 |
-| 会话窗口总预算超限 | 拒绝开新通道，抛 `SshChannelException`，**不断开会话** |
+| 会话窗口总预算超限 | 拒绝开新通道，抛 `SshChannelException`（`LimitExceeded` —— 本端的上限，不是对端拒绝的 `ChannelOpenFailed`），**不断开会话** |
 | 通道数超过 `MaxChannels`（〔决策〕默认 512） | 同上 |
 
 〔决策〕**这些限额的非法值在设值时就抛 `ArgumentOutOfRangeException`**，不等连上了再出事：

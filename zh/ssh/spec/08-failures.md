@@ -79,7 +79,7 @@ SshException                          抽象基类；带 Reason / Phase / IsRetr
 | `SshPrivateKeyException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyPassphraseRequired`、`KeyPassphraseIncorrect`、`Unsupported` | `None` |
 | `SshCertificateException` | `KeyFileUnreadable`、`KeyFormatInvalid`、`KeyMismatch`、`Unsupported` | `None` |
 | `SshAgentException` | `AgentNotRunning`、`AgentUnavailable`、`AgentRefused`、`LimitExceeded`（要加的钥超出报文上限）、`ProtocolError` | `Authenticating` |
-| `SshChannelException` | `ChannelOpenFailed`（带 `OpenFailureReason`）、`ChannelRequestRejected`、`ProtocolError`（对端宣告的 max packet 是 0，写进 stdin 的发不出去） | `Open` |
+| `SshChannelException` | `ChannelOpenFailed`（带 `OpenFailureReason`）、`ChannelRequestRejected`、`LimitExceeded`（本端的通道数 / 会话窗口总预算到了上限）、`ProtocolError`（对端宣告的 max packet 是 0，写进 stdin 的发不出去） | `Open` |
 | `SshForwardException` | `ForwardRejected`、`ForwardBindFailed`、`ForwardSetupFailed`、`LimitExceeded`、`ProtocolError`；agent 转发因本机 agent 连不上而没开成时沿用 agent 那边的 `AgentNotRunning` / `AgentUnavailable` | `Open` |
 | `SftpTransferInterruptedException` | 随中断的原因（内层异常）：断线 `ClosedByPeer`；服务端拒写（磁盘满、配额、权限）照内层 `SftpException` 的原因码；调用方取消、本端释放 `Aborted`；关闭时等确认超时 `Timeout`。〔决策〕曾经固定为 `ClosedByPeer`，按原因码判断的调用方会把「磁盘满」当成断线、照样去续传 | `Open` |
 
@@ -200,7 +200,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `ForwardRejected` | 服务端不接受转发请求（`AllowTcpForwarding no`、`AllowAgentForwarding no` 之类），或本端拒绝了对不上任何转发的入站通道 | ✘ | |
 | `ForwardBindFailed` | 本机的监听端口开不了（被占用、没有权限） | ✘ | 换一个端口 |
 | `ForwardSetupFailed` | 本机一侧准备转发失败：拿不到 X 显示、`xauth` 跑不起来或失败 | ✘ | |
-| `LimitExceeded` | 本端的某个并发上限到了（转发连接数、agent / X11 通道数） | ✘ | |
+| `LimitExceeded` | 本端的某个上限到了（并发通道数、会话接收窗口总预算、转发连接数、agent / X11 通道数） | ✘ | |
 | `CommandFailed` | 远端命令没有以退出码 0 结束（`SshCommandResult.EnsureSuccess` 抛的 `SshCommandFailedException`） | ✘ | 看 `Result`：stderr、退出码或信号 |
 | `InvalidConfiguration` | 配置本身不成立：`ProxyJump` 成环、跳数超限、`ProxyCommand` 模板非法 | ✘ | 改配置 —— 不改的话下一次还是一样 |
 | `Aborted` | 本端中止（Dispose / 取消）；建连时回调自己抛的取消（使用者在询问框上点了「取消」，§2.1）也是它 | ✘ | |
