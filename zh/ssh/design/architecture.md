@@ -1449,7 +1449,7 @@ pwsh scripts/ssh/interop/Stop-TestServer.ps1
 
 这件事没法放进常规单元测试：开关只能在进程启动时设一次，
 而读它的静态字段一个进程只读一次，同进程并行的用例没法各设各的。
-所以它是一个**单独的单文件脚本**，CI 里单跑一条：
+所以它是一个**单独的单文件脚本**，改动压缩那段代码时手动跑一次（〔历史〕曾经是 CI 里单独的一个作业，2026-10-07 撤掉）：
 
 ```bash
 dotnet run scripts/ssh/compression/verify-strict-validation.cs
