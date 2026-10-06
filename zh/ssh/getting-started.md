@@ -286,7 +286,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", new SshAgentKeyConstraint
 }, ct);
 ```
 
-- 只接受进程内私钥（`InMemorySshSigner`）；证书加钥暂不支持。
+- 只接受进程内私钥（`InMemorySshSigner`）；「证书 + 私钥」一起加用带证书的重载（[spec/07 §7.3](spec/07-forwarding.md)）。
 - **库从不自动加钥**，什么时候往使用者的 agent 里放东西由调用方决定。
 - 有的 agent 不支持约束，会整条拒绝（`SshAgentException`）。加进去的钥活多久由 agent 决定 ——
   Windows 的 OpenSSH agent 会存进注册表，重启后仍在。规格见 [spec/07 §7.3](spec/07-forwarding.md)。

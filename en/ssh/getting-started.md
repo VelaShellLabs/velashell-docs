@@ -288,7 +288,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", new SshAgentKeyConstraint
 }, ct);
 ```
 
-- Only in-process private keys (`InMemorySshSigner`) are accepted; adding certificates is not supported yet.
+- Only in-process private keys (`InMemorySshSigner`) are accepted; to add a certificate together with its private key, use the overload that takes the certificate ([spec/07 §7.3](spec/07-forwarding.md)).
 - **The library never adds keys on its own**; when to put something into the user's agent is the caller's decision.
 - Some agents do not support constraints and reject the whole request (`SshAgentException`). How long an added key lives is up to the agent —
   the Windows OpenSSH agent stores it in the registry, so it survives a reboot. Specification: [spec/07 §7.3](spec/07-forwarding.md).

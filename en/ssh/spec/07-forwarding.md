@@ -925,7 +925,7 @@ This library's `KnownHostsFile.Lookup` always rules a revoked key `Revoked` and 
 - **Forwarding**: each agent channel connects to the local agent on its own and binds with `is_forwarding = true`, and the remote hop's binding is passed through (§7.4) — the agent judges by points 1 and 2 above; the forwarding path needs no change.
   `AgentForwardOptions.AllowedKeys` still filters once more at this library's layer: one is the user's choice for this particular forwarding, the other a restriction the key carries with it and that holds for everyone; the two stack.
 
-〔Decision〕**One agent connection authenticates for one session only.** The agent does not accept binding another session on a connection already bound for authentication (`PROTOCOL.agent` §1),
+〔Decision〕**One agent connection authenticates for one session only.** The agent does not accept binding another session on a connection already bound for authentication (`PROTOCOL.agent` §1; 〔Verified〕see item 6 below),
 yet the same `SshAgentClient` may authenticate several SSH connections in turn — when connecting with `ProxyJump` from `ssh_config`, the library hands the same agent credential to every hop, jump hosts and target alike.
 The later hop's binding is then refused, the agent connection still records the earlier hop, and a destination-constrained key refuses to sign on the later hop even though its constraints permit it. Therefore:
 
@@ -935,23 +935,25 @@ The later hop's binding is then refused, the agent connection still records the 
 - A stream handed over through `FromStream` cannot be reopened, so the binding is still sent on the original connection and yields `false`; with such clients, constrained keys need one client per SSH connection.
 - When one client is used by several connections to authenticate **at the same time**, constrained keys are not guaranteed to work (the sessions swap the connection out from under each other).
 
-#### 〔To be verified〕Checks against a real agent during implementation
+#### 〔Verified〕Interop cases against a real agent
 
-As interop cases against OpenSSH 10.3's `ssh-agent` in Docker:
+Against OpenSSH 10.3's `ssh-agent` in Docker (the agent runs on the server and is reached through a tunnel), the results:
 
-1. **Bytes**: add (local → host-c, one ed25519 host key, any user) with `AddIdentityAsync`, capture the request on the agent socket, and match it against the bytes `ssh-add -H … -h host-c` sends
-   for the same key, the same host key and the same name (the 12 / 74 / 98 / 102 above); repeat once each with a user name, with a start host, with two keys on one host, and with a CA.
-2. After adding, `ListIdentitiesAsync` on this (unbound) connection lists the key.
-3. **Authentication**: a permitted host connects; for a host that is not permitted, the credential is recorded as an agent signing refusal (`AgentRefused`, the message carries the destination-constraint hint) and authentication moves on to the next one; a wrong user name is refused the same way.
-4. **CA**: when the server presents a host certificate and `known_hosts` has only the `@cert-authority` line, a hop built with `FromKnownHosts` connects.
-5. **Forwarding**: forward the agent to A with the key carrying (local → A) and (A → B): `ssh-add -l` on A lists it and `ssh` from A to B succeeds; drop (A → B): A lists nothing and logging in to B is refused.
-6. **Jump hosts**: one agent client authenticating jump host J and then target T through `ProxyJump` in `ssh_config`, the key carrying (local → J) and (local → T): both hops succeed.
-   Also check that without the reopen it really fails — i.e. that the agent really refuses a second authentication binding on the same connection (`PROTOCOL.agent` says so; not measured yet).
-7. **Unconstrained keys are not dragged in**: after a reopen unconstrained keys still sign; and on an agent connection bound for authentication to session X, an unconstrained key still signs session Y's login request
-   (this decides whether unconstrained keys are affected when several connections share one client at the same time).
-8. **Message number**: with `AllowedHops`, always `25` (pinned by a unit test, see the ⚠️).
-9. **Refusal**: through `FromStream`, a fake agent that answers the add with `5` / `28` yields `AgentRefused` in both cases, the message carries the destination-constraint hint, and no second add request follows.
-10. Optional, not blocking: whether the Windows OpenSSH agent and Pageant accept this constraint; record the result in this section.
+1. **Bytes**: unit tests pin the four levels of nesting and the 12 / 74 / 98 / 102 / 147 of the example in "Messages", plus one case each with a user name, with a start host, with two keys on one host, and with a CA;
+   the byte-for-byte comparison with `ssh-add -h` was done when this section was written (see "Messages"). The real agent accepts the constraint and enforces it (the items below).
+2. After adding, `ssh-add -l` on a connection without a binding lists the key.
+3. **Authentication**: a permitted host connects, and a user name with wildcards is permitted too; when the host key or the user name does not match, the agent refuses to sign, and the credential is skipped and the next one is tried.
+4. **CA**: when the server presents a host certificate and `known_hosts` has only the `@cert-authority` line, a hop built by `FromKnownHosts` connects; when the name is not among the certificate's principals the agent refuses to sign.
+5. **Forwarding**: with the key carrying (local → A) and (A → B), `ssh-add -l` on A lists it and `ssh` from A to B succeeds; with only (local → A), A lists nothing and logging in to B is refused.
+6. **Jump hosts**: one client opened by `ConnectAsync` authenticates the jump host and then the target, and both hops sign. A supplied stream (which cannot be reopened) is refused a signature on the target hop ——
+   the agent really does refuse a second authentication binding on the same connection.
+7. **Unconstrained keys are not dragged in**: after a supplied stream was bound for the jump host, an unconstrained key still signs for the target.
+8. **Message number**: with `AllowedHops`, always `25`, pinned by a unit test; with that rule reverted, the real-agent case lets through what should have been refused.
+9. **Refusal**: a fake agent answering `5` / `28` to the add request yields `AgentRefused` in both cases, with the destination-constraint hint, and no second add request follows.
+10. Not verified: whether the Windows OpenSSH agent and Pageant accept this constraint —— that would mean adding keys to the agent the user actually uses.
+
+〔Verified〕A pitfall when writing the negative cases: if authentication fails outright, OpenSSH 9.8+'s `PerSourcePenalties` blocks that source address for a while,
+dragging down later cases that connect from the same address. The cases give a password fallback after the agent credentials and look at which method was finally used —— an agent refusal only skips that credential, and the server records no failure.
 
 ### 7.4 Session binding (`session-bind@openssh.com`)
 
