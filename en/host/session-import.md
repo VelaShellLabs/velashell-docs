@@ -116,7 +116,7 @@ would import nothing at all.
 | `HostName` | Host | Defaults to the alias; `%h` expands to the original alias |
 | `Port` | Port | Defaults to 22; out-of-range values ignored |
 | `User` | User name | Defaults to empty (asked at connection time) |
-| `IdentityFile` | Private key path + `AuthMethod.PrivateKey` | Expands `~` / `%d` / relative paths. **Existence is not checked** — the key may not have been copied over from the other machine yet, and carrying the path into the profile is more useful than dropping it silently; `none` counts as unset |
+| `IdentityFile` | Private key path + `AuthMethod.PrivateKey` | `~` and `%d` `%u` `%h` `%r` `%%` are expanded by the SSH library (`SshHostConfig.ExpandIdentityFiles`, the same expansion used when reading keys to connect; 〔History〕the host used to expand them itself, recognizing only `~` / `%d` and leaving `%h` in the path as-is); relative paths are resolved against `~/.ssh`. **Existence is not checked** — the key may not have been copied over from the other machine yet, and carrying the path into the profile is more useful than dropping it silently; `none` counts as unset |
 | `ProxyJump` | Jump-host link (`JumpHostProfileId`) | See below |
 
 **Every other keyword is ignored**: `LocalForward` / `RemoteForward` (port forwards do not

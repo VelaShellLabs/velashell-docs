@@ -348,7 +348,7 @@ sequenceDiagram
 | `ssh_config` 项 | 连接参数 |
 | --- | --- |
 | `HostName` / `Port` / `User` | 目标端点与用户名（`User` 缺省时用调用方给的默认用户名）。`HostName` 里的 `%h` 换成使用者输入的名字、`%%` 换成 `%`（`Host *.prod` 配 `HostName %h.example.com`）；〔历史〕曾经只在 `Match host` 的比对里展开，建连拿字面量 `%h.example.com` 去连。`Port`（以及 `ProxyJump host:port` 里的端口）不是 1–65535 之间的整数时报 `InvalidConfiguration`，说出主机与那个值（`SshHostConfig.Port` 本身交出 22）；〔历史〕曾经原样交给连接参数，抛的是 BCL 的参数异常 |
-| `IdentityFile` | 逐个读取私钥（`~` 与 `%d` `%u` `%h` `%r` `%%` 展开；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectOptions.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
+| `IdentityFile` | 逐个读取私钥（`~` 与 `%d` `%u` `%h` `%r` `%%` 展开 —— 展开好的路径经 `SshHostConfig.ExpandIdentityFiles` 公开，`none` 不算；文件不存在则静默跳过）；加密的私钥向调用方要口令（`PassphraseProvider`），要不到则跳过。**读不出来的一把只跳过它自己**（格式不认识、口令不对、没权限读），并经 `SshConfigConnectOptions.IdentityFileSkipped` 告诉调用方路径与原因。同一次解析里每个文件（按完整路径）只读一次，跳板与目标共用同一个解好的签名器 —— 一次 KDF、一次口令；不跨调用缓存 |
 | `IdentitiesOnly` | 无需额外动作：本库从不自动去 agent 里取钥，用哪些钥完全由凭据清单决定。配置里的密钥排在调用方模板凭据**之前**（与 `ssh` 先试 `IdentityFile` 的行为一致） |
 | `Compression yes` | 算法清单打开 `zlib@openssh.com` |
 | `ServerAliveInterval` / `ServerAliveCountMax` | 保活策略 |
