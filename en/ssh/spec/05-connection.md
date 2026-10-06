@@ -372,6 +372,7 @@ Likewise, once the ledger is closed no further `want_reply = true` request is se
 | Usage | Order |
 | --- | --- |
 | Interactive shell | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `shell` |
+| Command in a pseudo-terminal (`ssh -t`, §7.2) | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `exec` |
 | One-shot command | `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `exec` |
 
 `x11-req` and `auth-agent-req` are sent only when the caller **explicitly requests** them; when one cannot be set up (a preparation failure on the local side, or the server refuses), it is handled per the options'
@@ -596,6 +597,12 @@ There are only three differences from the diagram above, but all of them concern
 〔Decision〕**`SshCommand` and `SshShell` are two types, not one class with `HasTerminal`.**
 Their lifecycles, read/write shapes and exit semantics all differ; cramming them together results in a pile of
 "this property is meaningless when there is a pty" conditional branches, and someone will always trip over such branches.
+
+〔Decision〕**Running one command in a pseudo-terminal (`ssh -t host cmd`) goes through `SshShell`**: when `SshShellOptions.Command` is not `null`,
+`exec` (carrying that command) is sent after `pty-req` instead of `shell`. Commands that need a terminal (`sudo`, `top`, interactive TUIs) run in one go
+without opening a whole login shell; the channel closes when the command finishes, and the exit code is available as usual. The dividing line is "is there a pseudo-terminal",
+not "is it a command or a shell" — with a pseudo-terminal there is only one output stream and the size can change, which is exactly the shape of `SshShell`; so terminal parameters
+are not added to `SshCommandOptions`, which would give `SshCommand` a `StandardError` that is forever empty under a pty. A rejected `exec` is reported as "the server refused to run this command".
 
 ---
 

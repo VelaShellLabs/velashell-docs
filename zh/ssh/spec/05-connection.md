@@ -370,6 +370,7 @@ CLOSE 发出、账本关掉、在途的请求以「没成」结算，通道号�
 | 用法 | 顺序 |
 | --- | --- |
 | 交互 shell | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → （使用者钩子）→ `shell` |
+| 伪终端里的命令（`ssh -t`，§7.2） | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → （使用者钩子）→ `exec` |
 | 一次性命令 | `x11-req` → `auth-agent-req@openssh.com` → `env` → （使用者钩子）→ `exec` |
 
 `x11-req` 与 `auth-agent-req` 只在使用者**显式要求**时才发；没开成（本机这一侧准备失败、服务端拒绝）时按选项的
@@ -594,6 +595,12 @@ sequenceDiagram
 〔决策〕**`SshCommand` 与 `SshShell` 是两个类型，不是一个带 `HasTerminal` 的类。**
 它们的生命周期、读写形状、退出语义都不一样；挤在一起的结果就是一堆
 「有 pty 时这个属性无意义」的条件分支，而那种分支永远会有人踩。
+
+〔决策〕**在伪终端里跑一条命令（`ssh -t host cmd`）走 `SshShell`**：`SshShellOptions.Command` 不为 `null` 时，
+`pty-req` 之后发 `exec`（带着那条命令）而不是 `shell`。`sudo`、`top`、交互式 TUI 这类要终端的命令一次跑完，
+不必开一整个登录 shell；命令跑完通道就关，退出码照常取。分界线是「有没有伪终端」而不是「是命令还是 shell」——
+有伪终端就只有一条输出流、尺寸会变，那正是 `SshShell` 的形状；所以不往 `SshCommandOptions` 上加终端参数，
+免得 `SshCommand` 多出一条在有 pty 时永远空的 `StandardError`。`exec` 被拒时报「服务端拒绝执行这条命令」。
 
 ---
 

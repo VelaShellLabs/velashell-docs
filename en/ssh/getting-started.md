@@ -334,6 +334,14 @@ If you don't know, pass 0; that is also a meaningful answer.
 `SshShell` **does not expose `StandardError`**: with a pty, stderr is merged into stdout by the pseudo-terminal,
 and exposing a stream that is always empty would only leave people waiting on it forever.
 
+To run just one command in a terminal (`ssh -t host top`: things like `sudo` and `top` that need one) without a login shell, set `Command`:
+
+```csharp
+await using SshShell top = await conn.OpenShellAsync(new SshShellOptions { Command = "top", Size = size }, ct);
+// read output from top.StandardOutput, write keystrokes to top.StandardInput; the channel closes when it finishes
+SshExitStatus exit = await top.WaitAsync(ct);
+```
+
 To enable X11 / agent forwarding on a shell, specify it directly in the options (the request order
 `pty-req → x11-req → auth-agent-req → env → shell` is handled by the library):
 

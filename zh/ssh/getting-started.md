@@ -332,6 +332,14 @@ await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight)
 `SshShell` **不暴露 `StandardError`**：有 pty 时 stderr 由伪终端合并进 stdout，
 暴露一条永远空的流只会让人对着它干等。
 
+只想在终端里跑一条命令（`ssh -t host top`：`sudo`、`top` 这类要终端的）而不开登录 shell，给 `Command`：
+
+```csharp
+await using SshShell top = await conn.OpenShellAsync(new SshShellOptions { Command = "top", Size = size }, ct);
+// 输出从 top.StandardOutput 读，按键写进 top.StandardInput；跑完通道就关
+SshExitStatus exit = await top.WaitAsync(ct);
+```
+
 要在 shell 上开 X11 / agent 转发，直接写在选项里（请求顺序
 `pty-req → x11-req → auth-agent-req → env → shell` 由库负责）：
 
