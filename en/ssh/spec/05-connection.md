@@ -562,6 +562,10 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
    and when it arrives it must land on this entry so that subsequent real global requests line up correctly.
 7. After being declared dead the session **actually stops**: it raises `Disconnected`, stops the receive/send pumps, and closes all channels
    (channel readers get the reason the session was declared dead, rather than hanging forever or seeing an EOF-like normal end — see §4.4).
+8. 〔Decision〕**Keepalive measures the round trip on the way**: the time from a probe being queued to its reply arriving is recorded in `SshConnection.LastRoundTrip` (`null` until measured);
+   `MeasureRoundTripAsync()` measures once on demand (the same request; a success or a failure reply both count). It measures the whole path (through proxies and jump hosts alike),
+   including the server's handling of one global request — closer to the "lag" a user feels than an ICMP ping, and unaffected by targets that block ICMP;
+   while channels are moving a lot of data the probe queues behind it and the figure comes out high. Timing goes through the connection's `TimeProvider`.
 
 ### 6.4 Requests we receive
 

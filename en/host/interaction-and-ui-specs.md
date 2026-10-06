@@ -351,6 +351,8 @@ Opened from the Ctrl pair selection in §3: one file tab with each pane connecte
 ## 7. Status Bar (Full-width 24px, `bg-sidebar`)
 
 - **Left**: `wifi` icon (connection color) + `SSH • web-prod-01:22` + `｜` + `Latency: 12ms` (accent) + `｜` + `↑ 2h 34m` (online duration).
+  Latency is measured every third sample: SSH sessions use the SSH-level round trip (a keepalive request, accurate through proxies and jump hosts, since 2026-10-06); other sessions fall back to an ICMP ping of the host;
+  nothing is shown when it cannot be measured (ICMP blocked, the SSH measurement taking over 2 seconds). It used to be ICMP for everything: for machines reached through a jump host or proxy it measured the direct path from this machine to the target, and servers that block ICMP never showed a latency.
 - **Right**: `xterm-256color` ｜ `120×36` (terminal size) ｜ `cpu 23%` ｜ `memory 1.2G` ｜ `net 4.2 MB/s` ｜ `UTF-8`.
 - CPU, memory, and network are lightweight real-time metrics for the current session. They share a source with the resource panel in §11; here they are a compact persistent version.
 - Each field is clickable. For example, clicking the size triggers one resize synchronization, and clicking the encoding opens the encoding menu.
