@@ -218,11 +218,12 @@ repeated: string type ‖ string data
 1. **`uid` and `gid` share one flag bit; `atime` and `mtime` share one.**
    To set mtime you must supply atime as well. 〔Decision〕When only mtime should change,
    first `STAT` to retrieve the current atime and write it back together.
-2. **Times are 32-bit Unix seconds** and will overflow in 2038. v3 has no solution; implement as specified.
-   〔Decision〕Interpreting the value read as unsigned would last until 2106 —
-   but servers usually send it as signed, so **read it as signed**, consistent with OpenSSH.
-   〔Decision〕**When writing, a time that does not fit throws** (`ArgumentOutOfRangeException`, range 1901-12-13 to 2038-01-19) instead of being truncated:
-   truncating to 32 bits turns a time after 2038 into 1901 — and "preserve timestamps" would write that to the server.
+2. **Times are 32-bit Unix seconds**; v3 has no wider field.
+   〔Decision〕**Read and write them as unsigned** (`uint`): 1970-01-01 to 2106-02-07, consistent with OpenSSH ——
+   verified black-box: for a file dated 2040 on the test server, OpenSSH's sftp-server sends 2208988800 and its own `sftp` client shows 2040.
+   〔History〕They used to be read as signed on the belief that "servers usually send them signed": a file from 2040 read as 1903, and times after 2038 could not be written (Q8).
+   〔Decision〕**When writing, a time that does not fit throws** (`ArgumentOutOfRangeException`, range 1970-01-01 to 2106-02-07) instead of being truncated:
+   truncating to 32 bits turns an out-of-range time into a different year — and "preserve timestamps" would write that to the server.
 3. The high bits of `permissions` are the file type (`S_IFMT`):
    `0o100000` regular file, `0o040000` directory, `0o120000` symbolic link.
    **v3 has no separate type field; the type can only be taken from here.**
