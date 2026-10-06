@@ -49,13 +49,14 @@ sequenceDiagram
         end
     else Rejected (AllowTcpForwarding no / target unreachable)
         S->>F: CHANNEL_OPEN_FAILURE(reason)
-        F->>App: TCP reset 〔Not implemented yet: closed normally today〕
+        F->>App: TCP reset
     end
 ```
 
-〔Not implemented yet〕When the server refuses to open the tunnel, the design is to **reset** that local connection (RST): a refusal is an error too, the same rule as §2.2's "an error is not an EOF".
-Today the implementation raises `Error` and closes that connection **normally** (FIN), so the local application reads an end with no data at all.
-(Dynamic forwarding also sends a SOCKS failure reply that tells the client why, §3.2.)
+〔Decision〕When the server refuses to open the tunnel (or has not answered within the channel-open time limit of §3.2), that local connection is **reset** (RST) and `Error` (`ChannelOpen`) is raised:
+a refusal is an error too, the same rule as §2.2's "an error is not an EOF". 〔History〕The connection used to be closed **normally** (FIN), so the local application read an end with no data at all
+and could not tell "the server refused" from "the target sent nothing". Local forwarding to a remote Unix socket is handled the same way; when listening on a local Unix socket, which may not support linger 0, the socket is simply closed.
+(Dynamic forwarding also sends a SOCKS failure reply that tells the client why, then closes normally, §3.2.)
 
 ### 2.1 Extra fields of `direct-tcpip`
 
@@ -201,13 +202,17 @@ let through, opening the tunnel fails on an invalid argument and the client gets
 | 2 `CONNECT_FAILED` | 0x05 connection refused |
 | 3 `UNKNOWN_CHANNEL_TYPE` | 0x01 general failure |
 | 4 `RESOURCE_SHORTAGE` | 0x01 general failure |
-| Channel open timed out 〔Not implemented yet〕 | 0x06 TTL expired |
+| Channel open timed out (`ChannelOpenTimeout`) | 0x06 TTL expired |
 
 Getting the mapping right has real consequences: `curl` and browsers decide from the REP code whether to retry
 and which message to show the user. Replying `0x01` for everything throws that information away.
 
-〔Not implemented yet〕Opening a channel has no time limit of its own yet, so the last row never applies: today the forwarder waits for the server's answer;
-if the forwarder is disposed or the SSH connection drops first, that connection is closed without any reply.
+〔Decision〕**Opening a channel has a time limit of its own** (`LocalPortForwardOptions.ChannelOpenTimeout`, 30 seconds by default, `Timeout.InfiniteTimeSpan` for none),
+shared by local and dynamic forwarding: the server confirms only after it has connected to the target, and for an unreachable target it answers only when its own TCP connect times out (commonly around two minutes) —
+browsers and curl cannot wait that long, and would not see why. When the time is up this connection is given up: dynamic forwarding replies `0x06`, local forwarding resets the local connection (§2), and both raise `Error` (`ChannelOpen`).
+A late confirmation is cleaned up by the connection and closed at once (the `CHANNEL_OPEN` has already gone out, so its answer runs its course instead of being dropped from the ledger), so it does not hold one of the server's session slots.
+〔History〕There used to be no such limit, so the last row never applied: the forwarder waited for the server's answer.
+If the forwarder is disposed or the SSH connection drops while one is still waiting, that connection is closed without any reply.
 A failure without a reason code (for example our own channel count or window budget being exhausted) gets `0x01`.
 
 ### 3.3 Handshake time limit
@@ -989,7 +994,7 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
 | Invalid forwarding options (`MaxConnections` below 1, a listening port outside 0–65535, a non-positive SOCKS handshake timeout, a null bind address) | 〔Decision〕Throw `ArgumentOutOfRangeException` / `ArgumentNullException` when set; if anything fails after the listener is up, the listener is closed on the spot. 〔History〕They used to go unchecked: with `MaxConnections = 0` the listener was already up when constructing the forwarder threw, and the port stayed taken until GC |
 | Starting a forward on a connection that is already disconnected (or disposed) | Fail outright: `ObjectDisposedException` once disposed, the recorded fault once declared dead — the same for local, dynamic and remote, and no listener is opened. 〔History〕Local / dynamic forwarding used to open the listener anyway and "succeed", returning a forwarder with `IsActive = false` |
-| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`) — 〔Decision〕the event fires **at most once per second**, carrying how many were rejected in the meantime; the error count in the metrics still records every rejection (〔History〕it used to fire for every rejection, so a burst of connections at the limit made the host push each one to the UI). A connection the peer resets before accept (`ConnectionReset` / `ConnectionAborted`) causes no backoff and no report — it is that connection's own business and the listener is fine (〔History〕it used to be reported as an accept failure, backing the whole listener off from 50 ms). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(4)` (resource shortage, §4.1); 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
+| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`) — 〔Decision〕the event fires **at most once per second**, carrying how many were rejected in the meantime; the error count in the metrics still records every rejection (〔History〕it used to fire for every rejection, so a burst of connections at the limit made the host push each one to the UI). A connection the peer resets before accept (`ConnectionReset` / `ConnectionAborted`) causes no backoff and no report — it is that connection's own business and the listener is fine (〔History〕it used to be reported as an accept failure, backing the whole listener off from 50 ms). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(4)` (resource shortage, §4.1), and likewise count it in `errors` and raise `Error` (`ConnectionLimit`, also at most once per second); 〔History〕it used to refuse that channel only, with no event and no count |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
 | The local agent cannot be reached when agent forwarding is requested | Do not send `auth-agent-req`; throw or start normally per `FailureMode` (§7.1, §7.5.8); the reason code is carried over from the agent side (`AgentNotRunning` / `AgentUnavailable`) |
 | The local agent cannot be reached when an `auth-agent@openssh.com` channel arrives | Reply `CHANNEL_OPEN_FAILURE(2)`, with the description saying only "local ssh-agent unavailable"; the session and the forwarder are unaffected (§7.1) |
