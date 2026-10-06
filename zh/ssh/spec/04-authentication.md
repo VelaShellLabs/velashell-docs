@@ -364,7 +364,7 @@ agent 认证、agent 转发、自动加钥三条路一起断。
 
 〔决策〕**解析不了的身份只跳过那一条。** 格式坏掉的证书、本库不支持的证书类型
 （证书里的钥只认 Ed25519、ECDSA P-256/384/521 与 RSA；FIDO 的 `sk-*`、`ssh-dss` 都不认），
-与不认识的普通钥（`sk-*`、`ssh-dss`、厂商私有类型）一样，跳过即可 —— 为其中一条报错等于让整个 agent 用不了。
+与不认识的普通钥（`ssh-dss`、厂商私有类型）一样，跳过即可（FIDO 的 `sk-*` 普通钥认得，见 §4.7） —— 为其中一条报错等于让整个 agent 用不了。
 
 〔注意〕**RSA 证书的签名请求要按去掉证书后缀的算法名设标志位**（`SshAgentClient.SignAsync`）。
 agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RSA_SHA2_512` 标志位表达，
@@ -458,6 +458,27 @@ RSA 是 n、e、d、iqmp、p、q；ECDSA 是曲线名、公钥点、d），然�
 对不对只认真工具：用例拿真 `ssh-keygen -y` 读本库写的文件（带口令与不带），导出的公钥要与本库的逐字节一致 ——
 填充起点写错时本库自己读自己照样读得回来。
 〔历史〕曾经库只能读、不能写，宿主手写了一份只能写**未加密**私钥的容器，中间导出的私钥参数也不清零。
+
+### 4.7 FIDO / U2F 安全密钥（经 agent）
+
+> 依据：OpenSSH `PROTOCOL.u2f`。
+
+`ssh-keygen -t ed25519-sk` / `ecdsa-sk` 在 YubiKey 之类的硬件上生成的钥：私钥永远不离开硬件，每次签名要按一下键 —— 电脑中毒也偷不走钥。
+
+| 类型 | 公钥 blob |
+| --- | --- |
+| `sk-ssh-ed25519@openssh.com` | `string` 类型 ‖ `string` 公钥（32 字节）‖ `string` application |
+| `sk-ecdsa-sha2-nistp256@openssh.com` | `string` 类型 ‖ `string` 曲线名（`nistp256`）‖ `string` 公钥点（65 字节未压缩点，须在曲线上）‖ `string` application |
+
+`SshPublicKey` 认得这两种（`IsSecurityKey`、`SecurityKeyApplication`，签名算法名就是类型名），于是 **agent 里的安全密钥列得出来、
+能当凭据出示**：签名请求交给 agent（标志位为空），agent 找硬件签、要用户按键；签回来的名原样交给服务端。转发出去照常。
+
+〔决策〕**第一阶段只经 agent**：直连硬件（Windows `webauthn.dll`、libfido2）的 PIN 与触摸交互是另一回事，不在这一步。
+
+〔决策〕**本库不验安全密钥的签名**（`VerifySignature` 对它们恒为假）：客户端用不上 —— 签名由服务端验；手头也没有能对照的硬件实现，
+写了只能自己证明自己。安全密钥做主机密钥、安全密钥的证书（`sk-*-cert-v01@openssh.com`）都不认。
+
+〔已核对〕本库造的两种公钥，真 `ssh-keygen -lf` 读得出、认成 `ED25519-SK` / `ECDSA-SK`、指纹一致。
 
 ---
 
