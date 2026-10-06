@@ -609,6 +609,24 @@ The result is in `SshConnection.LastHostKeyUpdate` (which keys were added, or wh
 
 〔Verified〕Against a real sshd (three host keys): the first connection records the negotiated key by TOFU, and rotation adds the other two; with the request name in the signed data altered, the real sshd's proofs no longer verify.
 
+### 6.5 Transport-layer PING / PONG (`ping@openssh.com`)
+
+> Basis: the ping section of OpenSSH `PROTOCOL`; RFC 4250 §4.1.2 (192–255 reserved for local extensions); RFC 8308 §2.4 (the second `EXT_INFO` after authentication).
+
+| Message | Number | Content |
+| --- | :-: | --- |
+| `SSH2_MSG_PING` | 192 | `string` data |
+| `SSH2_MSG_PONG` | 193 | `string` data (echoed back) |
+
+The server announces `ping@openssh.com` in `EXT_INFO` (OpenSSH 9.5 and later). Both the `EXT_INFO` during authentication and the one after it are read; once seen, `SshConnection.PeerSupportsPing` is true.
+
+〔Decision〕**No PING is ever sent unless the peer announced it** (messages the peer does not know are not sent); a PING from the peer is answered with PONG carrying the same data.
+
+〔Decision〕**When announced, round-trip time is measured with PING** (`MeasureRoundTripAsync` / `LastRoundTrip`, §6.3): a transport-level echo, without the server processing a global request, so the measurement is more accurate.
+The data is an 8-byte sequence number, and a PONG counts only when it matches; a dropped connection is reported as such. Without the announcement the keep-alive global request is used as before.
+
+〔Verified〕Against a real OpenSSH 10.3: its ping announcement is recognized, several measurements in a row all get a PONG, and the connection works normally afterwards.
+
 ---
 
 ## 7 Two uses of the session channel
@@ -659,6 +677,26 @@ Their lifecycles, read/write shapes and exit semantics all differ; cramming them
 without opening a whole login shell; the channel closes when the command finishes, and the exit code is available as usual. The dividing line is "is there a pseudo-terminal",
 not "is it a command or a shell" — with a pseudo-terminal there is only one output stream and the size can change, which is exactly the shape of `SshShell`; so terminal parameters
 are not added to `SshCommandOptions`, which would give `SshCommand` a `StandardError` that is forever empty under a pty. A rejected `exec` is reported as "the server refused to run this command".
+
+### 7.3 Keystroke timing obfuscation (`ObscureKeystrokeTiming`)
+
+> Basis: `ObscureKeystrokeTiming` in ssh_config(5) (behavior description only); the chaff messages are the PINGs of §6.5.
+
+In an interactive terminal each keystroke is one packet, and the intervals between keystrokes are visible on the network —— the rhythm of typing a password or a command reveals its content; it is a well-known side channel.
+With `SshShellOptions.ObscureKeystrokeTiming` (the tick; OpenSSH defaults to 20 milliseconds; off by default in this library):
+
+- The `StandardInput` the user writes to becomes the obfuscator's pipe. The tick loop sends **at most one packet per tick**: the accumulated input (one `CHANNEL_DATA`), or —— when there is no input in this tick ——
+  **a chaff PING of the same length** (5 random bytes of data; the whole payload is 10 bytes, the same as a one-keystroke `CHANNEL_DATA`).
+- Chaff continues for **a random period after the last keystroke** (0.5–1.5 seconds): with a fixed length, "the chaff stopped" would itself reveal when the last key was pressed. When idle, nothing at all is sent.
+- A large write (over 256 bytes: a paste, a file transfer) does not need hiding and goes out immediately —— it is the rhythm of *typing* that is obscured.
+- `CompleteStandardInputAsync` first sends what has accumulated, then `EOF`.
+
+〔Decision〕**Chaff requires the server to support PING**; without it the input is only batched and no chaff is sent —— messages the peer does not know are not sent (§6.5).
+〔Decision〕**Off by default**: the cost is bandwidth (while typing, about 1000 / tick packets per second, with as many PONGs coming back) and each keystroke going out up to one tick later. The host decides whether to turn it on.
+
+`ObscureKeystrokeTiming` in `ssh_config`: `yes` → 20 milliseconds, `interval:N` → N milliseconds, `no` → off (`SshHostConfig.ApplyToShell`).
+
+〔Verified〕Against a real sshd: a command typed into the shell one character at a time runs and returns its output as usual, with chaff sent while typing.
 
 ---
 

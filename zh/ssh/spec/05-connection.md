@@ -607,6 +607,24 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 
 〔已核对〕对真 sshd（三把主机密钥）：头一次按 TOFU 记下谈成的那把，轮换补记另外两把；把签名数据里的请求名改错，真 sshd 的证明就验不过。
 
+### 6.5 传输层的 PING / PONG（`ping@openssh.com`）
+
+> 依据：OpenSSH `PROTOCOL` 的 ping 一节；RFC 4250 §4.1.2（192–255 留给本地扩展）；RFC 8308 §2.4（认证之后的第二次 `EXT_INFO`）。
+
+| 报文 | 编号 | 内容 |
+| --- | :-: | --- |
+| `SSH2_MSG_PING` | 192 | `string` 数据 |
+| `SSH2_MSG_PONG` | 193 | `string` 数据（原样带回） |
+
+服务端在 `EXT_INFO` 里宣告 `ping@openssh.com`（OpenSSH 9.5 起）。认证时与认证之后的 `EXT_INFO` 都看，认得了就是 `SshConnection.PeerSupportsPing`。
+
+〔决策〕**对端没宣告就一个 PING 都不发**（对端不认的报文不发）；对端的 PING 原样回 PONG。
+
+〔决策〕**宣告了就用 PING 量往返时间**（`MeasureRoundTripAsync` / `LastRoundTrip`，§6.3）：传输层的回声，不经服务端处理全局请求，量得更准。
+数据是 8 字节序号，PONG 对上序号才算；连接断了照实报。没宣告照旧用保活全局请求。
+
+〔已核对〕对真 OpenSSH 10.3：认得它宣告的 ping，连量几次都有 PONG，之后连接照常。
+
 ---
 
 ## 七 session 通道的两种用法
@@ -657,6 +675,26 @@ sequenceDiagram
 不必开一整个登录 shell；命令跑完通道就关，退出码照常取。分界线是「有没有伪终端」而不是「是命令还是 shell」——
 有伪终端就只有一条输出流、尺寸会变，那正是 `SshShell` 的形状；所以不往 `SshCommandOptions` 上加终端参数，
 免得 `SshCommand` 多出一条在有 pty 时永远空的 `StandardError`。`exec` 被拒时报「服务端拒绝执行这条命令」。
+
+### 7.3 按键时序混淆（`ObscureKeystrokeTiming`）
+
+> 依据：ssh_config(5) 的 `ObscureKeystrokeTiming`（只取行为描述）；掩护报文用 §6.5 的 PING。
+
+交互终端里每次按键一个报文，按键之间的时间间隔在网上看得见 —— 输口令、敲命令的节奏能推测出内容，是公认的侧信道。
+`SshShellOptions.ObscureKeystrokeTiming`（节拍；OpenSSH 的默认是 20 毫秒；本库默认不开）打开之后：
+
+- 使用者写的 `StandardInput` 换成混淆器的管道。节拍循环**每一拍最多发一个报文**：攒下的输入（一个 `CHANNEL_DATA`），或者——这一拍没有输入时——
+  一个**等长的掩护 PING**（5 字节随机数据，整个载荷与一次按键的 `CHANNEL_DATA` 同为 10 字节）。
+- 掩护一直发到**最后一次按键之后的一段随机时间**（0.5–1.5 秒）：固定长度的话，「掩护停了」本身就泄漏了最后一次按键的时刻。闲着一个报文都不发。
+- 一次写进来很多（超过 256 字节：粘贴、传文件）不用藏，直接发 —— 混淆的是「打字」的节奏。
+- `CompleteStandardInputAsync` 先把攒下的发完，再发 `EOF`。
+
+〔决策〕**掩护要服务端认 PING**；不认时只攒批、不发掩护 —— 对端不认的报文不发（§6.5）。
+〔决策〕**默认不开**：代价是带宽（打字时每秒约 1000 / 节拍 个报文，服务端还回同样多的 PONG），以及每次按键最多晚一个节拍发出去。由宿主决定要不要开。
+
+`ssh_config` 的 `ObscureKeystrokeTiming`：`yes` → 20 毫秒，`interval:N` → N 毫秒，`no` → 不开（`SshHostConfig.ApplyToShell`）。
+
+〔已核对〕对真 sshd：逐字敲进 shell 的命令照常跑、输出照常回，打字期间发了掩护。
 
 ---
 
