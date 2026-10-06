@@ -382,6 +382,7 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `ForwardX11Timeout` | Validity period of the X11 forwarding turned on by `ForwardX11` (`07-forwarding.md` §7.5.7). `ssh_config` time format: a number followed by `s` / `m` / `h` / `d` / `w`, no unit means seconds, several parts add up (`1h30m`); `0` means no expiry. An invalid value is ignored and the default of 20 minutes applies |
 | `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | Applied to the default algorithm lists in the syntax of §7.2 (both directions together for encryption and MAC); a mistake is `InvalidConfiguration`, naming the host and the reason |
 | `PubkeyAcceptedAlgorithms` (old name `PubkeyAcceptedKeyTypes`) | Applied in the syntax of §7.2 to the signature algorithms the library uses for public key authentication by default; if `ssh-rsa` remains in the result, SHA-1 RSA signatures are allowed (`AllowSha1RsaSignatures`) —— the most common line for old servers, `+ssh-rsa`. Other forms are only validated for now |
+| `LocalForward` / `RemoteForward` / `DynamicForward` plus `GatewayPorts`, `ExitOnForwardFailure`, `ClearAllForwardings`, `PermitRemoteOpen` | Not connection parameters: started after connecting by `SshConfigFile.StartForwardsAsync`, see §7.3 |
 
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;
@@ -476,3 +477,29 @@ mistakes throw `SshAlgorithmSpecException` with a structured reason: `Empty` (no
 CBC, 3des, group1 and the like can never be agreed), `NothingLeft` (everything removed). **A removal entry without wildcards must still be a known name**:
 a misspelled `-chacha20-poly1305` (missing `@openssh.com`) removes nothing while the user believes it is off.
 〔History〕This parser used to exist only in the host, so these keys had no effect when importing `~/.ssh/config`.
+
+### 7.3 Forwarding keys (`StartForwardsAsync`)
+
+`SshHostConfig.GetForwards()` parses the three keys into structured endpoints (`SshConfigForward`); unlike other keys these three **accumulate**: every line is a forward.
+With `ClearAllForwardings yes` the list is empty.
+
+| Form | Meaning |
+| --- | --- |
+| `8080` / `127.0.0.1:8080` / `[::1]:8080` | Listening port (optionally with an address; IPv6 in brackets) |
+| `*:8080` / `:8080` | Listen on all interfaces |
+| A side containing `/` | A Unix socket path (the same test ssh uses) |
+| `RemoteForward port` (no target) | Remote dynamic forwarding (`07-forwarding.md` §4.6) |
+| Port `0` | Assigned by the system (local) or the server (remote); the forwarder reports the actual port |
+
+Mistakes (a missing side, a port out of range, a target without a port, a socket for dynamic forwarding…) are `InvalidConfiguration`, with the original line in the message.
+
+`SshConfigFile.StartForwardsAsync(connection, config, onFailure)` starts them all after connecting and returns the forwarders that started (disposed by the caller):
+
+- 〔Decision〕**All forms are checked first**; if one is wrong, none starts —— that is a configuration error, not "this one failed to start".
+- Local / dynamic forwards without a listening address bind to **loopback**, or to all interfaces with `GatewayPorts yes`; `localhost` is loopback, `*` is all interfaces.
+  The listening address of a remote forward is passed to the server as-is (`localhost` when omitted).
+- The allowlist for remote dynamic forwarding comes from `PermitRemoteOpen`. 〔Decision〕**When the config omits it, it is `any`** (OpenSSH's default): unlike the library API, which requires an explicit list (§4.6),
+  a `RemoteForward port` written into the config is itself the config author's explicit choice; `any` / `none` / a list mean what they say.
+- 〔Decision〕**`ExitOnForwardFailure yes`: if one forward fails to start, everything already started is torn down and the whole call fails** (`SshForwardException`, `ForwardSetupFailed`, with the line in the message) ——
+  scripts and automation need exactly "don't run if a required forward is not up". Without it the failure goes to `onFailure` and the rest start as usual.
+- Combinations the library does not support yet (the server listening on a socket with a local TCP target, or the reverse) are handled as "this one failed to start".

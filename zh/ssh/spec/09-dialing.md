@@ -380,6 +380,7 @@ sequenceDiagram
 | `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
 | `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | 按 §7.2 的写法作用到默认算法清单上（加密与 MAC 两个方向一起）；写错报 `InvalidConfiguration`，说出主机与原因 |
 | `PubkeyAcceptedAlgorithms`（旧名 `PubkeyAcceptedKeyTypes`） | 按 §7.2 的写法作用到本库公钥认证默认的签名算法上；结果里留着 `ssh-rsa` 时放开 SHA-1 的 RSA 签名（`AllowSha1RsaSignatures`）—— 老服务器最常见的那一行 `+ssh-rsa`。其余写法目前只用于校验 |
+| `LocalForward` / `RemoteForward` / `DynamicForward` 及 `GatewayPorts`、`ExitOnForwardFailure`、`ClearAllForwardings`、`PermitRemoteOpen` | 不是连接参数：连上之后由 `SshConfigFile.StartForwardsAsync` 起，见 §7.3 |
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
@@ -474,3 +475,29 @@ Windows 上会去读写当前目录里一个叫 `none` 的文件。
 CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不剩）。**不带通配的删除项也要是认得的名字**：
 拼错了的 `-chacha20-poly1305`（少了 `@openssh.com`）什么都删不掉，使用者却以为已经关了。
 〔历史〕这份解析原来只在宿主里，导入 `~/.ssh/config` 时这几项不生效。
+
+### 7.3 转发项（`StartForwardsAsync`）
+
+`SshHostConfig.GetForwards()` 把三个键解析成结构化的两头（`SshConfigForward`）；与别的键不同，这三个键**累加**：每一行都是一条转发。
+`ClearAllForwardings yes` 时为空。
+
+| 写法 | 含义 |
+| --- | --- |
+| `8080` / `127.0.0.1:8080` / `[::1]:8080` | 监听端口（可带地址；IPv6 在方括号里） |
+| `*:8080` / `:8080` | 监听全部网卡 |
+| 含 `/` 的一头 | Unix 套接字路径（与 ssh 的判断一致） |
+| `RemoteForward 端口`（不给目标） | 远程动态转发（`07-forwarding.md` §4.6） |
+| 端口 `0` | 由系统（本地）或服务端（远程）分配，实际端口看转发器 |
+
+写错（少一段、端口越界、目标没有端口、动态转发写了套接字……）报 `InvalidConfiguration`，消息带那一行原文。
+
+`SshConfigFile.StartForwardsAsync(connection, config, onFailure)` 连上之后把它们全部起来，返回起来了的转发器（由调用方释放）：
+
+- 〔决策〕**先把写法全部查一遍**，写错一条就一条都不起 —— 那是配置错误，不是「这一条没起来」。
+- 没写监听地址的本地 / 动态转发绑**环回**，`GatewayPorts yes` 时绑全部网卡；`localhost` 是环回，`*` 是全部网卡。
+  远程转发的监听地址原样交给服务端（没写是 `localhost`）。
+- 远程动态转发的放行名单取 `PermitRemoteOpen`。〔决策〕**配置里没写时是 `any`**（OpenSSH 的默认）：与库 API 必须显式给名单（§4.6）不同，
+  写进配置的 `RemoteForward 端口` 本身就是配置作者的明确选择；`any` / `none` / 名单照字面。
+- 〔决策〕**`ExitOnForwardFailure yes`：有一条没起来，已起的全部撤掉、整体失败**（`SshForwardException`，`ForwardSetupFailed`，消息带那一行）——
+  脚本与自动化场景要的就是「必需的转发起不来就别跑」。没开时这一条报给 `onFailure`，其余照起。
+- 本库还不支持的组合（服务端在套接字上监听、本机目标是 TCP，或者反过来）照「这一条没起来」处理。
