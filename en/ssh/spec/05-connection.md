@@ -609,12 +609,17 @@ and does not have to delete lines by hand, so that warning regains its weight.
 
 〔Decision〕**Strict verification**: RSA only accepts SHA-2 signatures (`ssh-rsa`'s SHA-1 is not accepted); **if one signature fails, none of the keys is recorded** —— with one forgery in the reply, the rest cannot be trusted either.
 
-〔Decision〕**Add only, never remove**: proven new keys are appended to `known_hosts` (`RecordHostKeysAsync`); removing keys no longer presented would require rewriting the file, which is not done (`known_hosts` is append-only).
+〔Decision〕**Add new keys and remove old ones** (Q4): proven new keys are appended to `known_hosts` (`RecordHostKeysAsync`); keys that are recorded but missing from this announcement are forgotten (`ForgetHostKeysAsync`;
+`KnownHostsPolicy` uses the rewrite path of [spec/03 §5.4](03-key-exchange.md) and removes only records that belong to this host alone). Preconditions for removal: the announcement is **complete** (no more than the 16 keys looked at, otherwise the unread ones might include it),
+and the new keys that need proof have **all been proven** (with one forgery, nothing is added and nothing is removed); the key used by this connection is always in the announcement and is never removed. The result is in `SshHostKeyUpdate.RemovedFingerprints`.
+Without removal, a retired key stays trusted forever —— if its private key ever leaks, whoever holds it can still impersonate this host.
+The default implementation of `IHostKeyRotationPolicy.ForgetHostKeysAsync` removes nothing (a removed record cannot be brought back, so policies that do not implement it keep adding only). 〔History〕It used to only add, never remove.
 
 〔Decision〕**In the background, best effort**: the receive loop only parses; proving and writing the file happen in the background (they send a global request and wait for its reply); once per connection.
 The result is in `SshConnection.LastHostKeyUpdate` (which keys were added, or why nothing was done); a failure does not affect the connection.
 
 〔Verified〕Against a real sshd (three host keys): the first connection records the negotiated key by TOFU, and rotation adds the other two; with the request name in the signed data altered, the real sshd's proofs no longer verify.
+With a key recorded that sshd does not have, it is removed from `known_hosts` after connecting, and the other lines stay exactly as they were.
 
 ### 6.5 Transport-layer PING / PONG (`ping@openssh.com`)
 

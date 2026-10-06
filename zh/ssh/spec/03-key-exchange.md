@@ -489,6 +489,15 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 **这次连接也不放行**（`InvalidConfiguration`）—— 记不下来就不该悄悄当成「只信这一次」。散列行同样拒绝：这样的名字本来就不是一台主机。
 〔决策〕**读写 `known_hosts` 失败报 `HostKeyStoreFailed`**（`KnownHostsFile.LoadAsync` / `AppendAsync` 抛 `SshConnectException`，原异常在 `InnerException` 里）。
 读不出来时没法判断认不认识这台主机，连接不放行 —— 当成「没见过」去问，等于在真有记录的时候把一把来路不明的钥递给用户去点「信任」。
+〔决策〕**平时只追加，删记录另走一条改写路径**（Q4）：只有两个场合删 —— 「密钥变了」、使用者确认是重装之后一键删掉旧的记录
+（`KnownHostsPolicy.RemoveHostKeysAsync`，报错文案让人手工去做的那件事；本库从不自己删，「变了」的裁决照旧是拒绝），
+以及主机密钥轮换时删掉服务端不再出示的旧钥（[spec/05 §6.4.1](05-connection.md)）。两者都落到 `KnownHostsFile.RemoveHostKeysAsync`：
+- **只动专属于这台主机的记录**：散列行（一行只代表一个名字）对上了整行删；明文行把这台主机的名字拿掉 —— 一行记着几个名字（`host,10.0.0.5`）时别的名字照旧受信，名字拿光了才整行删。
+  `@revoked`、`@cert-authority`、带通配或取反的行不动（它们管的不止这一台）；别的行连同换行符原样保留。给了指纹只删那几把。
+- **临时文件 + 原子替换 + 冲突重试**：新内容先写进同一目录下的临时文件；替换之前再读一次原文件，与改写所依据的不一样（多半是别的进程刚追加了一条）就按新内容重来，
+  最多 5 次（Windows 上文件正被别的进程开着也算冲突）；一样才原子地换上去，Unix 上权限照旧。中途失败原文件不受影响；没有可删的时文件一个字节都不动。
+  比较与替换之间仍有一个极短的窗口，那时追加进来的一条会丢 —— 所以平时不改写。〔历史〕曾经只追加、从不改写。
+
 〔决策〕**「信任并记住」时写不进去，这次连接照常进行**（与 OpenSSH 一样只是提醒）：信任已经给了，只是没记下来。
 `PersistAsync` 抛出的异常里，取消照实抛出；本库别的原因（上一条的 `InvalidConfiguration`）是策略有意不放行，也照实抛出；
 其余 —— `HostKeyStoreFailed` 与调用方策略自己的异常 —— 记在 `SshConnection.HostKeyPersistFailure` 上（经跳板时记在那一跳自己的连接上），下次连接还会再问。

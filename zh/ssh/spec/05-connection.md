@@ -607,12 +607,17 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 
 〔决策〕**验证从严**：RSA 只认 SHA-2 的签名（`ssh-rsa` 的 SHA-1 不认）；**一把签不过就一把都不记** —— 同一个应答里有假的，其余的也不可信。
 
-〔决策〕**只增不删**：证实了的新钥追加进 `known_hosts`（`RecordHostKeysAsync`）；删掉不再出示的旧钥要改写文件，不做（`known_hosts` 只追加）。
+〔决策〕**补新钥，也删旧钥**（Q4）：证实了的新钥追加进 `known_hosts`（`RecordHostKeysAsync`）；记着、这次宣告里却没有的旧钥忘掉（`ForgetHostKeysAsync`，
+`KnownHostsPolicy` 走 [spec/03 §5.4](03-key-exchange.md) 的改写路径，只删专属于这台主机的记录）。删的前提：宣告**完整**（没超过一次看的 16 把，否则后面没看的里也许就有）、
+要证明的新钥**全都证明过了**（有一把是假的就不补也不删）；当前这条连接用的钥一定在宣告里，不会被删。结果在 `SshHostKeyUpdate.RemovedFingerprints`。
+不删的话，换下来的钥一直受信 —— 它的私钥哪天流出去，拿着它的人照样能冒充这台主机。
+`IHostKeyRotationPolicy.ForgetHostKeysAsync` 的默认实现什么都不删（删掉的记录收不回来，没实现它的策略照旧只增不删）。〔历史〕曾经只增不删。
 
 〔决策〕**在后台做、尽力而为**：接收循环上只解析，证明与写文件放到后台（要发全局请求、等应答）；每条连接只做一次。
 结果在 `SshConnection.LastHostKeyUpdate`（补记了哪些，或者为什么没做）；没做成不影响连接。
 
 〔已核对〕对真 sshd（三把主机密钥）：头一次按 TOFU 记下谈成的那把，轮换补记另外两把；把签名数据里的请求名改错，真 sshd 的证明就验不过。
+记着一把 sshd 没有的钥时，连上之后它从 `known_hosts` 删掉，别的行一字不动。
 
 ### 6.5 传输层的 PING / PONG（`ping@openssh.com`）
 
