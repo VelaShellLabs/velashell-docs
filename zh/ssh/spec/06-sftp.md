@@ -622,7 +622,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | `hardlink@openssh.com` | 建硬链接 | 抛 `Unsupported` |
 | `fsync@openssh.com` | 强制落盘 | 抛 `Unsupported` |
 | `limits@openssh.com` | §5.2；宣告了 `max-open-handles` 就按它排队：每个开着的文件、目录占一个额度，关了还回来，额度用完时新的 `OPEN` / `OPENDIR` 等着，而不是撞上服务端的上限得到一个随机的「操作失败」 | 用保守默认；句柄不限 |
-| `statvfs@openssh.com` | 文件系统用量 | 〔现状〕能力位可查（`HasStatVfs`），**本库还没有封装** |
+| `statvfs@openssh.com` | 文件系统用量：`GetFileSystemInfoAsync(路径)` 交回与 POSIX `statvfs` 一一对应的 11 个字段（顺序已与真 OpenSSH 的 `stat -f` 核对），加上按 `f_frsize`（为 0 时按 `f_bsize`，与 `df` 一致）算出的总容量、空闲、普通用户还能写多少（`AvailableBytes`，上传前预检看这个）、是否只读；字节数溢出时饱和 | 抛 `Unsupported`（看 `HasStatVfs`） |
 | `copy-data` | **服务端内**复制，不经过网络 | 〔现状〕能力位可查（`HasCopyData`），**还没有封装**；宿主的远端复制走「下载再上传」 |
 | `home-directory` | 取指定用户的家目录 | 〔现状〕能力位可查，**还没有封装**；工作目录取自 `REALPATH "."`（§4.6） |
 | `expand-path@openssh.com` | 展开 `~` | 〔现状〕能力位可查，**还没有封装** |
