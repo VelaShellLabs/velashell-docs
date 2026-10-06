@@ -301,7 +301,7 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 > FIPS 203 表 3（ML-KEM 的各项长度）、§7.3（解封装的输入检查）、§3.3（中间值的销毁）；
 > RFC 5656 §4 与 SEC 1 §2.3.3–§2.3.5、§3.2.2（EC 点的编码、域元素的定长编码、公钥校验）。
 >
-> **实现状态（2026-10-06）**：规格先行，**尚未实现**（F12）。验证靶机与核对清单见 §3.7.7。
+> **实现状态（2026-10-07）**：**已实现**（F12，`HybridKeyExchange`），对真服务端的核对结果见 §3.7.7。
 
 形状与 §3.6 完全相同 —— **一个 KEM 与一次椭圆曲线 DH 并联**，只是经典的那一半从 X25519 换成了 §3.3 的 NIST 曲线 ECDH。
 两种都只用 FIPS 认可的原语（ML-KEM、P-256 / P-384 上的 ECDH、SHA-2）：开了 FIPS 模式、不给 X25519 与 sntrup761 的服务端，靠它们谈成后量子。
@@ -448,31 +448,30 @@ RFC 4253 / 5656 / 4419 没有指定原因码，一条规矩比按方法分表好
 RFC 10042 没有给测试向量。§4.1 那张表的新行用两样东西钉住：内存里的服务端一侧（`TestKexResponder` 补上这两种）给出的自洽向量，
 以及 §3.7.7 对真服务端的核对。服务端一侧**必须独立地**按定长去算 `K_CL` 与 `K`，不能调用被测的那段代码 —— 否则两边错得一样，用例照样通过。
 
-#### 3.7.7 〔待核对〕实现会话对真服务端的核对清单
+#### 3.7.7 〔已核对〕对真服务端的核对结果
 
-靶机是仓库根 `docker-compose.test.yml` 的 `ssh-pq`（AlmaLinux 10.2，端口 2226，账号 `vela-pq` / `velapass`）：
-它的清单照开了 FIPS 模式的服务端配 —— 两种 nistp 混合加普通 ECDH，没有 X25519 与 sntrup761。
-服务端日志（`docker logs`，`LogLevel DEBUG1`）里的 `kex: algorithm: …` 是对端视角的旁证。
-互操作用例在靶机不在时早退，而 MSTest 把早退记为通过：要确认真跑过，看 `TestContext` 里有没有 `[SKIP]` 行。
+靶机是仓库根 `docker-compose.test.yml` 的 `ssh-pq`（AlmaLinux 10.2 的 OpenSSH 9.9p1，账号 `vela-pq` / `velapass`），同一个容器里起三个 sshd：
+本机 2226 照开了 FIPS 模式的服务端配（两种 nistp 混合加普通 ECDH，没有 X25519 与 sntrup761）；2227 只给 `mlkem1024nistp384-sha384`（外加 `ecdh-sha2-nistp384`）；
+2228 照 RHEL 10.2 的 DEFAULT 策略（三种 ML-KEM 混合、X25519 那种在前，再是 curve25519 与普通 ECDH）。靶机不在时互操作用例记为跳过（Inconclusive）。
 
-1. **握手 + 命令，两种各一次**：清单只放这一个名字，连上、认证、跑一条命令拿到输出；`SshConnection.Algorithms` 里的密钥交换是这个名字，服务端日志同名。
-2. **重协商，两种各若干次**：同一条连接上显式重协商，每次之后命令照常；`SshConnection.Rekeyed` 报出的密钥交换是这个名字。
-3. **定长的 `K_CL` 真的被走到**：每种至少 **1200 次**交换（重协商比整条连接便宜），全部成功。
-   X 坐标首字节为 0 的概率是 1/256，1200 次里一次都碰不到的概率约 0.9%；与第 7 条里保证碰到的内存用例一起，两边都过才算数。
-4. **服务端只给其中一种时**：各起一个只给 `mlkem768nistp256-sha256`（外加普通 ECDH）、只给 `mlkem1024nistp384-sha384`（外加普通 ECDH）的 sshd
-   （在同一个镜像里换一个端口再起一个 sshd 进程，或者再加一个 compose 服务）：`SshAlgorithmSet.Default` 与 `SshAlgorithmSet.FipsApprovedOnly` 都谈成那一种，不退到 ECDH。
-5. **默认清单的结果**：对 `ssh-pq`（没有 X25519），`Default` 谈成 `mlkem768nistp256-sha256`（以前是 `ecdh-sha2-nistp256`）；
-   对给三种 ML-KEM 混合的服务端（Alma 的 DEFAULT 策略，即去掉 `KexAlgorithms` 那一行），`Default` 仍谈成 `mlkem768x25519-sha256`，`FipsApprovedOnly` 谈成 `mlkem768nistp256-sha256`。
-6. **FIPS 预设对不给 X25519 的服务端**：`FipsApprovedOnly` 对 `ssh-pq` 谈成 `mlkem768nistp256-sha256`，命令与重协商照常；对只给普通 ECDH 的服务端照旧谈成 `ecdh-sha2-nistp256`。
-7. **负面用例（内存）**：`S_REPLY` 长一字节、短一字节；`Q_S` 首字节改成 `0x02` / `0x03`；`Q_S` 的 Y 改一个比特（不在曲线上）；坐标等于 p；全零的点
-   → `SshKeyExchangeException`，`Reason = ProtocolError`，断开码 3。改 `ct_pq` 的一个比特 → 交换本身不报错，签名验证失败 → `HostKeyRejected`。
-   另有一条保证碰到前导零：反复生成密钥，直到共享点 X 坐标的首字节为 0，断言 `K_CL` 是 32 / 48 字节、首字节是 0，且两端算出同一个 `K`。
-8. **负面用例（真服务端）**：在客户端与 `ssh-pq` 之间放一个只改字节的中继（首次交换是明文）：
-   改 `S_REPLY` 里 EC 点的一个字节 → 本端 `ProtocolError`，服务端日志里是对端以原因码 3 断开（`Received disconnect from … 3: …`）；
-   改 `ct_pq` 的一个字节 → 本端 `HostKeyRejected`，服务端日志里是原因码 9。
-9. **抓包核对线上长度（可选）**：首次交换是明文，`C_INIT` 应是 1249 / 1665 字节，`S_REPLY` 是 1153 / 1665 字节，`ek_pq` / `ct_pq` 之后那一字节是 `0x04`。
-10. **第二个实现（可选）**：上游 OpenSSH 10.6p1（`KexAlgorithms +mlkem768nistp256-sha256`）上强制 `mlkem768nistp256-sha256` 握手与重协商；
-    强制 `mlkem1024nistp384-sha384` 应得到 `NegotiationFailed`，异常里带着双方名单。Apache MINA SSHD 2.20 也实现了两种，可以再对一次。
+1. **握手 + 命令**：两种各自连上、认证、跑命令，`SshConnection.Algorithms` 里的密钥交换就是这个名字。
+2. **重协商**：两种各重协商三次，每次之后命令照常，`SshConnection.Rekeyed` 报出的是这个名字。
+3. **定长的 `K_CL`**：每种在同一条连接上连续重协商 1200 次，全部成功（碰到 X 坐标首字节为 0 的概率约 99%）；
+   内存里另有一条反复交换、直到碰上前导零再断言两端 `K` 一致的用例。把 `K_CL` 改成去掉前导零，这两条都红。
+4. **服务端只给 1024 那种**（2227）：`Default` 与 `FipsApprovedOnly` 都谈成 `mlkem1024nistp384-sha384`，不退到 ECDH。
+   只给 768 那种的服务端没有单独起：2226 两种都给，两份清单都选 768。
+5. **默认清单**：对 2226（没有 X25519）谈成 `mlkem768nistp256-sha256`（以前是 `ecdh-sha2-nistp256`）；对 2228（RHEL 的 DEFAULT）仍谈成 `mlkem768x25519-sha256`。
+6. **FIPS 预设**：对 2226 与 2228 都谈成 `mlkem768nistp256-sha256`，命令照常。只给普通 ECDH 的服务端没有单独起。
+7. **负面（内存）**：`S_REPLY` 多一字节、少一字节；`Q_S` 首字节 `0x02` / `0x03`；Y 改一个比特；X 等于 p；全零的点 → `SshKeyExchangeException`（`ProtocolError`）；
+   改 KEM 密文的一个比特 → 交换本身不报错、算出的 `K` 不同。断开码：五种方法（两种 nistp 混合、`mlkem768x25519-sha256`、`ecdh-sha2-nistp256`、`curve25519-sha256`）
+   各收到一个短了一字节的公开值，服务端收到的原因码都是 3（§3.7.4）。
+8. **负面（真服务端）**：在客户端与 2226 之间放一个改字节的中继（首次交换是明文）：改 `S_REPLY` 里 EC 点的一个比特 → 本端 `ProtocolError`；
+   改 KEM 密文的一个比特 → 本端 `HostKeyRejected`。服务端日志里的对端原因码没有自动核对（用例不读 `docker logs`）。
+9. **线上长度**：同一个中继记下 `C_INIT` 是 1249 / 1665 字节、`S_REPLY` 是 1153 / 1665 字节。
+10. 没做：上游 OpenSSH 10.6p1 与 Apache MINA SSHD 2.20 这两个实现的对照。
+
+〔已核对〕顺带发现：`Rekeyed` 事件曾在「在谈」的标记清掉之前就报，订阅者收到事件就再发起一次时被当成空操作吞掉 —— 第 3 条的连续重协商就卡在这里。
+现在标记清掉之后才报（§8.1）。
 
 ---
 
@@ -852,6 +851,7 @@ K_x = HASH(K ‖ H ‖ "X" ‖ session_id)
 〔决策〕**每次重协商做完都报一次**（`SshConnection.Rekeyed` 事件：起因、第几次、耗时、新协商出的算法）：对端发起的、按阈值发起的、显式请求的都报，
 失败的不报（连接随之判死）。耗时从收到对端的 `KEXINIT` 算到新密钥装好 —— 这段时间通道数据暂存、发不出去，「终端偶尔卡一下」要从这里对得上；
 最近一次的也留在 `LastRekeyDuration`。事件在接收循环上同步调用，订阅者不要阻塞；订阅者抛的异常吞掉。
+〔决策〕事件在**可以再发起之后**才报：订阅者收到事件就发起下一次，不会被当成「还在谈」的空操作吞掉。〔历史〕曾经在那之前报，「每次重协商完就再来一次」的订阅者第二次就停了（§3.7.7）。
 
 ### 8.2 发送闸门
 

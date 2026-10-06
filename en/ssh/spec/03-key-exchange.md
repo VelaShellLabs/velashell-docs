@@ -302,7 +302,7 @@ the two other methods in the same RFC, which replace X25519 with a NIST curve, a
 > FIPS 203 Table 3 (ML-KEM sizes), §7.3 (decapsulation input checks), §3.3 (destruction of intermediate values);
 > RFC 5656 §4 and SEC 1 §2.3.3–§2.3.5, §3.2.2 (EC point encoding, fixed-length field element encoding, public key validation).
 >
-> **Implementation status (2026-10-06)**: specification first, **not implemented yet** (F12). The verification target and the checklist are in §3.7.7.
+> **Implementation status (2026-10-07)**: **implemented** (F12, `HybridKeyExchange`); the results against a real server are in §3.7.7.
 
 The shape is exactly that of §3.6 —— **a KEM run in parallel with one elliptic-curve DH** —— except that the classical half is the NIST-curve ECDH of §3.3 instead of X25519.
 Both use only FIPS-approved primitives (ML-KEM, ECDH on P-256 / P-384, SHA-2): servers in FIPS mode, which offer neither X25519 nor sntrup761, reach post-quantum key exchange through them.
@@ -449,31 +449,30 @@ which is why the FIPS preset of 00 §6.6 at first did not include them. On 2026-
 RFC 10042 gives no test vectors. The new rows of the §4.1 table are pinned down by two things: self-consistent vectors from the in-memory server side (`TestKexResponder` extended with these two methods),
 and the checks against a real server in §3.7.7. The server side **must independently** compute `K_CL` and `K` at fixed length and must not call the code under test —— otherwise both sides are wrong in the same way and the test still passes.
 
-#### 3.7.7 〔To be verified〕Checklist against a real server for the implementation session
+#### 3.7.7 〔Verified〕Results against a real server
 
-The target is the `ssh-pq` service in `docker-compose.test.yml` at the repository root (AlmaLinux 10.2, port 2226, account `vela-pq` / `velapass`):
-its list is configured like a server in FIPS mode —— the two nistp hybrids plus plain ECDH, no X25519 and no sntrup761.
-`kex: algorithm: …` in the server log (`docker logs`, `LogLevel DEBUG1`) corroborates from the peer's side.
-Interop tests return early when the target is absent, and MSTest records that as passed: to confirm they really ran, look for `[SKIP]` lines in `TestContext`.
+The target is the `ssh-pq` service in `docker-compose.test.yml` at the repository root (AlmaLinux 10.2's OpenSSH 9.9p1, account `vela-pq` / `velapass`), with three sshd processes in one container:
+local port 2226 is configured like a server in FIPS mode (the two nistp hybrids plus plain ECDH, no X25519 and no sntrup761); 2227 offers only `mlkem1024nistp384-sha384` (plus `ecdh-sha2-nistp384`);
+2228 follows RHEL 10.2's DEFAULT policy (the three ML-KEM hybrids, the X25519 one first, then curve25519 and plain ECDH). When the target is absent the interop cases are recorded as skipped (Inconclusive).
 
-1. **Handshake + command, once for each**: a list containing only that name; connect, authenticate, run a command and get its output; the key exchange in `SshConnection.Algorithms` is that name, and the server log shows the same name.
-2. **Rekeying, several times for each**: rekey explicitly on the same connection, with commands still working after each; `SshConnection.Rekeyed` reports that name as the key exchange.
-3. **The fixed-length `K_CL` is actually exercised**: at least **1200 exchanges** per method (rekeys are cheaper than whole connections), all succeeding.
-   The chance that the first byte of X is 0 is 1/256, so the chance of never hitting it in 1200 exchanges is about 0.9%; together with the in-memory test in item 7, which is guaranteed to hit it, both must pass.
-4. **When the server offers only one of them**: run one sshd offering only `mlkem768nistp256-sha256` (plus plain ECDH) and one offering only `mlkem1024nistp384-sha384` (plus plain ECDH)
-   (a second sshd process on another port in the same image, or another compose service): both `SshAlgorithmSet.Default` and `SshAlgorithmSet.FipsApprovedOnly` agree on that one and do not fall back to ECDH.
-5. **Result of the default list**: against `ssh-pq` (no X25519), `Default` agrees on `mlkem768nistp256-sha256` (it used to be `ecdh-sha2-nistp256`);
-   against a server offering all three ML-KEM hybrids (Alma's DEFAULT policy, i.e. without the `KexAlgorithms` line), `Default` still agrees on `mlkem768x25519-sha256` and `FipsApprovedOnly` on `mlkem768nistp256-sha256`.
-6. **FIPS preset against a server without X25519**: `FipsApprovedOnly` agrees on `mlkem768nistp256-sha256` with `ssh-pq`, with commands and rekeying working; against a server offering only plain ECDH it still agrees on `ecdh-sha2-nistp256`.
-7. **Negative tests (in memory)**: `S_REPLY` one byte too long and one byte too short; the first byte of `Q_S` changed to `0x02` / `0x03`; one bit of `Q_S`'s Y flipped (off the curve); a coordinate equal to p; the all-zero point
-   → `SshKeyExchangeException`, `Reason = ProtocolError`, disconnect code 3. One bit of `ct_pq` flipped → the exchange itself raises no error, signature verification fails → `HostKeyRejected`.
-   Plus one test guaranteed to hit leading zeros: generate keys repeatedly until the first byte of the shared point's X coordinate is 0, then assert that `K_CL` is 32 / 48 bytes with a first byte of 0, and that both sides compute the same `K`.
-8. **Negative tests (real server)**: put a byte-modifying relay between the client and `ssh-pq` (the first exchange is in cleartext):
-   modify one byte of the EC point in `S_REPLY` → `ProtocolError` locally, and the server log shows the peer disconnecting with reason code 3 (`Received disconnect from … 3: …`);
-   modify one byte of `ct_pq` → `HostKeyRejected` locally, and reason code 9 in the server log.
-9. **Packet capture of the wire lengths (optional)**: the first exchange is in cleartext; `C_INIT` should be 1249 / 1665 bytes and `S_REPLY` 1153 / 1665 bytes, with `0x04` as the byte after `ek_pq` / `ct_pq`.
-10. **A second implementation (optional)**: on upstream OpenSSH 10.6p1 (`KexAlgorithms +mlkem768nistp256-sha256`), force `mlkem768nistp256-sha256` for a handshake and rekeying;
-    forcing `mlkem1024nistp384-sha384` should give `NegotiationFailed` with both sides' lists in the exception. Apache MINA SSHD 2.20 also implements both and can serve as another cross-check.
+1. **Handshake + command**: each of the two connects, authenticates and runs a command, and the key exchange in `SshConnection.Algorithms` is that name.
+2. **Rekeying**: each rekeys three times with commands still working after each, and `SshConnection.Rekeyed` reports that name.
+3. **Fixed-length `K_CL`**: each rekeys 1200 times in a row on one connection, all successfully (about a 99% chance of hitting an X coordinate whose first byte is 0);
+   an in-memory case also exchanges repeatedly until it hits a leading zero and then asserts that both ends get the same `K`. With `K_CL` changed to drop leading zeros, both of these fail.
+4. **A server offering only the 1024 one** (2227): `Default` and `FipsApprovedOnly` both negotiate `mlkem1024nistp384-sha384` and do not fall back to ECDH.
+   No server offering only the 768 one was started separately: 2226 offers both, and both lists pick 768.
+5. **The default list**: against 2226 (no X25519) it negotiates `mlkem768nistp256-sha256` (previously `ecdh-sha2-nistp256`); against 2228 (RHEL's DEFAULT) it still negotiates `mlkem768x25519-sha256`.
+6. **The FIPS preset**: against both 2226 and 2228 it negotiates `mlkem768nistp256-sha256`, and commands work. No server offering only plain ECDH was started separately.
+7. **Negative (in memory)**: `S_REPLY` one byte longer or shorter; `Q_S` starting with `0x02` / `0x03`; one bit of Y flipped; X equal to p; the all-zero point → `SshKeyExchangeException` (`ProtocolError`);
+   one bit of the KEM ciphertext flipped → the exchange itself raises no error and the computed `K` differs. Disconnect code: for five methods (the two nistp hybrids, `mlkem768x25519-sha256`, `ecdh-sha2-nistp256`, `curve25519-sha256`)
+   each given a public value one byte short, the server receives reason code 3 every time (§3.7.4).
+8. **Negative (real server)**: a byte-flipping relay between the client and 2226 (the first exchange is in the clear): flipping a bit of the EC point in `S_REPLY` → `ProtocolError` on our side;
+   flipping a bit of the KEM ciphertext → `HostKeyRejected` on our side. The peer reason code in the server log is not checked automatically (the cases do not read `docker logs`).
+9. **Wire lengths**: the same relay records `C_INIT` as 1249 / 1665 bytes and `S_REPLY` as 1153 / 1665 bytes.
+10. Not done: comparison against the two other implementations, upstream OpenSSH 10.6p1 and Apache MINA SSHD 2.20.
+
+〔Verified〕Found along the way: the `Rekeyed` event used to be raised before the "in progress" flag was cleared, so a subscriber that started another rekey on receiving it was swallowed as a no-op —— the back-to-back rekeys of item 3 stalled right there.
+It is now raised after the flag is cleared (§8.1).
 
 ---
 
@@ -853,6 +852,7 @@ and `Disabled` or a threshold above 2³² could switch it off — a cryptographi
 〔Decision〕**Every completed rekey is reported** (the `SshConnection.Rekeyed` event: cause, ordinal, duration, newly negotiated algorithms): peer-initiated, threshold-initiated and explicitly requested ones alike;
 failed ones are not (the connection is declared dead). The duration runs from receiving the peer's `KEXINIT` to the new keys being installed — channel data is held back during that time, which is where "the terminal hiccups now and then" lines up;
 the latest one also stays in `LastRekeyDuration`. The event is raised synchronously on the receive loop, so subscribers must not block; exceptions thrown by subscribers are swallowed.
+〔Decision〕The event is raised **after another rekey can be started**: a subscriber that starts the next one on receiving it is not swallowed as a no-op because a rekey still seems "in progress". 〔History〕It used to be raised before that, and a subscriber that "starts another rekey after every rekey" stopped after the second one (§3.7.7).
 
 ### 8.2 Send gate
 
