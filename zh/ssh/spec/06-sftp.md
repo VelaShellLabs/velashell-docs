@@ -58,6 +58,11 @@ sequenceDiagram
 〔决策〕**报文长度超上限、而那 4 个字节全是可打印文字时，消息里点明多半是启动文件在往 stdout 输出**（`.bashrc` 之类打印了欢迎语），
 并把那几个字节摆出来。曾经只报「长度超上限」，看不出真实原因。
 
+〔决策〕**连接好好的、通道却在 `VERSION` 之前就关了，就是 sftp-server 没起来**（`Subsystem` 指向的程序不存在、没有执行权限、被 `ForceCommand` 顶替……）：
+报 `SftpUnavailableException`（`CommandFailed`），带上服务端报来的退出码（`ServerExitStatus`；被信号杀掉时为空，消息里写信号名）
+与它在 stderr 上说的最后一段（`ServerErrorOutput`，按对端文本清洗、换行收成一行）。SFTP 通道照旧丢弃 stderr，只是留住最后 1 KiB 当线索；
+退出状态常在 EOF 之后才到，最多再等 2 秒。〔历史〕曾经报「SFTP 通道在还有在途请求时就关闭了」，退出码与那句原话都丢了 —— 而那是唯一的线索。
+
 ---
 
 ## 二 SFTP 报文的外层结构

@@ -60,6 +60,11 @@ it used to rely on the caller's token alone and hung forever without one.
 〔Decision〕**When a message length exceeds the limit and those 4 bytes are all printable text, the message says it is most likely a startup file writing to stdout** (a `.bashrc` printing a greeting),
 and shows those bytes. It used to say only "length over the limit", which hid the real cause.
 
+〔Decision〕**When the connection is fine but the channel closes before `VERSION`, sftp-server failed to start** (the program `Subsystem` points to does not exist, is not executable, is replaced by `ForceCommand`…):
+it fails with `SftpUnavailableException` (`CommandFailed`), carrying the exit status the server reported (`ServerExitStatus`; empty when it was killed by a signal, whose name goes into the message)
+and the last part of what it said on stderr (`ServerErrorOutput`, sanitized as peer text with newlines folded into one line). The SFTP channel still discards stderr, it only keeps the last 1 KiB as a clue;
+the exit status often arrives after EOF, so it waits for it at most 2 more seconds. 〔History〕This used to report "the SFTP channel closed while requests were still in flight", losing both the exit status and that line — the only clue there is.
+
 ---
 
 ## 2 Outer structure of SFTP messages
