@@ -1640,9 +1640,10 @@ So the "both sides initiate simultaneously" case, which looks like it needs spec
 finish: the key exchange has to read the peer's messages, and the only reader of this transport
 is the receive loop. Calling it again while negotiation is in progress is a no-op.
 
-Diagnostics: `LastRekeyReason` says which threshold triggered it ("单向报文数达到 1024（阈值 1024）" —
-"messages in one direction reached 1024 (threshold 1024)"), and `RekeyCount` is the number of
-completed rekeys. When troubleshooting you need to be able to answer "why did this connection just change keys".
+Diagnostics: `LastRekey` says how the latest rekey came about (`SshRekeyCause`: the trigger `SshRekeyTrigger` — initiated by the peer, explicitly requested,
+bytes / packets / time reaching a threshold, or the packet hard limit — plus the observed value and the threshold), and `RekeyCount` is the number of
+completed rekeys. When troubleshooting you need to be able to answer "why did this connection just change keys". 〔History〕It used to be `LastRekeyReason`, a free-form
+Chinese sentence ("单向报文数达到 1024（阈值 1024）"): programs could not branch on it, the UI could not translate it, and rekeys initiated by the peer or explicitly requested were not recorded.
 
 ##### An API trap of our own making
 

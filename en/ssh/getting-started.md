@@ -667,7 +667,7 @@ var options = new SshConnectionOptions("root@example.com")
 await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // how many times it has rekeyed
-Console.WriteLine(conn.LastRekeyReason);   // which threshold triggered the last one
+Console.WriteLine(conn.LastRekey);         // how the last one came about: SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
 ```
 
 Three things worth knowing:

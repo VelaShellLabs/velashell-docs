@@ -665,7 +665,7 @@ var options = new SshConnectionOptions("root@example.com")
 await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // 换过几次
-Console.WriteLine(conn.LastRekeyReason);   // 上次是哪条阈值触发的
+Console.WriteLine(conn.LastRekey);         // 上次是怎么来的：SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
 ```
 
 三件事值得知道：

@@ -1598,8 +1598,10 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
 `StartRekeyAsync` **发完 `KEXINIT` 就返回**，不等谈完：密钥交换要读对端的报文，
 而这条传输唯一的读者是接收循环。正在谈的时候再调是空操作。
 
-诊断面：`LastRekeyReason` 说清是哪条阈值触发的（「单向报文数达到 1024（阈值 1024）」），
-`RekeyCount` 是完成次数。排障时要能回答「这条连接刚才为什么换了密钥」。
+诊断面：`LastRekey` 说清最近一次是怎么来的（`SshRekeyCause`：触发方式 `SshRekeyTrigger` —— 对端发起、显式请求、
+字节数 / 报文数 / 时长到了阈值、报文数的硬线 —— 以及到阈值时的观测值与阈值），`RekeyCount` 是完成次数。
+排障时要能回答「这条连接刚才为什么换了密钥」。〔历史〕曾经是 `LastRekeyReason`，一句自由书写的中文
+（「单向报文数达到 1024（阈值 1024）」）：程序判断不了、界面翻译不了，对端发起的与显式请求的也不记。
 
 ##### 一个自己踩出来的 API 陷阱
 
