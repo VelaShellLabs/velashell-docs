@@ -663,16 +663,18 @@ OpenSSH agent 服务没在跑（它的管道不在）而当前用户开着 **Pag
 | :-: | --- | --- | --- |
 | `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥。不足一秒向上取整；〔决策〕0、负数或超过 uint32 的有效期在设值时就抛 `ArgumentOutOfRangeException`（曾经被静默钳成 1 秒，加进去的钥一秒后就没了） |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | 无 | 每次签名都由 agent 向使用者确认（`ssh-add -c`） |
+| `255` | `SSH_AGENT_CONSTRAIN_EXTENSION` | string 扩展名 + 扩展自己的内容 | 本库只发一种：目的地约束 `restrict-destination-v00@openssh.com`（`ssh-add -h`），见 §7.3.2。排在 `1`、`2` 之后 |
 
 **应答**：`6` `SSH_AGENT_SUCCESS` 为成功；`5` `SSH_AGENT_FAILURE` 抛 `SshAgentException`。
 agent 不说拒绝原因，异常消息要点出常见的三种：agent 不支持约束（部分 agent 对 `25` 一律拒绝）、
-agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
+agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。带目的地约束时再加一种（§7.3.2）。
 
 〔决策〕
 
 1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里。
    证书走单独的重载，把证书与私钥分开给（见上）。
 2. **没有约束就发 `17`**，不发约束为空的 `25` —— 有的 agent 认 `17` 却不认 `25`。
+   反过来**有约束一定发 `25`**：agent 不读 `17` 末尾多出来的字节，约束接在 `17` 后面会被静默丢掉（§7.3.2 的 ⚠️）。
 3. **请求缓冲用完即清零**。缓冲按上限一次性预留，不让扩容在堆上留下未清零的旧副本。
 4. **不查重**。同一把钥加两次时怎么处理是 agent 的事（OpenSSH 会更新注释与约束）；
    要不要先 `REQUEST_IDENTITIES` 看一眼由调用方决定。
@@ -697,12 +699,262 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 锁着的 agent（真 OpenSSH 10.3 实测）列身份回空列表、拒绝签名与清空，直到用同一个口令解锁 —— 转发出去的 agent 在这期间也签不了名，
 离开座位时用。
 
+### 7.3.2 目的地约束（`restrict-destination-v00@openssh.com`，`ssh-add -h`）
+
+> 依据：OpenSSH `PROTOCOL.agent` §2；RFC 9987（draft-miller-ssh-agent 的定稿）§5.2.7「Key Constraints」与 §5.2.7.3「Constraint Extensions」；
+> OpenSSH 的「SSH agent restriction」设计说明（openssh.com/agent-restrict.html）；`ssh-add(1)` 的 `-h` / `-H`。
+> `PROTOCOL.agent` 只列了字段，没写各层怎么嵌套。下面的嵌套方式与 agent 的行为都对 OpenSSH 10.3 的 `ssh-add` / `ssh-agent` / `ssh` / `sshd`
+> 做过黑盒核对（抓 agent 套接字上的字节、手工拼请求、真连真转发），标 〔已核对〕。
+
+〔历史〕§7.4 早就写着「agent 靠会话声明执行 `ssh-add -h` 的约束」，本库也照发声明 —— 但那只是**配合**别人加的约束：
+本库自己往 agent 里加钥（§7.3）时给不出这种约束，`SshAgentKeyConstraints` 只有有效期与逐次确认。
+想要「这把钥只许登这几台」，使用者只能退回命令行。
+
+**它管什么**：把一把钥限定为「只许经哪儿、登到哪台主机、以哪个用户」。限定由 agent 执行，不由本库执行 ——
+本库只负责把限定写进加钥请求（§7.3 的约束表），并在认证、转发时做会话声明（§7.4），让 agent 知道每一次签名是为哪条路径上的哪台主机签的。
+
+#### 一跳是什么
+
+一条目的地约束由若干「跳」组成，每一跳放行一段路：
+
+| 一跳的组成 | 含义 |
+| --- | --- |
+| 起点 | 空 = 本机（跑 agent 的那台机器）直接出发；否则是一台**转发主机**：钥经 agent 转发到了它上面，再从它往外用 |
+| 终点 | 这一段到达的主机 |
+| 用户名 | 在终点上以哪个用户登录；空 = 不限 |
+
+主机靠**主机钥**认，不靠名字：会话声明（§7.4）交给 agent 的是服务端的主机公钥，agent 拿它去比。
+
+| 想要 | 需要的跳 |
+| --- | --- |
+| 本机直接登 bastion，用户不限 | （本机 → bastion） |
+| 本机直接以 `deploy` 登 prod | （本机 → prod，`deploy`） |
+| 先登 bastion、把 agent 转发过去，再从 bastion 以 `deploy` 登 db | （本机 → bastion）**和**（bastion → db，`deploy`） |
+
+agent 的判法（〔已核对〕处为 OpenSSH 10.3 实测）：
+
+1. **一次签名要走的路，每一段都得有一跳放行。**本机直接认证时路径只有一段；经转发时，第一段是「本机 → 第一台转发主机」，
+   之后每台转发主机各接一段，最后一段到目的主机。〔已核对〕只放行（本机 → A）与（本机 → B）时，转发到 A 之后再登 B 被拒 —— 少了（A → B）。
+2. **转发主机上看得见这把钥，要有一跳以它为起点。**〔已核对〕只有（本机 → A）时，转发到 A 上 `ssh-add -l` 说 agent 里没有钥；
+   加上（A → B）就列得出来。
+3. **主机的认法**：会话声明里的主机公钥在这一跳主机的「主机钥」里；或者它是一张主机证书，签发它的 CA 在这一跳主机的「CA 公钥」里、
+   且证书的 principals 接受这一跳主机的**名字**。
+   - 只凭主机钥认时，名字不参与比较。〔已核对〕同一把主机钥在 `known_hosts` 里换个名字记、照那个名字加约束，照样放行；经别名连同一台主机也放行。
+   - 凭 CA 认时，名字原样拿去对证书的 principals。〔已核对〕名字 `other` 对 principal `host-c` 被拒；名字本身**不是通配模式**
+     （`host-*` 对 `host-c` 被拒），而且**区分大小写**（`HOST-C` 对 `host-c` 被拒）；证书的 principal 自己带通配时（`*.example.org`），
+     名字写具体主机（`web.example.org`）或者照抄那个 principal 都放行。
+4. **用户名只在这把钥登录的那一段核对**，可以带 `*` / `?` 通配。〔已核对〕`alice` 对登录用户 `probe` 被拒、`pro*` 放行；
+   （本机 → A）限了 `alice`，而钥只是经 A 转发、拿去以 `probe` 登 B 时，不受这个 `alice` 影响。
+5. **没做会话声明的连接**：agent 照样列出这把钥，但拒绝用它签名。〔已核对〕本机直接 `ssh-add -l` 列得出，`ssh-add -T` 拒签。
+   认证时同样拒签（§7.4 的 9.9p2 实测）—— 本库因此必须声明。
+6. **只管用户认证。**设计说明写明：agent 要把被签的数据解析成一次公钥登录，才拿得到会话标识、用户名去核对；别的签名（SSHSIG 之类）做不到，一律不行。
+   〔已核对〕本机 `ssh-keygen -Y sign`（git 的 SSH 提交签名走的就是它）用这把钥被拒。带目的地约束的钥不能拿来签提交，宿主的界面要让使用者知道。
+7. **约束加上就改不了，要换就重新加一次。**〔已核对〕同一把钥再加一次，新约束整个替换旧的（与 §7.3 决策 4「不查重」一致）。
+
+经转发使用时 agent 看到的路径：
+
+```mermaid
+sequenceDiagram
+    participant G as 本机 agent
+    participant C as 本库（本机）
+    participant A as 转发主机 A 上的 ssh
+    participant B as 目的主机 B
+
+    C->>G: 会话声明（A 的主机钥，is_forwarding = true）
+    Note over C,A: agent 转发通道（§7.1）
+    A->>G: 经转发：会话声明（B 的主机钥，is_forwarding = false）
+    A->>G: 经转发：签名请求（登录 B，用户 deploy）
+    Note over G: 路径 本机 → A → B：<br/>要有（本机 → A）与（A → B，deploy 或不限）
+    G-->>A: 签名，或 FAILURE
+    A->>B: USERAUTH_REQUEST
+```
+
+#### 报文
+
+目的地约束是 §7.3 约束表里的一条扩展约束（`255`），跟在有效期、逐次确认之后 —— 〔已核对〕`ssh-add -t … -c -h …` 就是这个次序。
+**所有的跳装在同一条扩展约束里**（〔已核对〕给多个 `-h` 也只发一条）。
+`PROTOCOL.agent` 伪结构里每一层可变长的部分都**各自包成一个 string**（uint32 长度 + 内容），一共四层：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| 约束编号 | byte | `255` `SSH_AGENT_CONSTRAIN_EXTENSION`（RFC 9987 §8.2） |
+| 扩展名 | string | `restrict-destination-v00@openssh.com` |
+| 跳列表 | string | 内容是一条条「跳」首尾相接，每条一个 string；**没有条数字段**，读到这段 string 结束为止 |
+
+一条跳（跳列表里每个 string 的内容）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| 起点 | string | 内容是一段「主机描述」（下表）。从本机出发时是**空的主机描述**：三个空 string、没有钥，共 12 字节 |
+| 终点 | string | 主机描述 |
+| 保留 | string | 空 |
+
+主机描述（起点、终点那两个 string 的内容）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| 用户名 | string | 起点：**必须为空**；终点：`UserName`，不限为空 |
+| 主机名 | string | UTF-8。起点：起点主机的 `Name`（本机出发为空）；终点：终点主机的 `Name` |
+| 保留 | string | 空 |
+| 主机钥 | 0 到多组「string 公钥 blob ‖ boolean 是否 CA」 | 一组接一组，**没有条数字段**，排到这段 string 结束为止。先放 `HostKeys`（false），再放 `CertificateAuthorities`（true），各按表里的顺序。boolean 只写 `0` / `1` |
+
+例：（本机 → host-c，一把 ed25519 主机钥，用户不限）。〔已核对〕与 `ssh-add -h host-c` 发出的字节一致：
+起点 12 字节；终点 74 字节（4 + 0、4 + 6、4 + 0，再加 4 + 51 的公钥 blob 与 1 字节 false）；
+跳 98 字节（4 + 12、4 + 74、4 + 0）；跳列表 102 字节（4 + 98）；整条约束 147 字节（1 + 4 + 36 + 4 + 102）。
+
+〔已核对〕agent 对内容的检查（手工拼的请求）：
+
+| 请求 | agent 的应答 |
+| --- | --- |
+| 起点用户名非空 | FAILURE |
+| 终点主机名为空；终点没有钥 | FAILURE |
+| 起点有名字没有钥，或者有钥没有名字 | FAILURE |
+| 任何一个保留字段非空 | FAILURE |
+| 跳列表没包成 string（各条直接跟在扩展名后面） | FAILURE |
+| 扩展名不认识 | FAILURE（`5`，不是 `28`） |
+| 跳列表为空；「是否 CA」写成 `2`；主机钥是一张证书；主机名里有 `,` | 都回 SUCCESS —— 本库在构造 / 设值时就把这几种挡掉（见下），不会发出去 |
+
+⚠️ **带约束必须发 `25`。**〔已核对〕把同样的约束字节接在 `17`（`SSH_AGENTC_ADD_IDENTITY`）后面，agent 回 SUCCESS，
+加进去的却是**不带任何约束**的钥 —— 它不读 `17` 末尾多出来的字节。§7.3 决策 2「没有约束就发 `17`」反过来就是「有约束一定发 `25`」；
+对目的地约束这是安全问题：使用者以为钥只能登 bastion，其实哪儿都能登。单元测试要把它钉住。
+
+#### 公开 API
+
+〔决策〕在 `SshAgentKeyConstraints` 上加一个属性、新增两个小 record；加钥的三个 `AddIdentityAsync` 重载不变。
+
+| 成员 | 形态 | 说明 |
+| --- | --- | --- |
+| `SshAgentKeyConstraints.AllowedHops` | `IReadOnlyList<SshAgentHop>?`，`init` | `null`（默认）= 不加目的地约束；给了就是「只许走这些跳」 |
+| `SshAgentHop` | `sealed record`，`Keys/SshAgentHop.cs` | 构造参数依次为终点、用户名（默认 `null`）、起点（默认 `null`）；属性 `Destination`、`UserName`、`Via`，只读 |
+| `SshAgentHopHost` | `sealed record`，`Keys/SshAgentHopHost.cs` | 构造参数依次为名字、主机钥表、CA 公钥表（默认 `null`，视同空表）；属性 `Name`、`HostKeys`、`CertificateAuthorities`（都是 `IReadOnlyList<SshPublicKey>`），只读 |
+| `SshAgentHopHost.FromKnownHosts` | 静态方法，返回 `SshAgentHopHost?` | 照 `known_hosts` 拼出一台主机（下一小节） |
+
+- 起点叫 `Via`（`null` 即本机），不叫「来源」：设计说明的提醒是对的 —— 一跳的意思是「**经**这台主机去用」，而不是「从这台主机来」。
+- 两个新 record 的属性只读、不给 `init`：校验全在构造函数里一次做完，`with` 改不出不合法的组合（`src/VelaShell.Ssh/AGENTS.md` §4.3「非法值在构造时就抛」）。
+- 表在构造 / 设值时抄一份只读的存下（与 `AgentForwardOptions.AllowedKeys` 一样）；`SshAgentHopHost`、`SshAgentHop`、`SshAgentKeyConstraints`
+  的相等都按**内容**比、顺序算在内（与 `SshAlgorithmSet` 一样）。
+- `SshAgentKeyConstraints` 判断「有没有约束」时把 `AllowedHops` 算进去：只给了 `AllowedHops` 也发 `25`。
+- 约束编号 `255` 与扩展名作为具名常量放进 `SshAgentMessage`（与 `SessionBindExtension` 同处）。
+
+〔决策〕校验在构造 / 设值时做，违反就抛：
+
+| 哪里 | 规则 | 抛 |
+| --- | --- | --- |
+| `SshAgentHopHost` 的名字 | 非 `null` | `ArgumentNullException` |
+| 同上 | 非空；UTF-8 不超过 255 字节；不含空白、控制字符与 `,` | `ArgumentException` |
+| 主机钥表 | 非 `null`（CA 公钥表可以是 `null`） | `ArgumentNullException` |
+| 两张表的元素 | 非 `null`；**不是证书**（主机钥给证书里那把钥，CA 给 CA 公钥本身） | `ArgumentException` |
+| 两张表合计 | 各自按公钥 blob 去重（保留第一次出现的位置）之后，合计 1–32 把 | `ArgumentException` |
+| `SshAgentHop` 的终点 | 非 `null` | `ArgumentNullException` |
+| `SshAgentHop` 的用户名 | `null` = 不限；给了就非空、UTF-8 不超过 255 字节、不含空白、控制字符、`,` 与 `!` | `ArgumentException` |
+| `AllowedHops` | `null`，或者 1–64 条、元素非 `null`；条目原样保留，不去重 | `ArgumentException` |
+| 整条加钥报文 | 不超过 agent 报文上限（256 KiB，§7.1） | 发送前抛 `SshAgentException`（`LimitExceeded`），一个字节都不发 |
+
+为什么这样定：
+
+- **空表不许当「不限」。**`AllowedHops = []` 要么是「哪儿也不许去」—— 这把钥加进去就是废的 —— 要么是使用者把勾全去掉了；
+  把它当成「不限」，正是 `AgentForwardOptions.AllowedKeys` 曾经踩过的坑（§7.2）。不限就给 `null`。（agent 自己倒是收下空的跳列表，〔已核对〕。）
+- **主机名里不许有 `,`、空白与控制字符。**它们出现在主机名里只可能是写错了（证书的 principals 由 `,` 分隔，自身不含 `,`），
+  agent 却照单全收（〔已核对〕），这把钥就悄悄成了哪儿也用不了。`*` / `?` 照收：principal 本身可以是通配模式，名字照抄它是放行的 ——
+  但名字**不会**被当成模式去展开（上面第 3 条）。
+- **用户名不许有 `,` 与 `!`。**`*` / `?` 的通配核对过；模式列表与取反没有核对过，不让调用方依赖说不清的语义。
+- **不收证书。**agent 会把证书 blob 当主机钥收下（〔已核对〕），可主机证书每次重签 blob 都会变，钉住一张证书等于过一阵子这把钥就用不了。
+  该给的是证书里那把钥，或者签它的 CA（`known_hosts` 里的 `@cert-authority`，03 §5.5）。
+- 上限（64 跳、每台主机 32 把钥、名字 255 字节）取的是「正常用法远远碰不到、写错了也不会拖出一个巨型请求」的量级；真正的硬上限是整条报文的 256 KiB。
+
+#### 从 `known_hosts` 拼主机（`SshAgentHopHost.FromKnownHosts`）
+
+〔决策〕**提供。**`ssh-add -h` 就是这么做的：使用者给主机名，主机钥从 `known_hosts` 里找。
+手工收集主机钥容易漏掉一种类型（服务端这次出示的是 ECDSA，表里只有 Ed25519），漏了的后果是这把钥在那台主机上拒签。
+
+参数：已解析的条目（`KnownHostsFile.LoadAsync` / `Parse` 的结果）、主机名、端口（默认 22）。哪些行算数：
+
+| `known_hosts` 里的行 | 怎么算 |
+| --- | --- |
+| 普通行 | 主机对得上就把钥放进 `HostKeys`。「对得上」与 `KnownHostsFile.Lookup` **完全同一套规则**（03 §5.4）：明文、散列行（`HashKnownHosts`）、通配与取反、不分大小写；端口不是 22 时只认 `[host]:port` 的写法 |
+| `@cert-authority` | 主机对得上就把 CA 公钥放进 `CertificateAuthorities` |
+| `@revoked` | 主机对得上就把它的钥从两张表里**剔掉**，不论它在文件里排在前面还是后面 |
+| 本库解不了的钥；普通行里写的是证书 | 跳过 |
+| 认不出的 `@` 标记 | 整行跳过（`KnownHostsFile.Parse` 本来就不收） |
+
+- 两张表各自按 blob 去重，保留文件里第一次出现的顺序。
+- **名字** = 传入的主机名转小写（invariant），**不带端口**。名字只用来对证书的 principals，principals 里没有端口；端口只决定认哪些行。
+  转小写是因为 agent 比 principal 区分大小写（上面第 3 条），而 principals 照惯例是小写 —— 与 `known_hosts` 自己的规矩一致（03 §5.4）。
+- 两张表都是空的：返回 `null`，由调用方告诉使用者「`known_hosts` 里没有这台主机，先连一次、信任它」。
+  〔已核对〕`ssh-add -h` 此时报错退出（`No host keys found for destination`），什么都不发给 agent。
+- 主机名不合上面的规则、去重后合计超过 32 把：抛与构造函数相同的 `ArgumentException`；端口不在 1–65535：`ArgumentOutOfRangeException`。
+- 只看传进来的条目。`ssh-add` 不给 `-H` 时查四份文件（`~/.ssh/known_hosts`、`~/.ssh/known_hosts2`、`/etc/ssh/ssh_known_hosts`、`/etc/ssh/ssh_known_hosts2`）；
+  查哪几份由调用方决定，把几份的条目接在一起传进来即可。
+
+〔决策〕**吊销的钥剔掉 —— 这一点与 `ssh-add` 不同。**〔已核对〕OpenSSH 10.3 的 `ssh-add -h` 会把一把同时被 `@revoked` 的主机钥照样发给 agent。
+本库的 `KnownHostsFile.Lookup` 遇到吊销的钥一律判 `Revoked`、不放行（03 §5.4）；放行名单里留着它，等于在 agent 那边替一把我们自己都不认的钥开门。
+
+#### 应答与错误
+
+| 情形 | 结果 |
+| --- | --- |
+| `6` SUCCESS | 加上了 |
+| `5` FAILURE，或者 `28` EXTENSION_FAILURE | `SshAgentException`（`AgentRefused`）。带 `AllowedHops` 时，消息在 §7.3 的三种常见原因之外再点出「agent 不支持目的地约束（`restrict-destination-v00@openssh.com`，OpenSSH 8.9 起才有；非 OpenSSH 的 agent 多半不支持）」 |
+| 报文超过 256 KiB | 发送前抛 `SshAgentException`（`LimitExceeded`），消息说「密钥或目的地约束太大」 |
+
+〔决策〕
+
+1. **被拒就是被拒，绝不退回去加一把不带约束的钥。**RFC 9987 §5.2.7 要求 agent 遇到不认识的约束整条拒绝，图的就是「失败也是安全的」；
+   客户端自作主张去掉约束重试，就把这层保险拆了。
+2. **不先探测 agent 支不支持。**〔已核对〕OpenSSH 10.3 对 `query` 扩展（`ssh-add -Q`）只答 `session-bind@openssh.com`，不列约束扩展 —— 问了也白问。直接发，被拒再说。
+3. **`28` 也按拒绝处理。**RFC 9987 规定加钥只回 SUCCESS / FAILURE（〔已核对〕OpenSSH 对各种不合格的约束都回 `5`）；
+   别的 agent 若回扩展失败，那也是拒绝，不是协议错误。
+4. **不新增 `SshFailureReason`。**agent 不说拒绝的原因，`AgentRefused` 就是实话；调用方知道自己给了 `AllowedHops`，界面可以据此加一句提示，
+   不必解析消息。宿主的 `SshInterop.Localize` 不用动。
+5. **签名被拒的提示多一条。**带目的地约束的钥用在不放行的主机、用户或路径上时 agent 拒签，认证器把它记为这条凭据的 `SkippedNoMaterial`、
+   接着试下一条（04 §3.4）。`SignAsync` 拒签的消息在「钥已不在 agent 里」「逐次确认被拒」之外，加上「这把钥带目的地约束（`ssh-add -h`），
+   不许用在这台主机、这个用户或这条转发路径上」。
+
+#### 与会话声明（§7.4）、agent 转发（§七）的配合
+
+- **认证**：本库在第一次让 agent 里的钥签名之前声明（`is_forwarding = false`，§7.4）—— 这正是 agent 判断「本机 → 目的主机」那一跳要的东西。
+  本库先列钥、后声明：没声明的连接上 agent 照样列出受约束的钥（上面第 5 条），所以对不放行的主机它也会被试一次 ——
+  服务端认这把公钥、agent 拒签、记一笔，接着试下一条凭据。OpenSSH 的 `ssh` 一连上 agent 就先声明（设计说明），
+  〔已核对〕对不放行的主机，它的输出里没有这把钥的拒签记录（用户名不对时有）—— 声明过的连接上 agent 不把这把钥列给它。差别只是多一次探测。
+- **转发**：每条 agent 通道各连一条本机 agent、声明 `is_forwarding = true`，远端那一跳的声明照转（§7.4）—— agent 据此按上面第 1、2 条判断，转发这一路不用改。
+  `AgentForwardOptions.AllowedKeys` 照旧在本库这一层再筛一遍：一个是使用者对这一次转发的选择，一个是钥自己带着、对谁都生效的限定，两者叠加。
+
+〔决策〕**一条 agent 连接只替一个会话做认证。**agent 不接受在已经为认证声明过的连接上再声明另一个会话（`PROTOCOL.agent` §1；〔已核对〕见下面第 6 条），
+而同一个 `SshAgentClient` 可能先后替几条 SSH 连接认证 —— 按 `ssh_config` 的 `ProxyJump` 连时，库把同一份 agent 凭据交给跳板和目标的每一跳。
+这时后一跳的声明被拒，这条 agent 连接上记着的仍是前一跳，受目的地约束的钥在后一跳拒签，哪怕约束放行它。所以：
+
+- 认证要为一个新会话声明，而这条连接上一次**被接受的**认证声明属于另一个会话时，由 `ConnectAsync` 连上的客户端先在同一个端点重开一条 agent 连接，
+  在新连接上声明，旧连接关掉；之后的列钥、签名都走新连接。上一次声明没被接受（agent 不支持声明）时不重开 —— 重开了也一样。
+- 关掉旧连接不碍事：前一跳的认证在后一跳开始之前就结束了（后一跳是经前一跳拨出去的）。
+- `FromStream` 交来的流重开不了，照旧在原连接上声明、得到 `false`；用这种客户端时，受约束的钥要每条 SSH 连接各用一个客户端。
+- 同一个客户端被几条连接**同时**拿来认证时，受约束的钥不保证可用（会话之间会互相换掉连接）。
+
+#### 〔已核对〕对真 agent 的互操作用例
+
+对 Docker 里 OpenSSH 10.3 的 `ssh-agent`（agent 起在服务端上、经隧道接过来），各条的结果：
+
+1. **字节**：单元测试按「报文」一节的例子钉住四层嵌套与 12 / 74 / 98 / 102 / 147，带用户名、带起点、一台主机两把钥、带 CA 各一例；
+   与 `ssh-add -h` 逐字节的比对在写这一节时做过（见「报文」）。真 agent 收下这条约束、并照它执行（下面几条）。
+2. 加上之后，在没声明过的连接上 `ssh-add -l` 列得出这把钥。
+3. **认证**：放行的主机连得上，用户名带通配也放行；主机钥对不上、用户名对不上时 agent 拒签，这条凭据跳过、接着试下一条。
+4. **CA**：服务端出示主机证书、`known_hosts` 里只有 `@cert-authority` 行时，`FromKnownHosts` 拼出的跳连得上；名字不在证书的 principals 里时 agent 拒签。
+5. **转发**：钥带（本机 → A）与（A → B）时，A 上 `ssh-add -l` 列得出、从 A 用 `ssh` 登 B 成功；只剩（本机 → A）时，A 上列不出、登 B 被拒。
+6. **跳板**：同一个由 `ConnectAsync` 连上的客户端先后为跳板与目标认证，两跳都签。交来的流（重开不了）在目标那一跳被拒签 ——
+   agent 确实拒绝在同一条连接上第二次做认证声明。
+7. **不带约束的钥不受连累**：交来的流为跳板声明过之后，不带约束的钥照常为目标签名。
+8. **报文号**：带 `AllowedHops` 一定发 `25`，单元测试钉住；把这条退回去，真 agent 那条用例里本该被拒的也放行了。
+9. **拒绝**：假 agent 对加钥回 `5` / `28`，两种都抛 `AgentRefused`、消息带目的地约束的提示，之后没有第二次加钥请求。
+10. 没有核对：Windows 的 OpenSSH agent 与 Pageant 收不收这个约束 —— 那要往使用者真在用的 agent 里加钥。
+
+〔已核对〕写反向用例时的一个坑：让认证整个失败的话，OpenSSH 9.8 起的 `PerSourcePenalties` 会把这个来源地址拒掉一阵，
+连累后面从同一地址连的用例。用例在 agent 凭据之后再配一个口令兜底，看最终用的是哪种认证方法 —— agent 拒签只是这条凭据跳过，服务端不记失败。
+
 ### 7.4 会话声明（`session-bind@openssh.com`）
 
 > 依据：OpenSSH `PROTOCOL.agent` §1；`SSH_AGENTC_EXTENSION` 见 draft-miller-ssh-agent；会话标识见 RFC 4253 §7.2；
 > 约束的语义见 OpenSSH 的「SSH agent restriction」设计说明（openssh.com/agent-restrict.html）。
 
-`ssh-add -h` 给钥加**目的地约束**（只许用于某几台主机、只许经某条路径转发）。agent 要执行它，就得知道
+`ssh-add -h` 给钥加**目的地约束**（只许用于某几台主机、只许经某条路径转发；本库加钥时也能加，§7.3.2）。agent 要执行它，就得知道
 「这条 agent 连接是为哪个 SSH 会话服务的」—— 这就是会话声明。
 
 **请求报文**：
@@ -725,7 +977,7 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 
 | 用途 | 时机 | `is_forwarding` |
 | --- | --- | :-: |
-| 认证（`publickey`，钥在 agent 里） | 第一次让这条 agent 连接上的钥签名之前；同一条连接、同一个会话只发一次 | false |
+| 认证（`publickey`，钥在 agent 里） | 第一次让这条 agent 连接上的钥签名之前；同一条连接、同一个会话只发一次。一条连接只替一个会话做认证声明，换了会话就重开连接（§7.3.2） | false |
 | 转发 | 每条 `auth-agent@openssh.com` 通道连上本机 agent 之后、确认通道之前（§7.1） | true |
 
 〔决策〕**远端那一跳自己的会话声明照转**，而且只放行这一个扩展。转发链上的每一跳都把自己的声明接在前一跳后面，
@@ -995,6 +1247,8 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | 请求 agent 转发时本机 agent 连不上 | 不发 `auth-agent-req`；按 `FailureMode` 抛出或照常启动（§7.1、§7.5.8），原因码沿用 agent 那边的（`AgentNotRunning` / `AgentUnavailable`） |
 | `auth-agent@openssh.com` 通道到来时本机 agent 连不上 | 回 `CHANNEL_OPEN_FAILURE(2)`，描述只写「本机 ssh-agent 不可用」；会话与转发器不受影响（§7.1） |
 | 本机 agent 不支持会话声明 / 因为它断开 | 照常转发；断开时重连一次、不再声明（§7.4） |
+| 加带目的地约束的钥被 agent 拒绝（`5` / `28`） | 抛 `SshAgentException`（`AgentRefused`），消息点出「agent 可能不支持目的地约束」；**绝不**改成不带约束再加一次（§7.3.2） |
+| 带目的地约束的钥用在不放行的主机、用户或路径上 | agent 拒签；认证记为这条凭据的 `SkippedNoMaterial`、接着试下一条，转发的远端拿到 `FAILURE`（§7.3.2） |
 | 远端发来 `session-bind@openssh.com` 以外的 agent 扩展 | 回 `FAILURE`，不到本机 agent（§7.4） |
 
 〔决策〕**单条连接的失败绝不影响转发器本身。**
