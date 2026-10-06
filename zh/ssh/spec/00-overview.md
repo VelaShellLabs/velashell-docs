@@ -206,6 +206,13 @@ CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）用 `Wit
 使用者让用户自己写清单时据此当场说清「没实现」还是「不认识」。它与上面的校验、各个工厂表同一个口径，用例逐个核对。
 〔历史〕曾经没有这份目录，宿主用 `Default.WithLegacyInterop()` 推算实现了哪些，再手工维护一份「认得但没实现」的名单。
 
+〔决策〕**只含 FIPS 认可算法的清单**：`SshAlgorithmSet.FipsApprovedOnly`，与 RHEL 的 FIPS 加密策略对 SSH 放行的一致 ——
+密钥交换只用 NIST 曲线的 ECDH 与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
+MAC 只用 HMAC-SHA2；不含 X25519、Ed25519、ChaCha20-Poly1305 与后量子混合。**它只限定了算法，不等于本库通过了 FIPS 140 验证**：
+AES、SHA-2、ECDH、ECDSA、RSA 走 BCL（Windows 上是经过验证的 CNG，别的平台取决于系统的 OpenSSL），DH 标准群的模幂走 BouncyCastle。
+面向 FIPS 的后量子混合（`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`）暂不实现：还没有能对照验证线上格式的服务端，
+写了也只能自己证明自己（03 §3.6）。
+
 ## 七 算法优先级的排法
 
 〔决策〕**客户端列表的顺序就是我们的偏好顺序**，取「客户端列表中第一个双方都支持的」

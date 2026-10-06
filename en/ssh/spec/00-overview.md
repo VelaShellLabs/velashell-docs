@@ -209,6 +209,13 @@ in preference order: the default list first, legacy algorithms after) and which 
 Consumers that let users write their own lists use it to say on the spot "not implemented" versus "not recognized". It shares one source of truth with the validation above and with the factory tables, checked name by name in the tests.
 〔History〕Without this catalog the host inferred what was implemented from `Default.WithLegacyInterop()` and maintained its own hand-written "known but unimplemented" list.
 
+〔Decision〕**A list of FIPS-approved algorithms only**: `SshAlgorithmSet.FipsApprovedOnly`, matching what RHEL's FIPS crypto policy allows for SSH —
+key exchange only ECDH on the NIST curves and the standard DH groups, host keys only ECDSA and SHA-2 RSA (with their certificates), encryption only AES-GCM / AES-CTR,
+MACs only HMAC-SHA2; no X25519, Ed25519, ChaCha20-Poly1305 or post-quantum hybrids. **It only restricts the algorithms; it does not make this library FIPS 140 validated**:
+AES, SHA-2, ECDH, ECDSA and RSA go through the BCL (the validated CNG on Windows; elsewhere it depends on the system's OpenSSL), and the modular exponentiation of the DH groups goes through BouncyCastle.
+The FIPS-oriented post-quantum hybrids (`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`) are not implemented for now: there is no server to check the wire format against yet,
+so an implementation could only vouch for itself (03 §3.6).
+
 ## 7 How algorithm priority is ordered
 
 〔Decision〕**The order of the client list is our order of preference**; the choice is "the first entry in the client list that both sides support"
