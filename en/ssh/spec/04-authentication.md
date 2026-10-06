@@ -449,6 +449,16 @@ truncation (a copy and paste lost the last line, with the base64 breaking exactl
 The original exception is kept as the inner one. Likewise, **a malformed reply from the agent** (a truncated identity list or signature) is an `SshAgentException` (`ProtocolError`).
 Internal exceptions from the parsing layer, or BCL ones such as `FormatException` / `DivideByZeroException`, used to leak out as they were — callers only catch these two exception types, so they went all the way to the UI.
 
+〔Decision〕**Writing a private key file: `SshPrivateKeyFile.Format(key, passphrase, comment, kdfRounds)`, which writes `openssh-key-v1` only**
+(the `ssh-keygen` default today, usable as is anywhere else). With a passphrase it uses the `bcrypt` KDF (a 16-byte random salt, 16 rounds by default, as `ssh-keygen` does) + `aes256-ctr`;
+without one both the cipher and the KDF are `none`. The private section starts with two identical random check words, and the field order is the same one the reading side uses (Ed25519 is public key ‖ (seed ‖ public key);
+RSA is n, e, d, iqmp, p, q; ECDSA is curve name, public point, d), followed by the comment and padded to the block size (16 when encrypting, 8 otherwise) with 1, 2, 3…;
+the body is wrapped at 70 columns with `\n` line breaks. The plaintext private section, the derived key material and the exported RSA / ECDSA private parameters are all zeroed after use. File permissions (0600 on Unix) are the caller's business.
+New keys come from `InMemorySshSigner.GenerateEd25519()` / `GenerateEcdsa(256 | 384 | 521)` / `GenerateRsa(bits)` (2048–16384, a multiple of 8, 3072 by default).
+Only a real tool decides whether it is right: the tests have a real `ssh-keygen -y` read the files this library writes (with and without a passphrase), and the exported public key must match this library's byte for byte —
+with the padding starting at the wrong value, this library still reads its own output back.
+〔History〕The library used to read only, not write; the host had its own hand-written container that could only write **unencrypted** private keys, and did not zero the private parameters it exported.
+
 ---
 
 ## 5 `password` (RFC 4252 §8)

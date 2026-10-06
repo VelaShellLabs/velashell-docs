@@ -237,6 +237,22 @@ if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPubli
 
 > 读出的是文件里明文的那一份，没有与私钥核对；加密的 PKCS#8 不带明文公钥，返回 `false`。见 [spec 04 §4.6](spec/04-authentication.md)。
 
+### 生成密钥、写成文件
+
+```csharp
+using InMemorySshSigner key = InMemorySshSigner.GenerateEd25519();   // 或 GenerateEcdsa(256)、GenerateRsa(3072)
+
+File.WriteAllText("id_ed25519", SshPrivateKeyFile.Format(key, passphrase: "口令", comment: "me@laptop"));
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode("id_ed25519", UnixFileMode.UserRead | UnixFileMode.UserWrite);   // OpenSSH 不用别人读得到的私钥
+}
+File.WriteAllText("id_ed25519.pub", key.PublicKey.ToOpenSshFormat("me@laptop") + "\n");
+```
+
+> 写的是 `openssh-key-v1`（`ssh-keygen` 的默认格式）：有口令时 `bcrypt` + `aes256-ctr`、默认 16 轮，不传口令就不加密。
+> 见 [spec 04 §4.6](spec/04-authentication.md)。
+
 ### 把私钥加进 agent（`ssh-add`）
 
 加密私钥解开一次、交给 agent 保管，之后认证与转发都经 agent 签名：

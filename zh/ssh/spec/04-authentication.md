@@ -438,6 +438,16 @@ secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交
 原来的异常挂在内层。同理，**agent 回的应答格式不对**（身份列表、签名被截断）是 `SshAgentException`（`ProtocolError`）。
 曾经让解析层 internal 的异常或 BCL 的 `FormatException` / `DivideByZeroException` 原样漏出去 —— 调用方只接这两种异常，那就一路漏到了界面上。
 
+〔决策〕**写私钥文件：`SshPrivateKeyFile.Format(key, passphrase, comment, kdfRounds)`，只写 `openssh-key-v1` 一种**
+（今天 `ssh-keygen` 的默认，拷到别处照样能用）。有口令时 `bcrypt` KDF（16 字节随机盐，默认 16 轮，与 `ssh-keygen` 一致）+ `aes256-ctr`；
+没有口令时 cipher 与 KDF 都是 `none`。私钥区以两个相同的随机校验字开头，字段顺序与读取一侧同一份（Ed25519 是公钥 ‖ (种子 ‖ 公钥)；
+RSA 是 n、e、d、iqmp、p、q；ECDSA 是曲线名、公钥点、d），然后是注释，末尾按分组（加密时 16、否则 8）填充 1、2、3……；
+正文按 70 列折行、`\n` 换行。明文私钥区、派生出的密钥材料、导出的 RSA / ECDSA 私钥参数都用完清零。文件权限（Unix 上 0600）是调用方的事。
+新钥由 `InMemorySshSigner.GenerateEd25519()` / `GenerateEcdsa(256 | 384 | 521)` / `GenerateRsa(bits)`（2048–16384、8 的倍数，默认 3072）生成。
+对不对只认真工具：用例拿真 `ssh-keygen -y` 读本库写的文件（带口令与不带），导出的公钥要与本库的逐字节一致 ——
+填充起点写错时本库自己读自己照样读得回来。
+〔历史〕曾经库只能读、不能写，宿主手写了一份只能写**未加密**私钥的容器，中间导出的私钥参数也不清零。
+
 ---
 
 ## 五 `password`（RFC 4252 §8）

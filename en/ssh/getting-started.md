@@ -239,6 +239,22 @@ if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPubli
 
 > This is the plaintext copy from the file, not checked against the private key; encrypted PKCS#8 does not carry its public key in the clear and returns `false`. See [spec 04 §4.6](spec/04-authentication.md).
 
+### Generating a key and writing it to a file
+
+```csharp
+using InMemorySshSigner key = InMemorySshSigner.GenerateEd25519();   // or GenerateEcdsa(256), GenerateRsa(3072)
+
+File.WriteAllText("id_ed25519", SshPrivateKeyFile.Format(key, passphrase: "passphrase", comment: "me@laptop"));
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode("id_ed25519", UnixFileMode.UserRead | UnixFileMode.UserWrite);   // OpenSSH refuses keys others can read
+}
+File.WriteAllText("id_ed25519.pub", key.PublicKey.ToOpenSshFormat("me@laptop") + "\n");
+```
+
+> This writes `openssh-key-v1` (the `ssh-keygen` default format): with a passphrase, `bcrypt` + `aes256-ctr` with 16 rounds by default; without one, the file is not encrypted.
+> See [spec 04 §4.6](spec/04-authentication.md).
+
 ### Adding a private key to the agent (`ssh-add`)
 
 Decrypt an encrypted private key once and hand it to the agent; authentication and forwarding are then signed through the agent:
