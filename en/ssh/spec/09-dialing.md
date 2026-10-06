@@ -63,7 +63,7 @@ Reason code conventions:
 
 | Situation | `Reason` |
 | --- | --- |
-| The proxy itself cannot be reached | Same as a direct connection (`DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`) |
+| The proxy itself cannot be reached (when dialing the proxy directly: cannot resolve, refused, timed out, unreachable) | `ProxyUnreachable` (retryable); which of them is in `InnerException` (the original `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`) and in `Hops`. When the proxy is reached through another proxy or a jump host (nesting), the reason that hop reported is kept. 〔History〕This used to be the same as a direct connection, so callers could not tell whether the target or the proxy was down, and the host had to rewrite every proxy failure into `ProxyRefused` |
 | The proxy refuses to forward to the target | `ProxyRefused` |
 | The proxy requires authentication and we have no credentials | `ProxyAuthRequired` |
 | The proxy rejects the credentials we configured | `ProxyAuthFailed` |

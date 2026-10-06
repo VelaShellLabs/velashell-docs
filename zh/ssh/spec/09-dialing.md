@@ -61,7 +61,7 @@
 
 | 情形 | `Reason` |
 | --- | --- |
-| 代理本身连不上 | 与直连相同（`DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`） |
+| 代理本身连不上（直连代理时解析不了、被拒、超时、不可达） | `ProxyUnreachable`（可重试）；具体是哪一种在 `InnerException`（原来的 `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`）与 `Hops` 里。经别的代理或跳板到达代理时（嵌套），沿用那一跳自己报的原因。〔历史〕曾经与直连相同，调用方分不出没开的是目标还是代理，宿主只好把代理的失败一律改写成 `ProxyRefused` |
 | 代理拒绝转发到目标 | `ProxyRefused` |
 | 代理要求认证而我们没有凭据 | `ProxyAuthRequired` |
 | 代理拒绝了我们配置的凭据 | `ProxyAuthFailed` |

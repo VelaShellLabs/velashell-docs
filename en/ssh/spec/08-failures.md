@@ -180,6 +180,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `TcpRefused` | Connection refused | ✔ | Check the port / whether the service is running |
 | `TcpTimeout` | Connection timed out | ✔ | Check firewall/network |
 | `TcpUnreachable` | Network unreachable | ✔ | |
+| `ProxyUnreachable` | The proxy itself cannot be reached (the specific cause is in `InnerException` and `Hops`, `09-dialing.md` §2.2) | ✔ | Check the proxy address and port and whether it is running |
 | `ProxyRefused` | Proxy refused to forward | ✔ | **See §5.2** |
 | `ProxyAuthRequired` | Proxy requires authentication, and no credentials are configured | ✘ | Configure proxy credentials |
 | `ProxyAuthFailed` | Proxy rejected the configured credentials | ✘ | Correct the proxy username or password |

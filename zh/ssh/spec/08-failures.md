@@ -178,6 +178,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `TcpRefused` | 连接被拒 | ✔ | 检查端口/服务是否在跑 |
 | `TcpTimeout` | 连接超时 | ✔ | 检查防火墙/网络 |
 | `TcpUnreachable` | 网络不可达 | ✔ | |
+| `ProxyUnreachable` | 连不上代理本身（具体原因在 `InnerException` 与 `Hops`，`09-dialing.md` §2.2） | ✔ | 检查代理地址、端口与它是否在跑 |
 | `ProxyRefused` | 代理拒绝转发 | ✔ | **见 §5.2** |
 | `ProxyAuthRequired` | 代理要求认证，而没配凭据 | ✘ | 配置代理凭据 |
 | `ProxyAuthFailed` | 代理拒绝了配置的凭据 | ✘ | 改对代理的用户名或口令 |
