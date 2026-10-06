@@ -628,6 +628,11 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 | `copy-data` | Copy **within the server**, without going over the network | 〔Status〕Queryable (`HasCopyData`), **not wrapped yet**; the host's remote copy downloads then uploads |
 | `home-directory` | Get a given user's home directory: used by `ExpandPathAsync("~user…")` when `expand-path` is missing | `~user` throws `Unsupported`; `~` and `~/…` do not need it (they use `REALPATH "."`, §4.6) |
 | `expand-path@openssh.com` | Expand `~`: `ExpandPathAsync(path)` hands `~`, `~/…`, `~user` and `~user/…` to the server whole (canonicalized along the way, checked against a real OpenSSH's `$HOME`); a path not starting with `~` behaves like `GetRealPathAsync`. `REALPATH` itself does not expand `~` | `~` and `~/…` are joined onto the login working directory and then `REALPATH`ed; `~user` falls back to `home-directory` |
+| `lsetstat@openssh.com` | Set attributes **without following** a symbolic link (`touch -h` / `chown -h`): `SetLinkAttributesAsync`, for keeping a link's own timestamps when syncing directories | Throws `Unsupported` (see `HasLSetStat`) and **does not fall back** to the link-following `SETSTAT` — that would change the target |
+
+〔Decision〕**Setting times by handle** (v3's `FSETSTAT`, not an extension): `SftpFileStream.SetTimesAsync(accessTime, modifyTime)` sets them on the same handle before closing,
+one round trip; `SetLastWriteTimeAsync(path, …)` has to `STAT` the access time back first and then `SETSTAT` (the two share one flag, and giving only one wipes the other back to 1970), two round trips.
+Pending and in-flight writes land first — a write arriving afterwards would change the modification time back to "now". This is the path the host takes when preserving timestamps on upload.
 
 ### 7.2 Capability query is a public API
 

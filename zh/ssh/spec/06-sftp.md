@@ -626,6 +626,11 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | `copy-data` | **服务端内**复制，不经过网络 | 〔现状〕能力位可查（`HasCopyData`），**还没有封装**；宿主的远端复制走「下载再上传」 |
 | `home-directory` | 取指定用户的家目录：`ExpandPathAsync("~用户名…")` 在没有 `expand-path` 时用它 | `~用户名` 报 `Unsupported`；`~`、`~/…` 不需要它（用 `REALPATH "."`，§4.6） |
 | `expand-path@openssh.com` | 展开 `~`：`ExpandPathAsync(路径)` 把 `~`、`~/…`、`~用户名`、`~用户名/…` 整条交给服务端（顺带规范化，已与真 OpenSSH 的 `$HOME` 核对）；不以 `~` 开头的等同 `GetRealPathAsync`。`REALPATH` 本身不展开 `~` | `~`、`~/…` 用登录时的工作目录拼、再 `REALPATH`；`~用户名` 改用 `home-directory` |
+| `lsetstat@openssh.com` | 设属性但**不跟随**符号链接（`touch -h` / `chown -h`）：`SetLinkAttributesAsync`，同步目录时保留链接自身的时间戳 | 抛 `Unsupported`（看 `HasLSetStat`），**不退化**成跟随链接的 `SETSTAT` —— 那会改到目标 |
+
+〔决策〕**按句柄设时间**（v3 的 `FSETSTAT`，不是扩展）：`SftpFileStream.SetTimesAsync(访问时间, 修改时间)` 在关闭之前用同一个句柄设，
+一次往返；`SetLastWriteTimeAsync(路径, …)` 要先 `STAT` 取回访问时间再 `SETSTAT`（两者共用一个标志位，只给一个会把另一个抹成 1970 年），两次往返。
+设之前先等攒着的与在途的写落地 —— 之后才到的写会把修改时间又改成「现在」。宿主上传时保留时间戳走的就是这一条。
 
 ### 7.2 能力查询是公开 API
 
