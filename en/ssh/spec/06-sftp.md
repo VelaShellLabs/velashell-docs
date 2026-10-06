@@ -231,6 +231,10 @@ It cannot spin: every pair is at least 8 bytes, so however large the count, the 
 〔Decision〕**Only known flag bits are written** (the five in the layout above). Attributes from a stat may carry bits this library does not know (fields from v4 onwards); writing them back without the matching fields
 means that changing one field of a stat result and sending `SETSTAT` produces a malformed message — the server reads a field that is not there.
 
+〔Decision〕**Reading a flag bit this library does not know is a protocol error** (`SshProtocolException`, affecting only that one call): v3 defines no fields for those bits,
+so where their bytes are and how long they are is unknowable, and reading on means parsing from a misaligned position — in a `NAME` reply every following entry's name and attributes would be wrong.
+v3 servers (OpenSSH's sftp-server) do not send them; those bits used to be silently ignored.
+
 ### 4.3 `SSH_FXP_READ` / `SSH_FXP_WRITE`
 
 | READ | | | WRITE | | |
