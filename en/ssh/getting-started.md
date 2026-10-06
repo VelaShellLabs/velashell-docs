@@ -474,7 +474,7 @@ Console.WriteLine(conn.ConnectTimings);              // time spent dialing, exch
 ```csharp
 using VelaShell.Ssh.Forwarding;
 
-// -L: local 127.0.0.1:8080 → remote 10.0.0.9:80
+// -L: local 127.0.0.1:8080 and [::1]:8080 → remote 10.0.0.9:80
 await using LocalPortForwarder local = LocalPortForwarder.Start(
     conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
@@ -496,6 +496,8 @@ The local forwarder's `Start` is synchronous — it only binds a port on this ma
 
 **Binds to loopback by default.** To open it to the outside you must explicitly write `BindAddress = IPAddress.Any` —
 the other end of a tunnel is often an internal database, and binding to `0.0.0.0` by default would expose it to everyone on the same network segment.
+By default it listens on **both loopbacks** (`127.0.0.1` and `::1`, same port): clients that resolve `localhost` to `::1` first can connect too,
+and no other process on the machine can grab that port on `[::1]` (see [spec/07 §2.3](spec/07-forwarding.md)).
 
 ### Unix sockets in the reverse direction (`ssh -R /remote:/local`)
 

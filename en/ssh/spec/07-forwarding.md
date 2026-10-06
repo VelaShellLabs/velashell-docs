@@ -104,7 +104,8 @@ The direction reading from the channel is unaffected; data already received is d
 
 | `BindAddress` | Behavior |
 | --- | --- |
-| `127.0.0.1` (〔Decision〕**default**) | Only the local machine can connect |
+| Not given (〔Decision〕**default**) / `localhost` | **Both loopbacks**: `127.0.0.1` and `::1`, on the same port; only the local machine can connect |
+| `127.0.0.1` | IPv4 loopback only |
 | `0.0.0.0` / `::` | Reachable from the LAN. **Must be specified explicitly by the user** |
 | A specific interface address | Listens only on that interface |
 
@@ -112,7 +113,12 @@ The direction reading from the channel is unaffected; data already received is d
 binding to `0.0.0.0` by default would expose it to everyone on the same network segment.
 OpenSSH defaults to this as well (`GatewayPorts no`).
 
-〔Decision〕**Port 0 means the OS assigns one**; the assigned endpoint is reported back via `PortForwarder.BoundEndPoint`.
+〔Decision〕**Listen on both loopbacks** (Q5): many runtimes resolve `localhost` to `::1` first (Node 17 onward does), so with only `127.0.0.1` they fail to connect or try `::1` first;
+and with `[::1]:same port` left empty, any process on the machine can grab it, and a client trying `::1` first hands it things like the database password —— exactly the same-machine exposure that "bind to loopback by default" is meant to prevent.
+Without an IPv6 loopback only `127.0.0.1` is used; when that port on `[::1]` is already taken by another process **the forward is not started** (`ForwardBindFailed`, with the reason in the message),
+and with port 0 another port is tried. 〔History〕Only `127.0.0.1` used to be the default.
+
+〔Decision〕**Port 0 means the OS assigns one**; the assigned endpoint is reported back via `LocalPortForwarder.BoundEndPoint` (the IPv4 one) and `BoundEndPoints` (all of them).
 
 ### 2.4 Listener resilience and teardown
 

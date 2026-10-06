@@ -472,7 +472,7 @@ Console.WriteLine(conn.ConnectTimings);              // 拨号、版本交换、
 ```csharp
 using VelaShell.Ssh.Forwarding;
 
-// -L：本机 127.0.0.1:8080 → 远端 10.0.0.9:80
+// -L：本机 127.0.0.1:8080 与 [::1]:8080 → 远端 10.0.0.9:80
 await using LocalPortForwarder local = LocalPortForwarder.Start(
     conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
@@ -494,6 +494,8 @@ local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesSent + 
 
 **默认绑环回。**要对外开放必须显式写 `BindAddress = IPAddress.Any` ——
 一条隧道的另一端往往是内网数据库，默认绑 `0.0.0.0` 等于把它暴露给同网段所有人。
+默认听的是**两个环回**（`127.0.0.1` 与 `::1`，同一个端口）：把 `localhost` 先解析成 `::1` 的客户端也连得上，
+`[::1]` 那个端口也不会被同机别的进程抢去（见 [spec/07 §2.3](spec/07-forwarding.md)）。
 
 ### 反方向的 Unix 套接字（`ssh -R /远端:/本机`）
 
