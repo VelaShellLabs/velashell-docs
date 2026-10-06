@@ -4,7 +4,8 @@
 > RFC 5656（ECDH，NIST 曲线）；RFC 8731（curve25519-sha256）；RFC 8268（group14/16 + SHA-2）；
 > RFC 4419（group exchange）；RFC 8308（Extension Negotiation）；
 > OpenSSH `PROTOCOL` 的 `kex-strict-*-v00@openssh.com`（Terrapin 缓解，CVE-2023-48795）；
-> draft-kampanakis-curdle-ssh-pq-ke（ML-KEM 混合）；OpenSSH `PROTOCOL` 的 sntrup761 混合。
+> RFC 10042（ML-KEM 混合：`mlkem768x25519-sha256` 与 NIST 曲线的两种，定稿前是 draft-kampanakis-curdle-ssh-pq-ke）；
+> FIPS 203（ML-KEM）；OpenSSH `PROTOCOL` 的 sntrup761 混合。
 >
 > 对应实现：`Crypto/`（L3）与 `Session/`（L4 的 `KeyExchange` / `Rekeying` 状态）。
 >
@@ -273,6 +274,8 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 ### 3.6 后量子混合：`mlkem768x25519-sha256` 与 `sntrup761x25519-sha512`
 
 两者形状相同：**把一个 KEM 与 X25519 并联**，共享密钥是两者结果的哈希。
+`mlkem768x25519-sha256` 的依据是 RFC 10042 §2.3.3（定稿前是 draft-kampanakis-curdle-ssh-pq-ke），它写的与本节一致；
+同一份 RFC 里把 X25519 换成 NIST 曲线的另两种见 §3.7。
 
 | 方法 | KEM | 哈希 | 客户端发 | 服务端发 |
 | --- | --- | --- | --- | --- |
@@ -291,6 +294,184 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
   〔决策〕**M1 先只做 `mlkem768x25519-sha256`**；sntrup761 放到 M5，
   因为 OpenSSH 9.9+ 已经把 ML-KEM 排在前面，sntrup761 只是对 8.5–9.8 的兼容。
 - `sntrup761x25519-sha512@openssh.com` 是同一算法的旧名（OpenSSH < 9.9 用它）。
+
+### 3.7 面向 FIPS 的后量子混合：`mlkem768nistp256-sha256` 与 `mlkem1024nistp384-sha384`
+
+> 依据：RFC 10042 §2.1–§2.5（混合交换的形状、报文号、方法名、共享密钥 `K`、交换哈希）、§3（报文大小）、§5（每次交换都用新的临时密钥）；
+> FIPS 203 表 3（ML-KEM 的各项长度）、§7.3（解封装的输入检查）、§3.3（中间值的销毁）；
+> RFC 5656 §4 与 SEC 1 §2.3.3–§2.3.5、§3.2.2（EC 点的编码、域元素的定长编码、公钥校验）。
+>
+> **实现状态（2026-10-07）**：**已实现**（F12，`HybridKeyExchange`），对真服务端的核对结果见 §3.7.7。
+
+形状与 §3.6 完全相同 —— **一个 KEM 与一次椭圆曲线 DH 并联**，只是经典的那一半从 X25519 换成了 §3.3 的 NIST 曲线 ECDH。
+两种都只用 FIPS 认可的原语（ML-KEM、P-256 / P-384 上的 ECDH、SHA-2）：开了 FIPS 模式、不给 X25519 与 sntrup761 的服务端，靠它们谈成后量子。
+
+| 方法 | KEM | 曲线 | 哈希 | 客户端发 `C_INIT` | 服务端发 `S_REPLY` | `K_CL` | `K` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `mlkem768nistp256-sha256` | ML-KEM-768 | P-256 | SHA-256 | `ek_pq ‖ Q_C`：1184 + 65 = **1249** 字节 | `ct_pq ‖ Q_S`：1088 + 65 = **1153** 字节 | 32 字节 | 32 字节 |
+| `mlkem1024nistp384-sha384` | ML-KEM-1024 | P-384 | SHA-384 | `ek_pq ‖ Q_C`：1568 + 97 = **1665** 字节 | `ct_pq ‖ Q_S`：1568 + 97 = **1665** 字节 | 48 字节 | 48 字节 |
+
+- `ek_pq` 是 ML-KEM 的封装密钥，`ct_pq` 是 ML-KEM 密文（长度见 FIPS 203 表 3；ML-KEM 的共享密钥恒为 32 字节）。
+- `Q_C` / `Q_S` 是未压缩的 EC 点 `0x04 ‖ X ‖ Y`（P-256 的坐标 32 字节、P-384 的 48 字节），编码与 §3.3 相同。
+
+#### 3.7.1 报文
+
+编号沿用 §3.1 的 30 / 31，RFC 10042 管它们叫 `SSH_MSG_KEX_HYBRID_INIT` / `SSH_MSG_KEX_HYBRID_REPLY`
+（OpenSSH 的调试日志里对这两种方法仍显示成 `SSH2_MSG_KEX_ECDH_INIT` / `SSH2_MSG_KEX_ECDH_REPLY` —— 号是同一对）。
+
+`SSH_MSG_KEX_HYBRID_INIT`（30，C → S）
+
+| # | 类型 | 字段 | 说明 |
+| :-: | --- | --- | --- |
+| 1 | `byte` | 30 | |
+| 2 | `string` | `C_INIT` | `ek_pq` 后面紧接 `Q_C`，**两段拼成一个 `string`**（不是两个）。KEM 在前、EC 点在后 |
+
+`SSH_MSG_KEX_HYBRID_REPLY`（31，S → C）
+
+| # | 类型 | 字段 | 说明 |
+| :-: | --- | --- | --- |
+| 1 | `byte` | 31 | |
+| 2 | `string` | `K_S` | 服务端主机公钥 blob（§5.1） |
+| 3 | `string` | `S_REPLY` | `ct_pq` 后面紧接 `Q_S`，同样是一个 `string`，KEM 在前 |
+| 4 | `string` | `signature` | 主机私钥对 `H` 的签名（§5.2） |
+
+交换哈希 `H` 的输入就是 §4.1 那八项：第 6 项是 `string C_INIT`，第 7 项是 `string S_REPLY`，第 8 项是 `string K`，`HASH` 是方法的哈希。
+
+#### 3.7.2 共享密钥 `K`
+
+1. `K_PQ`：用本次交换生成的 ML-KEM 解封装密钥解开 `ct_pq`，得 32 字节。
+2. `K_CL`：本端的 EC 私钥与 `Q_S` 做 ECDH，取共享点的 **X 坐标**，按**定长**大端编码 —— P-256 是 32 字节，P-384 是 48 字节，
+   **前导零保留**（SEC 1 §2.3.5 的「域元素 → 字节串」；RFC 10042 §2.4 的说法是把单用 ECDH 时会得到的那个 `mpint` 重新编成定长字节串）。
+3. `K = HASH(K_PQ ‖ K_CL)`：**KEM 的结果在前**，`HASH` 是方法的哈希。得 32 字节（SHA-256）或 48 字节（SHA-384）。
+4. `K` 进交换哈希（§4.1 第 8 项）与密钥派生（§7）时都按 **`string`** 编码（`uint32` 长度 32 / 48，后接原字节），**不是 `mpint`**。
+
+〔关键〕这里有两处「定长」，各对应一种概率性的签名失败，症状都只是「签名验证失败」：
+
+- `K_CL` 若照 §3.3 的习惯按 `mpint` 的样子去掉了前导零（或者平台交回来的 X 坐标偏短而没有补齐），只在 X 的首字节为 0 时出错 —— 约 **1/256** 的交换；
+- `K` 若按 `mpint` 编，最高位为 1 时会多出一个 `0x00` —— 约 **1/2** 的交换。
+
+〔决策〕平台的 ECDH 原语交回的 X 坐标一律先按坐标长度**右对齐、左边补零**再用；去掉前导零之后仍比坐标长，是库自己的错（`InvalidOperationException`），不是对端的错。
+
+〔注意〕与相邻两节可以复用、不能复用的地方：
+
+| 项 | §3.6 `mlkem768x25519-sha256` | §3.7 两种 NIST 曲线混合 | §3.3 `ecdh-sha2-nistp*` |
+| --- | --- | --- | --- |
+| 报文号与外形 | 30 / 31，公开值各是一个 `string` | 同左 | 同左 |
+| 拼接顺序 | KEM 在前、经典在后 | **同左** | — |
+| 经典部分的公钥 | 32 字节 X25519 | 未压缩点，65 / 97 字节 | 未压缩点，65 / 97 / 133 字节 |
+| 经典部分的校验 | 长度；结果不能全零 | 首字节 `0x04`、坐标小于 p、在曲线上（**§3.3 那一套原样复用**） | 同左 |
+| 经典结果进 `K` 的形式 | 32 字节（X25519 的输出本来就定长） | X 坐标，**32 / 48 字节定长，保留前导零** | X 坐标**本身就是 `K`，按 `mpint`** |
+| `K` | `HASH(K_PQ ‖ K_CL)`，按 `string` | **同左** | X 坐标，按 `mpint` |
+| 哈希 | SHA-256 | SHA-256 / **SHA-384** | SHA-256 / 384 / 512 |
+
+所以 §3.6 的混合骨架（拼接、长度检查、`K` 的计算与 `string` 编码）与 §3.3 的点编码、曲线校验都可以直接复用；
+**不能**复用 §3.3 的共享密钥输出（那是要按 `mpint` 编的 X 坐标），也**不能**照搬 §3.6 现有的哈希二选一（SHA-256，否则 SHA-512）——
+SHA-384 必须单独一支：落进 SHA-512 不报任何错，只是每一次都签名失败。
+
+#### 3.7.3 客户端收到 31 之后的检查顺序
+
+前一步不过就不做后一步：
+
+```mermaid
+flowchart TD
+    A[收到 KEX_HYBRID_REPLY] --> B{S_REPLY 恰好是<br/>1153 / 1665 字节?}
+    B -->|否| X[KEX 失败<br/>ProtocolError，DISCONNECT 3]
+    B -->|是| C{Q_S 首字节 == 0x04?}
+    C -->|否| X
+    C -->|是| D{两个坐标都小于 p<br/>且在曲线上? 见 §3.3}
+    D -->|否| X
+    D -->|是| E[解封装 ct_pq 得 K_PQ<br/>ECDH 得 K_CL 并补成定长]
+    E -->|平台原语抛异常| X
+    E --> F[K = HASH K_PQ ‖ K_CL<br/>清零 K_PQ、K_CL 与拼接缓冲]
+    F --> G[算 H、验签、策略裁决，见 §5.3]
+```
+
+1. **总长**：`S_REPLY` 的长度必须恰好等于该方法的 `ct_pq` 与 `Q_S` 之和（1153 / 1665）。RFC 10042 §2.1 要求在解封装**之前**查（防长度扩展）。
+   这一步同时就是 FIPS 203 §7.3 的「密文类型检查」：点的编码是定长的（下一条），总长对了，密文的长度也就对了。
+2. **点的编码**：`Q_S` 的首字节必须是 `0x04`（未压缩）。
+3. **点在曲线上**：照 §3.3 的〔决策〕库自己先查（两个坐标都小于 p，满足 y² = x³ − 3x + b (mod p)），再交给平台导入。
+   P-256 / P-384 的余因子是 1，所以「在曲线上、且不是无穷远点」就是 SEC 1 §3.2.2 的完整校验，不必再乘阶。
+4. **解封装**：〔决策〕FIPS 203 §7.3 的另两项（解封装密钥的类型检查与哈希检查）不做 —— 那把钥是本端在这次交换里刚生成的，从没离开过进程；
+   FIPS 203 明确允许解封装方经由别的途径得到「已检查过」的保证，每次都必须做的只有密文检查（第 1 步）。
+   ML-KEM 的解封装**没有失败可言**：密文被改过时它照常交回一个伪随机的 `K_PQ`（隐式拒绝），于是 `K` 与服务端的不同，
+   表现为**签名验证失败**（§5.3 → `HostKeyRejected`）。这是预期的行为，不是要另外去查的错误；何况 `S_REPLY` 本身就在 `H` 里，被改过的应答无论如何都验不过签名。
+5. **ECDH 与组合**：见 §3.7.2。平台原语在第 4、5 步抛出的任何异常都按 KEX 失败处理（与 §3.3 一样捕获得宽：各平台抛的异常类型不同）。
+
+〔决策〕**只发、只收未压缩点。**RFC 10042 沿用 RFC 5656，允许点压缩；我们不用，也不收（总长不对或首字节是 `0x02` / `0x03` 都拒绝）。理由：
+
+- RFC 10042 要求解封装之前按「该方法的预期长度」查总长 —— 只有点的编码定长，这个预期长度才是一个确定的数；
+- 与 §3.3 同一条规矩（`ecdh-sha2-*` 早就只收未压缩点，有用例钉住）；
+- 〔互操作〕AlmaLinux 10.2 的 OpenSSH 9.9p1（RHEL 10.2 的下游补丁）两种方法都发未压缩点：在容器里抓明文的首次交换，
+  它的服务端发的 `S_REPLY` 是 1153 / 1665 字节、密文之后那一字节是 `0x04`；它的客户端发的 `C_INIT` 是 1249 / 1665 字节，同样在 `ek_pq` 之后是 `0x04`。
+  真遇到发压缩点的服务端，写明是哪家、哪个版本再议。
+
+#### 3.7.4 失败怎么报
+
+| 情况 | 本端的原因 | 发给对端的 `DISCONNECT` |
+| --- | --- | --- |
+| `S_REPLY` 总长不对、`Q_S` 不是未压缩编码、`Q_S` 不在曲线上、平台原语抛异常 | `ProtocolError`（`SshKeyExchangeException`，`Phase = KeyExchange`；重协商时阶段记 `Rekeying`，见 [`08-failures.md`](08-failures.md) §2.1） | `KEY_EXCHANGE_FAILED`（3） |
+| `ct_pq` 被改过（隐式拒绝）→ 签名验不过 | `HostKeyRejected` | `HOST_KEY_NOT_VERIFIABLE`（9） |
+
+〔决策〕**密钥交换里对端的公开值不合格时，`DISCONNECT` 的原因码是 `KEY_EXCHANGE_FAILED`（3），不是 `PROTOCOL_ERROR`（2）。**
+RFC 10042 §2.1 对混合方法是「必须」（长度不对、解封装失败都要以 3 断开），RFC 8731 §3 对 curve25519 是「应当」。
+这条规矩**对所有方法一律适用**：§3.2–§3.7 里对端公开值检查不过时抛的 `SshKeyExchangeException`（长度、编码、不在曲线上、X25519 全零、DH 越界、GEX 的 `p` 非素数与 `g` 越界）都发 3 ——
+RFC 4253 / 5656 / 4419 没有指定原因码，一条规矩比按方法分表好记，也不会漏。本端的 `SshFailureReason` 不变，仍是 `ProtocolError`（对端给的值不合法）。
+描述文本写「key exchange failed」一类的话，不能借用协商失败的那句「no matching algorithms」。〔历史〕曾经这类失败一律发 2（[`08-failures.md`](08-failures.md) §6）。
+
+#### 3.7.5 临时密钥与平台
+
+- 〔决策〕**每次交换都新生成一对 ML-KEM 密钥与一对 ECDH 密钥**，包括每一次重协商（RFC 10042 §5 的「必须」）；交换结束即销毁，
+  解封装密钥不留到下一次（FIPS 203 §3.3：中间值用完即毁）。`K_PQ`、`K_CL` 与拼接缓冲在算出 `K` 之后清零。
+- 〔决策〕ML-KEM 与 §3.6 同一个做法：`MLKem.IsSupported` 时走 BCL（`MLKemAlgorithm.MLKem768` / `MLKemAlgorithm.MLKem1024`），否则退回 BouncyCastle（`ml_kem_768` / `ml_kem_1024`）。
+  BCL 与 BouncyCastle 互通（一边生成、另一边封装）的用例 1024 也要有一条，与 768 那条并列。ECDH 走 BCL 的 `ECDiffieHellman`（`nistP256` / `nistP384`），与 §3.3 相同，各平台都有。
+  **这两个名字总在清单里，不看平台**：两条路径总有一条可用，KEXINIT 因此在哪个系统上都一样，同一台服务端谈成的方法不随客户端的系统变 —— 排查时少一个变量。
+- 报文大小：最大的 `C_INIT` 是 1665 字节，应答再加上主机密钥与签名也远小于 RFC 4253 §6.1 要求必须支持的 32768 / 35000 字节，不需要任何特殊处理（RFC 10042 §3）。
+- 名字常量：`SshAlgorithmNames.MlKem768Nistp256Sha256`（`mlkem768nistp256-sha256`）与 `SshAlgorithmNames.MlKem1024Nistp384Sha384`（`mlkem1024nistp384-sha384`），
+  与现有的 `MlKem768X25519Sha256`、`EcdhSha2Nistp256` 同一套写法；`SshKeyExchangeFactory` 的表里各加一行，算法目录（00 §6.6）随之列出它们。都是 `internal`，不新增公开成员。
+
+默认清单与 `SshAlgorithmSet.FipsApprovedOnly` 里放在哪、为什么，见 [`00-overview.md`](00-overview.md) §6.1 与 §6.6：
+两份清单都把它们排在不带后量子的椭圆曲线之前；默认清单里排在 `mlkem768x25519-sha256` 之后、sntrup761 之前；两份清单里都是 768 / P-256 在前。
+
+〔互操作〕实现了这两种的服务端（2026-10-06 在 Docker 里看过）：
+
+- **AlmaLinux 10.2**（RHEL 10.2 的重建）的 OpenSSH 9.9p1，带 RHEL 的下游补丁：两种都有。系统加密策略给 sshd 的清单（镜像里的 `/usr/share/crypto-policies/<策略>/opensshserver.txt`）：
+  DEFAULT 是 `mlkem768x25519-sha256`、`mlkem768nistp256-sha256`、`mlkem1024nistp384-sha384`，然后 curve25519、ECDH、DH（没有 sntrup761）；
+  FIPS 是两种 nistp 混合在前，然后 ECDH、`diffie-hellman-group-exchange-sha256` 与 DH 标准群（没有 X25519，也没有 sntrup761）；FUTURE 只剩三种 ML-KEM 混合。
+- **上游 OpenSSH 10.6p1**（Alpine edge 的包）：`ssh -Q kex` 里有 `mlkem768nistp256-sha256`，没有 `mlkem1024nistp384-sha384`；客户端与服务端的默认清单都不含它，
+  要显式加（`KexAlgorithms +mlkem768nistp256-sha256`）。它的发布说明没有提这一种，以 `ssh -Q kex` 为准。
+
+〔历史〕F12 之前不实现这两种：交换哈希错一个字节，表现也只是「签名验不过」，没有能对照线上格式的服务端，写了也只能自己证明自己 ——
+00 §6.6 的 FIPS 预设因此一度不含它们。2026-10-06 找到了 AlmaLinux 10.2 这台靶机，草案也已定稿为 RFC 10042，于是写下本节。
+
+#### 3.7.6 测试向量
+
+RFC 10042 没有给测试向量。§4.1 那张表的新行用两样东西钉住：内存里的服务端一侧（`TestKexResponder` 补上这两种）给出的自洽向量，
+以及 §3.7.7 对真服务端的核对。服务端一侧**必须独立地**按定长去算 `K_CL` 与 `K`，不能调用被测的那段代码 —— 否则两边错得一样，用例照样通过。
+
+#### 3.7.7 〔已核对〕对真服务端的核对结果
+
+靶机是仓库根 `docker-compose.test.yml` 的 `ssh-pq`（AlmaLinux 10.2 的 OpenSSH 9.9p1，账号 `vela-pq` / `velapass`），同一个容器里起三个 sshd：
+本机 2226 照开了 FIPS 模式的服务端配（两种 nistp 混合加普通 ECDH，没有 X25519 与 sntrup761）；2227 只给 `mlkem1024nistp384-sha384`（外加 `ecdh-sha2-nistp384`）；
+2228 照 RHEL 10.2 的 DEFAULT 策略（三种 ML-KEM 混合、X25519 那种在前，再是 curve25519 与普通 ECDH）。靶机不在时互操作用例记为跳过（Inconclusive）。
+
+1. **握手 + 命令**：两种各自连上、认证、跑命令，`SshConnection.Algorithms` 里的密钥交换就是这个名字。
+2. **重协商**：两种各重协商三次，每次之后命令照常，`SshConnection.Rekeyed` 报出的是这个名字。
+3. **定长的 `K_CL`**：每种在同一条连接上连续重协商 1200 次，全部成功（碰到 X 坐标首字节为 0 的概率约 99%）；
+   内存里另有一条反复交换、直到碰上前导零再断言两端 `K` 一致的用例。把 `K_CL` 改成去掉前导零，这两条都红。
+4. **服务端只给 1024 那种**（2227）：`Default` 与 `FipsApprovedOnly` 都谈成 `mlkem1024nistp384-sha384`，不退到 ECDH。
+   只给 768 那种的服务端没有单独起：2226 两种都给，两份清单都选 768。
+5. **默认清单**：对 2226（没有 X25519）谈成 `mlkem768nistp256-sha256`（以前是 `ecdh-sha2-nistp256`）；对 2228（RHEL 的 DEFAULT）仍谈成 `mlkem768x25519-sha256`。
+6. **FIPS 预设**：对 2226 与 2228 都谈成 `mlkem768nistp256-sha256`，命令照常。只给普通 ECDH 的服务端没有单独起。
+7. **负面（内存）**：`S_REPLY` 多一字节、少一字节；`Q_S` 首字节 `0x02` / `0x03`；Y 改一个比特；X 等于 p；全零的点 → `SshKeyExchangeException`（`ProtocolError`）；
+   改 KEM 密文的一个比特 → 交换本身不报错、算出的 `K` 不同。断开码：五种方法（两种 nistp 混合、`mlkem768x25519-sha256`、`ecdh-sha2-nistp256`、`curve25519-sha256`）
+   各收到一个短了一字节的公开值，服务端收到的原因码都是 3（§3.7.4）。
+8. **负面（真服务端）**：在客户端与 2226 之间放一个改字节的中继（首次交换是明文）：改 `S_REPLY` 里 EC 点的一个比特 → 本端 `ProtocolError`；
+   改 KEM 密文的一个比特 → 本端 `HostKeyRejected`。服务端日志里的对端原因码没有自动核对（用例不读 `docker logs`）。
+9. **线上长度**：同一个中继记下 `C_INIT` 是 1249 / 1665 字节、`S_REPLY` 是 1153 / 1665 字节。
+10. 没做：上游 OpenSSH 10.6p1 与 Apache MINA SSHD 2.20 这两个实现的对照。
+
+〔已核对〕顺带发现：`Rekeyed` 事件曾在「在谈」的标记清掉之前就报，订阅者收到事件就再发起一次时被当成空操作吞掉 —— 第 3 条的连续重协商就卡在这里。
+现在标记清掉之后才报（§8.1）。
 
 ---
 
@@ -318,7 +499,7 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 | curve25519 | `string` | `string` | **`mpint`** |
 | ecdh-nistp* | `string` | `string` | **`mpint`** |
 | dh-group14/16 | **`mpint`** | **`mpint`** | **`mpint`** |
-| mlkem768x25519 / sntrup761x25519 | `string` | `string` | **`string`** |
+| mlkem768x25519 / mlkem768nistp256 / mlkem1024nistp384 / sntrup761x25519 | `string` | `string` | **`string`** |
 
 > **把这张表做成单测的数据源。** 每一行一个已知向量，逐字节断言 `H`。
 > 这是整份规格里最值得先写测试的地方。
@@ -618,9 +799,10 @@ K_x = HASH(K ‖ H ‖ "X" ‖ session_id)
 
 **关键点**：
 
-1. `K` 按其方法对应的类型编码（§4.1 的表），`H` 与 `session_id` 按 `string`。
+1. `K` 按其方法对应的类型编码（§4.1 的表：后量子混合是 `string`，其余是 `mpint`）；`H` 与 `session_id` 是**裸字节**，不带长度前缀。
    **字母 `X` 是单个裸字节，不是 `string`。**
-2. **密钥不够长时要扩展**（HASH 输出 32 字节，但 AES-256 要 32、ChaCha20 要 64）：
+   〔历史〕本条曾写成「`H` 与 `session_id` 按 `string`」，与 RFC 4253 §7.2 不符；实现早已改成裸字节（[architecture.md §11.2.13](../design/architecture.md)：多写的两个长度前缀让第一次连真 OpenSSH 全线失败）。
+2. **密钥不够长时要扩展**（SHA-256 输出 32 字节、SHA-384 输出 48 字节，而 ChaCha20 要 64）：
    ```
    K1 = HASH(K ‖ H ‖ "X" ‖ session_id)
    K2 = HASH(K ‖ H ‖ K1)
@@ -669,6 +851,7 @@ K_x = HASH(K ‖ H ‖ "X" ‖ session_id)
 〔决策〕**每次重协商做完都报一次**（`SshConnection.Rekeyed` 事件：起因、第几次、耗时、新协商出的算法）：对端发起的、按阈值发起的、显式请求的都报，
 失败的不报（连接随之判死）。耗时从收到对端的 `KEXINIT` 算到新密钥装好 —— 这段时间通道数据暂存、发不出去，「终端偶尔卡一下」要从这里对得上；
 最近一次的也留在 `LastRekeyDuration`。事件在接收循环上同步调用，订阅者不要阻塞；订阅者抛的异常吞掉。
+〔决策〕事件在**可以再发起之后**才报：订阅者收到事件就发起下一次，不会被当成「还在谈」的空操作吞掉。〔历史〕曾经在那之前报，「每次重协商完就再来一次」的订阅者第二次就停了（§3.7.7）。
 
 ### 8.2 发送闸门
 
@@ -753,6 +936,9 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | X25519 结果全零 | `ProtocolError` | 否 |
 | ECDH 点不在曲线上 | `ProtocolError` | 否 |
 | DH `e`/`f` 越界 | `ProtocolError` | 否 |
+| 混合方法的 `S_REPLY` 总长不对（§3.6 / §3.7） | `ProtocolError` | 否 |
+| NIST 曲线混合的 `Q_S` 不是未压缩编码或不在曲线上（§3.7） | `ProtocolError` | 否 |
+| ML-KEM 密文被改过（隐式拒绝，表现为签名验证失败，§3.7.3） | `HostKeyRejected` | 否 |
 | GEX 的 `p` 小于 2048 位或大于 8192 位 | `NegotiationFailed` | 否 |
 | GEX 的 `p` 非素数（偶数、有小因子、Miller-Rabin 找到合数证据） | `ProtocolError` | 否 |
 | GEX 的 `g` 不满足 `1 < g < p-1` | `ProtocolError` | 否 |
@@ -767,6 +953,7 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | 重协商时 `K_S` 变了 | `HostKeyChanged` | 否 |
 | KEX 超时 | `Timeout` | 是 |
 
-**所有 `ProtocolError` 在断开前应当发送 `SSH_MSG_DISCONNECT`**
-（`SSH_DISCONNECT_KEY_EXCHANGE_FAILED = 3` 或 `SSH_DISCONNECT_PROTOCOL_ERROR = 2`），
-尽力而为 —— 发不出去不影响断开动作本身。
+**所有 `ProtocolError` 在断开前应当发送 `SSH_MSG_DISCONNECT`**，
+尽力而为 —— 发不出去不影响断开动作本身。原因码：密钥交换里对端公开值不合格的（上表 `Q_C`/`Q_S` 长度、X25519 全零、
+ECDH 点、DH 越界、GEX 的 `p` 非素数与 `g` 越界、混合方法的两行）发 `SSH_DISCONNECT_KEY_EXCHANGE_FAILED = 3`（§3.7.4），
+其余发 `SSH_DISCONNECT_PROTOCOL_ERROR = 2`。

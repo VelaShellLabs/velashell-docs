@@ -339,8 +339,9 @@ bool                       PartialSuccessAchieved
 | 什么时候 | 原因码 |
 | --- | --- |
 | 正常释放连接（先限时冲刷已入队的帧，`DISCONNECT` 排在最后，它出去了前面的帧也就出去了） | `BY_APPLICATION`（11） |
-| 对端发来的东西解不开、违反了协议（握手、认证、会话期间都算；帧层的完整性校验失败也报这个，不单独报 `MAC_ERROR` —— 把校验细节回送给对端是侧信道） | `PROTOCOL_ERROR`（2） |
+| 对端发来的东西解不开、违反了协议（握手、认证、会话期间都算；帧层的完整性校验失败也报这个，不单独报 `MAC_ERROR` —— 把校验细节回送给对端是侧信道；密钥交换里的公开值不合格另算，见下面第二行） | `PROTOCOL_ERROR`（2） |
 | 算法协商不上 | `KEY_EXCHANGE_FAILED`（3） |
+| 密钥交换里对端的公开值不合格（长度、编码、不在曲线上、X25519 全零、DH 越界、GEX 的 `p` 非素数与 `g` 越界、混合方法的总长；[03 §3.7.4](03-key-exchange.md)）。本端的原因仍是 `ProtocolError` | `KEY_EXCHANGE_FAILED`（3） |
 | 主机密钥被拒、验不过，或重协商时换了 | `HOST_KEY_NOT_VERIFIABLE`（9） |
 | 认证方法用尽（含要动态码而没配、要先改密码） | `NO_MORE_AUTH_METHODS_AVAILABLE`（14） |
 | 使用者在询问框上取消了认证（§2.1） | `AUTH_CANCELLED_BY_USER`（13） |

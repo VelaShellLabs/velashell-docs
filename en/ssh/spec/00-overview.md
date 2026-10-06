@@ -123,7 +123,9 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 
 | Algorithm | Basis | Enabled by default | Notes |
 | --- | --- | :-: | --- |
-| `mlkem768x25519-sha256` | draft-kampanakis-curdle-ssh-pq-ke | ✅ highest priority | Post-quantum hybrid; the BCL has ML-KEM |
+| `mlkem768x25519-sha256` | RFC 10042 (formerly draft-kampanakis-curdle-ssh-pq-ke) | ✅ highest priority | Post-quantum hybrid; the BCL has ML-KEM |
+| `mlkem768nistp256-sha256` | RFC 10042 | ✅ | Post-quantum hybrid (ML-KEM-768 + P-256), FIPS-oriented; also first in `FipsApprovedOnly` (§6.6, 03 §3.7) |
+| `mlkem1024nistp384-sha384` | RFC 10042 | ✅ | Post-quantum hybrid (ML-KEM-1024 + P-384), FIPS-oriented; also in `FipsApprovedOnly` |
 | `sntrup761x25519-sha512` | OpenSSH `PROTOCOL` | ✅ | Post-quantum hybrid; default since OpenSSH 8.5+ |
 | `sntrup761x25519-sha512@openssh.com` | Same as above | ✅ | Old name of the same algorithm, for compatibility with OpenSSH < 9.9 |
 | `curve25519-sha256` | RFC 8731 | ✅ | |
@@ -134,6 +136,22 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔Interop〕old devices and hardened servers often offer only this. Placed after the elliptic curves and before the DH standard groups; the group is supplied by the server and must be checked (03 §3.5) |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ off by default | 〔Interop〕Cisco IOS / old VRP have only this. **MUST be explicitly enabled by the user** (§6.6) |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | Not real algorithms but **indicators**; see 03 |
+
+The default list is ordered `mlkem768x25519-sha256`, `mlkem768nistp256-sha256`, `mlkem1024nistp384-sha384`,
+`sntrup761x25519-sha512`, `sntrup761x25519-sha512@openssh.com`, `curve25519-sha256`, `curve25519-sha256@libssh.org`,
+`ecdh-sha2-nistp256/384/521`, `diffie-hellman-group-exchange-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group14-sha256`.
+
+〔Decision〕**The two NIST-curve ML-KEM hybrids are in the default list**, placed as follows:
+
+- **Before curve25519 and ECDH** (§7 item 1: post-quantum hybrid > elliptic curve). Servers under a FIPS policy offer neither X25519 nor sntrup761;
+  without these two in our list they could only fall back to `ecdh-sha2-nistp256`, which has no post-quantum protection and loses the defence against "harvest now, decrypt later".
+- **After `mlkem768x25519-sha256`**: all three are ML-KEM, and the X25519 half is easier to implement without side channels and faster (RFC 10042 §5);
+  both OpenSSH and RHEL put it first by default. A server offering all three (RHEL 10.2's DEFAULT policy) still ends up with it, as before.
+- **Before sntrup761**: ML-KEM is the KEM standardized in FIPS 203, and these are methods registered by RFC 10042; sntrup761 is kept only for compatibility with OpenSSH 8.5–9.8 (03 §3.6),
+  and those versions have no nistp hybrids, so the result does not change for them.
+- **768 / P-256 before 1024 / P-384**: smaller messages (`C_INIT` 1249 versus 1665 bytes) and faster to compute; the same order as RHEL 10.2's DEFAULT and FIPS policies;
+  upstream OpenSSH 10.6 only has the former. Callers who want 1024 / P-384 first (for CNSA 2.0, say) build their own list.
+- Upstream OpenSSH not enabling `mlkem768nistp256-sha256` by default does not stop us from putting it in the client list: when the server does not offer it, negotiation simply skips it, at the cost of two more names in the KEXINIT.
 
 ### 6.2 Host keys
 
@@ -210,11 +228,21 @@ Consumers that let users write their own lists use it to say on the spot "not im
 〔History〕Without this catalog the host inferred what was implemented from `Default.WithLegacyInterop()` and maintained its own hand-written "known but unimplemented" list.
 
 〔Decision〕**A list of FIPS-approved algorithms only**: `SshAlgorithmSet.FipsApprovedOnly`, matching what RHEL's FIPS crypto policy allows for SSH —
-key exchange only ECDH on the NIST curves and the standard DH groups, host keys only ECDSA and SHA-2 RSA (with their certificates), encryption only AES-GCM / AES-CTR,
-MACs only HMAC-SHA2; no X25519, Ed25519, ChaCha20-Poly1305 or post-quantum hybrids. **It only restricts the algorithms; it does not make this library FIPS 140 validated**:
-AES, SHA-2, ECDH, ECDSA and RSA go through the BCL (the validated CNG on Windows; elsewhere it depends on the system's OpenSSL), and the modular exponentiation of the DH groups goes through BouncyCastle.
-The FIPS-oriented post-quantum hybrids (`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`) are not implemented for now: there is no server to check the wire format against yet,
-so an implementation could only vouch for itself (03 §3.6).
+key exchange first the two FIPS-oriented post-quantum hybrids, then ECDH on the NIST curves and the standard DH groups, host keys only ECDSA and SHA-2 RSA (with their certificates), encryption only AES-GCM / AES-CTR,
+MACs only HMAC-SHA2; no X25519, Ed25519 or ChaCha20-Poly1305, and no post-quantum hybrids built on X25519 or sntrup761. **It only restricts the algorithms; it does not make this library FIPS 140 validated**:
+AES, SHA-2, ECDH, ECDSA and RSA go through the BCL (the validated CNG on Windows; elsewhere it depends on the system's OpenSSL), ML-KEM goes through the BCL when the platform supports it (`MLKem.IsSupported`)
+and otherwise, like the modular exponentiation of the DH groups, through BouncyCastle.
+
+Its key exchange list is, in order: `mlkem768nistp256-sha256`, `mlkem1024nistp384-sha384`, `ecdh-sha2-nistp256/384/521`,
+`diffie-hellman-group16-sha512`, `diffie-hellman-group14-sha256`.
+
+〔Decision〕**The two NIST-curve ML-KEM hybrids (03 §3.7) come first in this list.** They use only FIPS-approved primitives (ML-KEM, ECDH on P-256 / P-384, SHA-2),
+and RFC 10042 Appendix B takes the view that its way of combining them appears to be an approved derivation (NIST SP 800-227 does not name it); the list RHEL 10.2's FIPS policy gives sshd has exactly these two first and ECDH after them.
+A compliance environment wants both "only approved algorithms" and the defence against "harvest now, decrypt later" —— on a server without X25519, without these two only ECDH without post-quantum protection is left.
+A server that does not support them still ends up with `ecdh-sha2-nistp256`, as before. 768 / P-256 comes first for the same reasons as in §6.1.
+
+〔History〕At first this preset did not include these two hybrids: there was no server to check the wire format against yet, so an implementation could only vouch for itself.
+On 2026-10-06 a verification target was found (AlmaLinux 10.2's OpenSSH 9.9p1, with RHEL 10.2's downstream patch, has both) and the draft had been published as RFC 10042, so they were added (03 §3.7).
 
 ## 7 How algorithm priority is ordered
 
