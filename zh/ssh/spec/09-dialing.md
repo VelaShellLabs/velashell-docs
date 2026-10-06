@@ -465,7 +465,9 @@ Windows 上会去读写当前目录里一个叫 `none` 的文件。
   〔历史〕早期是同步的 `Func<string, bool>`，只给原样的命令、没有令牌也没有主机与用户：调用方自己去代入 `%h`，就回到了 CVE-2023-51385 那一类问题。
 - **`Match host` 比的是经 `HostName` 改写之后的主机名**（前面的块里给过 `HostName` 就用它，其中的 `%h` 换成输入的名字）；
   `Match originalhost` 与 `Host` 块比的是使用者输入的那个名字。曾经 `Match host` 一律拿输入的别名去比，为真实主机名写的块永远对不上。
-- `CreateConnectionOptionsAsync` 求值时只知道主机名，所以带 `user` / `localuser` / `exec` 条件的块在这条路径上不生效。
+- `CreateConnectionOptionsAsync` 求值时知道主机名与本机用户名，`localuser` 照常判；`ProxyJump bob@jump` 写明了跳板用户的，那一跳的 `user` 照常判。
+  目标的远端用户要等配置求完才知道（`User` 本身就在配置里），所以带 `user` 条件的块对目标不生效；这条路径不执行命令，`exec` 一律判不了。
+  〔历史〕曾经只给主机名，`localuser` 在这条路径上永远判不了。
 
 ### 7.2 算法清单的写法（`SshAlgorithmSpec`）
 

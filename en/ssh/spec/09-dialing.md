@@ -466,7 +466,9 @@ Each `Match` condition has three outcomes: satisfied, not satisfied, and **canno
   〔History〕It used to be a synchronous `Func<string, bool>` given only the raw command, with no token and no host or user: callers substituting `%h` themselves were back in the CVE-2023-51385 class of problem.
 - **`Match host` compares against the host name after `HostName` rewriting** (if an earlier block set `HostName`, that is used, with `%h` replaced by the name the user typed);
   `Match originalhost` and `Host` blocks compare against the name the user typed. `Match host` used to compare against the typed alias every time, so blocks written for the real host name never matched.
-- `CreateConnectionOptionsAsync` knows only the host name when evaluating, so blocks with `user` / `localuser` / `exec` conditions do not apply on that path.
+- `CreateConnectionOptionsAsync` knows the host name and the local user name when evaluating, so `localuser` is evaluated normally; when `ProxyJump bob@jump` names the jump user, `user` is evaluated normally for that hop.
+  The target's remote user is known only after the configuration has been resolved (`User` itself lives in the configuration), so blocks with a `user` condition do not apply to the target; this path runs no commands, so `exec` is always undetermined.
+  〔History〕This path used to pass only the host name, so `localuser` could never be evaluated on it.
 
 ### 7.2 Algorithm list syntax (`SshAlgorithmSpec`)
 
