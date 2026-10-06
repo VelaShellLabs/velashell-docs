@@ -117,6 +117,11 @@ sequenceDiagram
 提前在这里报，错误指向的是配置本身。
 主机密钥算法名**不在这里查**：它们由主机密钥的解析与验签把关（§5.3），未知类型在那里有明确的错误。
 
+〔决策〕**每条清单在设值时抄一份只读的存下来**，之后调用方改自己手里那份不影响已经交出去的清单。
+曾经原样存下调用方给的集合：传一个 `List` 进来、校验之后再改，连接把这份清单存进重协商的上下文，
+下一次重协商用的就是改过的、没校验过的清单；`SshAlgorithmSet.Default` 里的数组下转型就能改，加密与 MAC 两个方向还共用同一个数组。
+设成 `null` 当场抛 `ArgumentNullException`。也因此 `SshAlgorithmSet` 的相等比较按清单内容（含顺序）而不是按引用。同样的规矩也用在 `AgentForwardOptions.AllowedKeys` 与 `SftpFileAttributes.Extended` 上。
+
 ### 2.3 藏在 `kex_algorithms` 里的三个指示符
 
 这三个名字**不是密钥交换方法**，是塞在同一个列表里的标志位。

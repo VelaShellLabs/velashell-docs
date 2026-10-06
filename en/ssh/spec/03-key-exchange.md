@@ -118,6 +118,11 @@ the failure then happens during key derivation, surfaces as an unexplained "not 
 Reporting it here points the error at the configuration itself.
 Host key algorithm names are **not checked here**: they are guarded by host key parsing and signature verification (§5.3), where an unknown type gets an explicit error.
 
+〔Decision〕**Each list is copied into a read-only snapshot when it is set**, so later changes to the caller's own copy do not affect the list already handed over.
+The caller's collection used to be stored as-is: pass in a `List`, change it after validation, and since the connection keeps that list in its re-keying context,
+the next re-key uses the changed, unvalidated list; the arrays in `SshAlgorithmSet.Default` could be changed by a downcast, and the two directions of encryption and of MAC even shared one array.
+Setting `null` throws `ArgumentNullException` on the spot. For the same reason `SshAlgorithmSet` compares equal by list contents (order included), not by reference. The same rule applies to `AgentForwardOptions.AllowedKeys` and `SftpFileAttributes.Extended`.
+
 ### 2.3 The three indicators hidden in `kex_algorithms`
 
 These three names **are not key exchange methods**; they are flags stuffed into the same list.
