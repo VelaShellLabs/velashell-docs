@@ -129,6 +129,34 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 取消全部连接（按出错中止），再等它们收完尾，最后才放掉并发名额等资源。
 曾经是直接放掉：还在收尾的连接随后去还一个已经释放的名额，异常落在没人观察的任务里；释放返回时连接也还开着。
 
+### 2.5 Unix 域套接字
+
+> 依据：OpenSSH `PROTOCOL` 的 `direct-streamlocal@openssh.com`；ssh_config(5) 的 `StreamLocalBindMask` / `StreamLocalBindUnlink`。
+
+两个方向，可以组合：
+
+| 写法 | API | 本机监听 | 出站 |
+| --- | --- | --- | --- |
+| `-L 8080:/var/run/docker.sock` | `LocalPortForwarder.StartToUnixSocket(connection, 远端路径)` | TCP | `direct-streamlocal@openssh.com`（只有 `socket_path ‖ reserved`） |
+| `-L /路径/local.sock:host:port` | 任一种起法 + `LocalPortForwardOptions.ListenSocketPath` | 本机的套接字文件 | 照原样（TCP 目标、远端套接字、SOCKS 都行） |
+
+用途：本机的 Docker 客户端、数据库工具直接操作远端的 `docker.sock` / 数据库套接字，远端不必开任何 TCP 端口；
+本机这头在套接字文件上监听时，**按文件权限隔离** —— 多用户机器上别的用户借不走你的隧道（环回端口则对所有用户开放）。
+
+〔决策〕**本机套接字文件的权限**：非 Windows 上起监听之后设成 `0600`（同 OpenSSH 默认的 `StreamLocalBindMask 0177`）。
+从创建到改权限之间有一小段窗口，放在只有自己进得去的目录里（如 `$XDG_RUNTIME_DIR`）就没有这个问题 ——
+进程级的 umask 在多线程进程里改不得，不拿它来堵。Windows 上套接字文件沿用所在目录的 ACL（放在用户目录下）。
+
+〔决策〕**路径上已经有文件时默认报错、原样留着**（`ForwardBindFailed`）：那多半是上一次没收拾干净，也可能是别人的套接字。
+`ReplaceExistingSocket = true`（同 `StreamLocalBindUnlink yes`）才先删掉再监听。
+
+〔决策〕**路径太长当场报**（Linux / Windows 108 字节、macOS 104 字节，都含结尾的 0）。
+
+〔决策〕**收工时删掉自己建的套接字文件**：释放、SSH 连接断了都删；绑定本身失败时不删 —— 那个文件不是我们的。
+
+到远端套接字的隧道开不开得成（服务端要 `AllowStreamLocalForwarding`）要等第一条连接来了才知道，与 TCP 目标一样；
+开不成报 `Error`（`ChannelOpen`）。〔已核对〕对真 OpenSSH：Windows 上的套接字文件 → 服务端 `ssh-agent` 的套接字，经它加的钥 `ssh-add -l` 列得出来。
+
 ---
 
 ## 三 动态转发 `-D`（SOCKS5）

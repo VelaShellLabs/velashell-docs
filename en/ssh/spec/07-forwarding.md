@@ -131,6 +131,34 @@ The forwarder object must still be disposed by the caller.
 cancels all connections (aborted as errors), waits for them to finish their teardown, and only then releases the concurrency slots and other resources.
 It used to release them right away: a connection still tearing down would then return a slot to an already-disposed limiter, with the exception landing in a task nobody observed; and the connections were still open when disposal returned.
 
+### 2.5 Unix domain sockets
+
+> Basis: `direct-streamlocal@openssh.com` in OpenSSH `PROTOCOL`; ssh_config(5) `StreamLocalBindMask` / `StreamLocalBindUnlink`.
+
+Two directions, which can be combined:
+
+| Form | API | Local listener | Outbound |
+| --- | --- | --- | --- |
+| `-L 8080:/var/run/docker.sock` | `LocalPortForwarder.StartToUnixSocket(connection, remote path)` | TCP | `direct-streamlocal@openssh.com` (only `socket_path ‖ reserved`) |
+| `-L /path/local.sock:host:port` | any start method + `LocalPortForwardOptions.ListenSocketPath` | a local socket file | unchanged (a TCP target, a remote socket, or SOCKS) |
+
+Use: local Docker clients and database tools work directly against the remote `docker.sock` / database socket, and the remote side opens no TCP port at all;
+when the local end listens on a socket file, **file permissions isolate it** —— on a multi-user machine other users cannot borrow your tunnel (a loopback port is open to every user).
+
+〔Decision〕**Permissions of the local socket file**: on non-Windows systems it is set to `0600` after the listener starts (the same as OpenSSH's default `StreamLocalBindMask 0177`).
+There is a short window between creation and the permission change; putting the socket in a directory only you can enter (such as `$XDG_RUNTIME_DIR`) removes it ——
+the process-wide umask cannot be changed safely in a multithreaded process, so it is not used to close the gap. On Windows the socket file inherits the directory's ACL (keep it under the user profile).
+
+〔Decision〕**If a file already exists at the path, fail by default and leave it alone** (`ForwardBindFailed`): it is most likely left over from last time, but it may be someone else's socket.
+Only `ReplaceExistingSocket = true` (like `StreamLocalBindUnlink yes`) deletes it before listening.
+
+〔Decision〕**A path that is too long fails immediately** (108 bytes on Linux / Windows, 104 on macOS, both including the terminating 0).
+
+〔Decision〕**On teardown, delete the socket file we created**: on disposal and when the SSH connection drops; not when binding itself failed —— that file is not ours.
+
+Whether a tunnel to a remote socket can be opened (the server needs `AllowStreamLocalForwarding`) is only known when the first connection arrives, just as with TCP targets;
+failure raises `Error` (`ChannelOpen`). 〔Verified〕Against a real OpenSSH: a socket file on Windows → the server's `ssh-agent` socket; a key added through it shows up in `ssh-add -l`.
+
 ---
 
 ## 3. Dynamic forwarding `-D` (SOCKS5)
