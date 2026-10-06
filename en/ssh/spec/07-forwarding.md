@@ -389,10 +389,14 @@ Also published through `System.Diagnostics.Metrics`:
 
 | Instrument | Type | Tags |
 | --- | --- | --- |
-| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind`, `bind` |
-| `velashell.ssh.forward.connections.total` | Counter | `kind`, `bind` |
-| `velashell.ssh.forward.bytes` | Counter | `kind`, `bind`, `direction` |
-| `velashell.ssh.forward.errors` | Counter | `kind`, `bind`, `reason` |
+| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind` |
+| `velashell.ssh.forward.connections.total` | Counter | `kind` |
+| `velashell.ssh.forward.bytes` | Counter | `kind`, `direction` |
+| `velashell.ssh.forward.errors` | Counter | `kind`, `reason` |
+
+〔Decision〕**The tags are only the low-cardinality `kind`, `direction` and `reason`; the listen address is not a tag.** The listen address is high-cardinality: one value per forward, and a random one when port 0 is given;
+as a tag, the number of series in a time-series database would grow with every forward ever opened and never be reclaimed. For the traffic and connections of one particular forward, use the forwarder's own
+`Throughput` / `Connections` (§5.1). 〔History〕This table used to list a `bind` tag that the code never emitted.
 
 〔Decision〕**Provide both paths**: events for the desktop UI (which refreshes a panel in real time),
 Metrics for server scenarios (feeding OpenTelemetry). Picking only one would force users to rewrite the data plane themselves —

@@ -387,10 +387,14 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // 单条连�
 
 | 仪表 | 类型 | 标签 |
 | --- | --- | --- |
-| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind`、`bind` |
-| `velashell.ssh.forward.connections.total` | Counter | `kind`、`bind` |
-| `velashell.ssh.forward.bytes` | Counter | `kind`、`bind`、`direction` |
-| `velashell.ssh.forward.errors` | Counter | `kind`、`bind`、`reason` |
+| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind` |
+| `velashell.ssh.forward.connections.total` | Counter | `kind` |
+| `velashell.ssh.forward.bytes` | Counter | `kind`、`direction` |
+| `velashell.ssh.forward.errors` | Counter | `kind`、`reason` |
+
+〔决策〕**标签只有低基数的 `kind`、`direction`、`reason`，不带监听地址。** 监听地址是高基数的：每条转发一个值，端口给 0 时还是随机的；
+放进标签，时序库里的序列数就跟着开过的转发条数一起涨，而且永不回收。要看某一条转发的流量与连接，用转发器自己的
+`Throughput` / `Connections`（§5.1）。〔历史〕这张表曾经写着 `bind` 标签，代码从来没带过。
 
 〔决策〕**两条路都给**：事件给桌面 UI（要实时刷一个面板），
 Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者自己重写一遍数据面 ——
