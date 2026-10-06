@@ -322,7 +322,7 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // 单条连�
 ```
 
 `ForwardErrorEventArgs.Reason` 是枚举 `ForwardErrorReason`（`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
+`TargetConnect` / `Relay` / `SetupSkipped`；零值是 `Unknown`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
 
 同时走 `System.Diagnostics.Metrics`：
 

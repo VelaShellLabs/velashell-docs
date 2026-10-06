@@ -512,7 +512,7 @@ enum SshFailureReason {
     Unknown,
     DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired, ProxyAuthFailed,
     NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged, HostKeyStoreFailed,
-    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
+    AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
     AgentUnavailable, AgentNotRunning, AgentRefused,
     Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,

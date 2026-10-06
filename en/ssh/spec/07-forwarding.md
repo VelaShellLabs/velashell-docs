@@ -324,7 +324,7 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // a single c
 ```
 
 `ForwardErrorEventArgs.Reason` is the enum `ForwardErrorReason` (`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
+`TargetConnect` / `Relay` / `SetupSkipped`; the zero value is `Unknown`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
 
 Also published through `System.Diagnostics.Metrics`:
 

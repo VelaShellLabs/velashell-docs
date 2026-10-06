@@ -181,7 +181,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `HostKeyRejected` | 主机密钥被拒（`SshConnectException`，`Phase` 为 `KeyExchange`）：策略拒绝（`SshHostKeyVerdict.Reject`）—— 没见过而不许问、使用者拒绝、被 `@revoked`、指纹不在白名单；`K_S` 解析不了、签名验不过、RSA 太短、与协商出的算法对不上（含协商出证书算法而 `K_S` 不是证书，或反过来）；有 CA 担保的主机证书不合格（`03-key-exchange.md` §5.5） | ✘ | 看 `Message`：策略给的原因（`SshHostKeyVerdict.Message`）原样放在里面，附指纹与 `known_hosts` 行号 |
 | `HostKeyChanged` | 主机密钥**变了**，两种处境：① 首次交换时策略用 `SshHostKeyVerdict.RejectChanged` 拒绝 —— `KnownHostsPolicy` 在记着的密钥变了、或只记着别的类型时这么报（`SshConnectException`，`Phase` 为 `KeyExchange`，消息里有新旧指纹与行号）；② 重协商时对端出示的主机密钥与首次交换时钉住的不同（`03-key-exchange.md` §8.4），连接以 `SshConnectionClosedException`（`Phase` 为 `Rekeying`）断开 | ✘ | 可能是中间人：不要自动重连，也不要给「信任并记住」的捷径 —— 服务器确实重装了的话，让人去 `known_hosts` 删掉旧的那一行 |
 | `HostKeyStoreFailed` | 主机密钥的记录读不出来或写不进去：`known_hosts` 没有权限、被别的进程占着、磁盘满（`SshConnectException`，`Phase` 为 `KeyExchange`）。读不出来时连接不放行；「信任并记住」时写不进去**不**让连接失败，原因记在 `SshConnection.HostKeyPersistFailure`（`03-key-exchange.md` §5.4） | ✘ | 看 `Message`：里面有文件路径与 IO 错误 |
-| `AuthenticationFailed` | 某次认证尝试失败 | ✔ | |
+
 | `AuthenticationMethodExhausted` | 所有方法试完 | ✘ | **见 §5.3** |
 | `TwoFactorRequired` | 服务端要 keyboard-interactive 而我们没配 | ✘ | 提示「这台机器需要动态码」 |
 | `PasswordExpired` | 服务端要求改密码 | ✘ | |
