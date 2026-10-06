@@ -1267,7 +1267,7 @@ zlib 流**，每个包压完做一次 flush 把字节挤出来，**但不重置�
 
 - `AllowedKeys` 非空时，`REQUEST_IDENTITIES` 的应答里**过滤掉**不在名单里的钥
   （`KeysHidden` 会计数），`SIGN_REQUEST` 要的钥不在名单里直接回 `FAILURE`。
-- `ConfirmEachSignature` 给宿主一个异步回调，可以弹窗问人。拒了回 `FAILURE`。
+- `ApproveSignature` 给宿主一个异步回调，可以弹窗问人。拒了回 `FAILURE`。
 - `ADD_IDENTITY` / `LOCK` / `UNLOCK` 一类会**改本机 agent 状态**的消息
   **一律回 `FAILURE`**，不转发。远端服务器没有任何理由改我们本机的钥圈。
 - `MaxConcurrentChannels` 封住通道数，默认 8。

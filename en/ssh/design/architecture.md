@@ -1270,7 +1270,7 @@ So `AgentForwarder` **parses the agent protocol, then forwards**:
 - When `AllowedKeys` is non-empty, keys not on the list are **filtered out** of the
   `REQUEST_IDENTITIES` reply (`KeysHidden` counts them), and a `SIGN_REQUEST` for a key not on
   the list gets `FAILURE` straight away.
-- `ConfirmEachSignature` gives the host an async callback, which can pop a dialog to ask a human.
+- `ApproveSignature` gives the host an async callback, which can pop a dialog to ask a human.
   If refused, reply `FAILURE`.
 - Messages such as `ADD_IDENTITY` / `LOCK` / `UNLOCK` that would **change local agent state**
   **always get `FAILURE`** and are not forwarded. A remote server has no reason whatsoever to

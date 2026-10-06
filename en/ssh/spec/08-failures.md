@@ -425,9 +425,9 @@ Hooked up through `SshConnectionOptions.PacketTap`. Each hop on a jump chain is 
 **Three hard rules**:
 
 1. **Disabled by default.** When `PacketTap` is `null` (the default), the send and receive paths pay one null check.
-2. **The payload is not provided by default.** Providing it requires explicitly setting `SshConnectionOptions.PacketTapIncludesPayload = true`,
+2. **The payload is not provided by default.** Providing it requires explicitly setting `SshConnectionOptions.AllowPacketTapPayload = true`,
    and that option's documentation **must** state that it exposes passwords, keys and file contents.
-3. **Payloads of authentication messages are never provided**, even with `PacketTapIncludesPayload = true`: for messages numbered 50–79
+3. **Payloads of authentication messages are never provided**, even with `AllowPacketTapPayload = true`: for messages numbered 50–79
    (the range [RFC 4252](https://www.rfc-editor.org/rfc/rfc4252) reserves for the user authentication protocol, keyboard-interactive prompts and answers included)
    the tap sees metadata only.
    〔Decision〕There is no switch for this — no troubleshooting scenario is worth logging a password,

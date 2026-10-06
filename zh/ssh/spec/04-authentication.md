@@ -641,7 +641,7 @@ sequenceDiagram
 很多服务器同时开放 `password` 与 `keyboard-interactive`，
 且后者的唯一提示就是「Password:」。
 
-〔决策〕**提供 `PasswordCredential.AlsoAnswerKeyboardInteractive`（默认 `true`）**：
+〔决策〕**提供 `PasswordCredential.CanAnswerKeyboardInteractive`（默认 `true`）**：
 当 `keyboard-interactive` 的提示只有一条、且 `echo == false` 时，
 自动用密码作答，不打扰使用者。
 

@@ -148,7 +148,7 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 进程级的 umask 在多线程进程里改不得，不拿它来堵。Windows 上套接字文件沿用所在目录的 ACL（放在用户目录下）。
 
 〔决策〕**路径上已经有文件时默认报错、原样留着**（`ForwardBindFailed`）：那多半是上一次没收拾干净，也可能是别人的套接字。
-`ReplaceExistingSocket = true`（同 `StreamLocalBindUnlink yes`）才先删掉再监听。
+`AllowSocketReplacement = true`（同 `StreamLocalBindUnlink yes`）才先删掉再监听。
 
 〔决策〕**路径太长当场报**（Linux / Windows 108 字节、macOS 104 字节，都含结尾的 0）。
 
@@ -529,7 +529,7 @@ agent 协议没有请求 id，请求可能只写了一半、应答可能还在�
 1. **默认关闭**，必须逐连接显式开启。
 2. **必须支持「只转发指定的密钥」**（`AgentForwardOptions.AllowedKeys`），
    而不是把整个 agent 暴露出去。
-3. **可选的签名确认回调**（`AgentForwardOptions.ConfirmEachSignature`）：
+3. **可选的签名确认回调**（`AgentForwardOptions.ApproveSignature`）：
    每次远端请求签名时问一次使用者。对跳板场景这是唯一能让人安心的做法。
 
 〔决策〕**放行名单按证书里的那把钥比较。** 证书与它的钥用的是同一把私钥：放行了钥就等于放行了它的证书，

@@ -423,9 +423,9 @@ readonly ref struct PacketTapRecord
 **三条硬规则**：
 
 1. **默认不启用。** `PacketTap` 为 `null`（默认）时收发路径上只多一次判空。
-2. **载荷默认不给。** 要给必须显式设 `SshConnectionOptions.PacketTapIncludesPayload = true`，
+2. **载荷默认不给。** 要给必须显式设 `SshConnectionOptions.AllowPacketTapPayload = true`，
    且该选项的文档里**必须**写明它会带出密码、密钥与文件内容。
-3. **认证报文的载荷永远不给**，即使 `PacketTapIncludesPayload = true`：消息编号落在 50–79
+3. **认证报文的载荷永远不给**，即使 `AllowPacketTapPayload = true`：消息编号落在 50–79
    （[RFC 4252](https://www.rfc-editor.org/rfc/rfc4252) 给用户认证协议留的段，含键盘交互的提问与回答）的报文，
    旁路只看得到元信息。
    〔决策〕这一条不提供开关 —— 没有任何排错场景值得把密码打进日志，

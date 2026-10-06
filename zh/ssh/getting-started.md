@@ -271,7 +271,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 
 // ssh-add -t 3600 -c：一小时后自动删除、每次签名都要确认
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
-    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
 ```
 
 - 只接受进程内私钥（`InMemorySshSigner`）；证书加钥暂不支持。
@@ -517,7 +517,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // 默认读 DISPLAY
-        Trusted = false,                        // 默认：对应 ssh -X
+        IsTrusted = false,                      // 默认：对应 ssh -X
         Timeout = TimeSpan.FromMinutes(20),     // Zero = 不过期
     },
 }, ct);
@@ -538,7 +538,7 @@ Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} �
    远端 X 客户端拿假 cookie 连过来，我们核对（常数时间比较）、换成真 cookie，
    才转给本机 X server。对不上就拒绝，而且**连碰都不碰** X server。
 2. **非受信模式（默认）要本机有 `xauth`**，且 X server 支持 SECURITY 扩展。
-   Windows 上通常两者都没有 —— 那里只能用 `Trusted = true`，
+   Windows 上通常两者都没有 —— 那里只能用 `IsTrusted = true`，
    但要清楚那等于把本机显示完全交给远端。
 3. **`Timeout` 两种模式都生效**（OpenSSH 只管非受信）。
    受信模式恰恰更危险，却反而没期限，说不通。长会话显式设 `TimeSpan.Zero`。
@@ -577,7 +577,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // 只转发这一把，其余的对远端不可见
-        ConfirmEachSignature = AskUserAsync,    // 每次签名都问一下人
+        ApproveSignature = AskUserAsync,        // 每次签名都问一下人
         MaxConnections = 4,
     },
 }, ct);
@@ -596,7 +596,7 @@ AgentForwarder fwd = shell.Agent!;              // 随 shell 一起释放
 
 - `AllowedKeys` 非空时，远端列钥时**看不到**名单外的钥（`fwd.KeysHidden` 会计数），
   要名单外的钥签名直接回 `FAILURE`；
-- `ConfirmEachSignature` 拿到的是「哪把钥、注释是什么」，可以弹窗问人，拒了就回 `FAILURE`；
+- `ApproveSignature` 拿到的是「哪把钥、注释是什么」，可以弹窗问人，拒了就回 `FAILURE`；
 - `ADD_IDENTITY` / `LOCK` / `UNLOCK` 这类**会改本机 agent 状态**的消息一律拒绝，
   不转发 —— 远端服务器没有任何理由改我们本机的钥圈。
 

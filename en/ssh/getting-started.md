@@ -273,7 +273,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 
 // ssh-add -t 3600 -c: deleted automatically after an hour, every signature must be confirmed
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
-    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
 ```
 
 - Only in-process private keys (`InMemorySshSigner`) are accepted; adding certificates is not supported yet.
@@ -519,7 +519,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // reads DISPLAY by default
-        Trusted = false,                        // default: corresponds to ssh -X
+        IsTrusted = false,                      // default: corresponds to ssh -X
         Timeout = TimeSpan.FromMinutes(20),     // Zero = never expires
     },
 }, ct);
@@ -540,7 +540,7 @@ Three things worth knowing:
    The remote X client connects with the fake cookie; we check it (constant-time comparison), replace it with the real cookie,
    and only then forward to the local X server. If it does not match, it is rejected, and the X server **is not even touched**.
 2. **Untrusted mode (the default) requires `xauth` locally**, and an X server that supports the SECURITY extension.
-   Windows usually has neither — there you can only use `Trusted = true`,
+   Windows usually has neither — there you can only use `IsTrusted = true`,
    but be clear that this amounts to handing the local display entirely to the remote.
 3. **`Timeout` applies in both modes** (OpenSSH only applies it to untrusted).
    Trusted mode is precisely the more dangerous one, so having no time limit there makes no sense. For long sessions, set `TimeSpan.Zero` explicitly.
@@ -579,7 +579,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // forward only this one; the rest are invisible to the remote
-        ConfirmEachSignature = AskUserAsync,    // ask a human for every signature
+        ApproveSignature = AskUserAsync,        // ask a human for every signature
         MaxConnections = 4,
     },
 }, ct);
@@ -598,7 +598,7 @@ instead **the agent protocol is parsed and then forwarded** — only by parsing 
 
 - When `AllowedKeys` is non-empty, the remote **cannot see** keys outside the list when listing keys (`fwd.KeysHidden` counts them),
   and a request to sign with a key outside the list gets `FAILURE` directly;
-- `ConfirmEachSignature` receives "which key, and what its comment is", so it can show a dialog to ask a human; if declined, `FAILURE` is returned;
+- `ApproveSignature` receives "which key, and what its comment is", so it can show a dialog to ask a human; if declined, `FAILURE` is returned;
 - Messages that **would change the local agent's state**, such as `ADD_IDENTITY` / `LOCK` / `UNLOCK`, are always rejected
   and not forwarded — a remote server has no reason whatsoever to change our local keyring.
 

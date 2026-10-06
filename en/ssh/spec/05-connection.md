@@ -592,7 +592,7 @@ Each signature covers: `string "hostkeys-prove-00@openssh.com"` ‖ `string sess
 The benefit comes later: when operators replace an RSA host key with Ed25519, or rotate keys regularly, the client already knows the new key —— the user does not see "the host key changed, possibly a man in the middle",
 and does not have to delete lines by hand, so that warning regains its weight.
 
-〔Decision〕**The policy decides, and it is off by default**: rotation happens only when the host key policy implements `IHostKeyRotationPolicy` and `UpdateHostKeys` is true (`KnownHostsPolicy.UpdateHostKeys`, default `false`).
+〔Decision〕**The policy decides, and it is off by default**: rotation happens only when the host key policy implements `IHostKeyRotationPolicy` and `AllowHostKeyUpdates` is true (`KnownHostsPolicy.AllowHostKeyUpdates`, default `false`).
 
 〔Decision〕**Only add keys for "known hosts"**:
 - Hosts presenting a certificate (CA-managed) are skipped —— their trust comes from the CA, not from any key in `known_hosts`;

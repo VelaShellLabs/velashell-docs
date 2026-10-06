@@ -590,7 +590,7 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 用处在「之后」：运维把 RSA 主机密钥换成 Ed25519、或者定期轮换时，客户端已经认得新钥 —— 用户不会看到「主机密钥变了，可能有中间人」，
 也不用去手工删行，那条告警才能重新变得有分量。
 
-〔决策〕**策略说了算、默认关**：主机密钥策略实现 `IHostKeyRotationPolicy` 且 `UpdateHostKeys` 为真时才做（`KnownHostsPolicy.UpdateHostKeys`，默认 `false`）。
+〔决策〕**策略说了算、默认关**：主机密钥策略实现 `IHostKeyRotationPolicy` 且 `AllowHostKeyUpdates` 为真时才做（`KnownHostsPolicy.AllowHostKeyUpdates`，默认 `false`）。
 
 〔决策〕**只替「认得的主机」补记**：
 - 出示证书的主机（CA 管理）不做 —— 它的信任来自 CA，不来自 `known_hosts` 里的某一把钥；

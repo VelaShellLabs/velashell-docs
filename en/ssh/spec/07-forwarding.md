@@ -150,7 +150,7 @@ There is a short window between creation and the permission change; putting the 
 the process-wide umask cannot be changed safely in a multithreaded process, so it is not used to close the gap. On Windows the socket file inherits the directory's ACL (keep it under the user profile).
 
 〔Decision〕**If a file already exists at the path, fail by default and leave it alone** (`ForwardBindFailed`): it is most likely left over from last time, but it may be someone else's socket.
-Only `ReplaceExistingSocket = true` (like `StreamLocalBindUnlink yes`) deletes it before listening.
+Only `AllowSocketReplacement = true` (like `StreamLocalBindUnlink yes`) deletes it before listening.
 
 〔Decision〕**A path that is too long fails immediately** (108 bytes on Linux / Windows, 104 on macOS, both including the terminating 0).
 
@@ -531,7 +531,7 @@ the agent protocol has no request ids, so the request may be only half written a
 1. **Off by default**; must be explicitly enabled per connection.
 2. **Must support "forward only the specified keys"** (`AgentForwardOptions.AllowedKeys`)
    instead of exposing the entire agent.
-3. **An optional signature confirmation callback** (`AgentForwardOptions.ConfirmEachSignature`):
+3. **An optional signature confirmation callback** (`AgentForwardOptions.ApproveSignature`):
    ask the user each time the remote requests a signature. For jump-host scenarios this is the only approach that lets people rest easy.
 
 〔Decision〕**The allow-list compares the key inside a certificate.** A certificate and its key use the same private key: allowing the key allows its certificate,

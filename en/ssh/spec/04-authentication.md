@@ -652,7 +652,7 @@ sequenceDiagram
 Many servers enable both `password` and `keyboard-interactive`,
 and the latter's only prompt is "Password:".
 
-〔Decision〕**Provide `PasswordCredential.AlsoAnswerKeyboardInteractive` (default `true`)**:
+〔Decision〕**Provide `PasswordCredential.CanAnswerKeyboardInteractive` (default `true`)**:
 when `keyboard-interactive` has exactly one prompt and `echo == false`,
 answer it automatically with the password, without bothering the caller.
 

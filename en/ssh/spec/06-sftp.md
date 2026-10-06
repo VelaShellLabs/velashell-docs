@@ -364,7 +364,7 @@ Hard-coding 64 × 32 KB = 2 MiB likewise caps at 10 MB/s with a 200 ms RTT.
 | Evaluation | Once every 32 requests, count how many requests in that window had to **wait** for an in-flight slot |
 | Grow | More than half waited → the depth is the bottleneck; double it, up to `SftpOptions.MaxPipelineDepth` (default 256) |
 | Shrink | None waited → shrink to three quarters (not below the starting value). Slots are reclaimed **without blocking**: if they are in use, try again next window rather than stalling callers here |
-| Off | `SftpOptions.AdaptivePipelineDepth = false`: the depth stays at the starting value and memory use is deterministic (in-flight count × block size), at the cost of throughput being capped at "depth × block size ÷ RTT" on high-RTT links |
+| Off | `SftpOptions.IsPipelineDepthAdaptive = false`: the depth stays at the starting value and memory use is deterministic (in-flight count × block size), at the cost of throughput being capped at "depth × block size ÷ RTT" on high-RTT links |
 
 Rationale: computing the depth from the bandwidth-delay product requires estimating bandwidth first, and that estimate is very unstable on a link that also carries other traffic;
 "did requests have to wait for a slot" is a more direct signal that is harder to get wrong — the same idea as the channel window growing when it "runs dry" (`05-connection.md` §3.3).
