@@ -10,7 +10,7 @@
 > **为什么是 v3 而不是更高版本**：v3 是 draft-02，OpenSSH 只实现它，
 > 而 OpenSSH 是绝大多数 SFTP 服务端的实现或行为基准。v4–v6 在真实世界里
 > 几乎见不到；为它们写代码是为不存在的对端付成本。
-> 〔决策〕**只实现 v3**，协商到更高版本时降级到 3。
+> 〔决策〕**只实现 v3**；服务端回的版本不是 3 就不连（更低：差异太大；更高：见 §九）。
 
 ---
 
@@ -40,6 +40,28 @@ sequenceDiagram
 〔决策〕**不自动回退到 `exec sftp-server`**。
 理由：回退等于在服务端管理员明确禁用 subsystem 的情况下绕过它的配置。
 把失败如实报出来（`SftpUnavailable`，并在消息里说明可能是服务端禁用了 sftp 子系统）。
+
+〔决策〕**只有 `subsystem` 请求被拒才报 `SftpUnavailable`。**`session` 通道都没开成（`CHANNEL_OPEN_FAILURE`：服务端 `MaxSessions` 满了、
+管理上禁止；或者本端的通道数 / 窗口预算用尽）原样抛 `SshChannelException`（`ChannelOpenFailed`，带原因码）。
+曾经一律改写成「sshd_config 缺 Subsystem」：用户去改一个本来没问题的配置，也丢了「稍后可以重试」这个信息。
+
+〔决策〕**`SftpOptions` 先核对、再开通道。**单个字段（`MaxInFlight`、`MaxPipelineDepth` 至少为 1，`BlockSize` 不为负）在设值时就抛 `ArgumentOutOfRangeException`；
+跨字段的（`MaxPipelineDepth` 不小于 `MaxInFlight`）在 `ConnectAsync` 开通道之前核对。曾经是 sftp 通道开了才在建流水线时抛，那条通道一直挂在连接上没人关。
+通道的接收窗口（`Channel.WindowPolicy` 的下限）**至少装得下一整个 SFTP 报文**（4 + 256 KiB + 1024 字节），否则同样在开通道之前抛
+`ArgumentException`：报文收齐之前收包循环一个字节都不消费，而窗口只随消费回补 —— 窗口比报文小，就是双方死等、没有任何报错。
+通道的默认窗口（256 KiB）恰好装不下一块 256 KiB 的 `DATA` 应答，所以 `SftpOptions` 自带一个更大的窗口。
+
+〔决策〕**握手有时限**（`SftpOptions.HandshakeTimeout`，默认 30 秒，覆盖 `INIT` → `VERSION`、查 limits、取工作目录），到点以
+`SftpUnavailableException`（`Timeout`）失败。sftp-server 是经登录 shell 起的，启动文件卡住（等输入、挂在连不上的网络盘上）时它永远不会回 `VERSION`；
+曾经只靠调用方的令牌，没给就一直挂着。
+
+〔决策〕**报文长度超上限、而那 4 个字节全是可打印文字时，消息里点明多半是启动文件在往 stdout 输出**（`.bashrc` 之类打印了欢迎语），
+并把那几个字节摆出来。曾经只报「长度超上限」，看不出真实原因。
+
+〔决策〕**连接好好的、通道却在 `VERSION` 之前就关了，就是 sftp-server 没起来**（`Subsystem` 指向的程序不存在、没有执行权限、被 `ForceCommand` 顶替……）：
+报 `SftpUnavailableException`（`CommandFailed`），带上服务端报来的退出码（`ServerExitStatus`；被信号杀掉时为空，消息里写信号名）
+与它在 stderr 上说的最后一段（`ServerErrorOutput`，按对端文本清洗、换行收成一行）。SFTP 通道照旧丢弃 stderr，只是留住最后 1 KiB 当线索；
+退出状态常在 EOF 之后才到，最多再等 2 秒。〔历史〕曾经报「SFTP 通道在还有在途请求时就关闭了」，退出码与那句原话都丢了 —— 而那是唯一的线索。
 
 ---
 
@@ -105,6 +127,11 @@ byte[]   type 相关
 | 105 | `SSH_FXP_ATTRS` | ATTRS |
 | 201 | `SSH_FXP_EXTENDED_REPLY` | 扩展相关 |
 
+〔决策〕**应答的类型要对上请求。**每个请求都声明成功时该收到什么：`OPEN` / `OPENDIR` 收 `HANDLE`，`READ` 收 `DATA`，`STAT` 一类收 `ATTRS`，
+`REALPATH` / `READLINK` / `READDIR` 收 `NAME`，`limits@openssh.com` 收 `EXTENDED_REPLY`，其余只认 `STATUS = OK`。错误状态照旧报 `SftpException`；
+既不是错误状态、也不是该收的类型，就是 `SshProtocolException`（`ProtocolError`）。曾经按「不是错误状态就算成功」：`WRITE` 收到任何非 `STATUS` 的应答
+都被记成已确认（`DurableLength` 失真，续传点跨过没确认的数据），`OPEN` 收到 `DATA` 会把数据当成句柄。
+
 ### 3.3 状态码
 
 | 码 | 名称 | 我们的映射（`SftpException.StatusCode`，类型 `SftpStatusCode`） |
@@ -118,6 +145,7 @@ byte[]   type 相关
 | 6 | `NO_CONNECTION` | `NoConnection` |
 | 7 | `CONNECTION_LOST` | `ConnectionLost` |
 | 8 | `OP_UNSUPPORTED` | `OperationUnsupported` |
+| 10 | `NO_SUCH_PATH`（v4 起） | `NoSuchPath`，与 `NoSuchFile` 一样算「不存在」（`IsNotFound`）—— 同时支持多个版本的服务端在 v3 会话里也可能回它 |
 
 〔重要〕**码 4（`FAILURE`）承载了 v3 里的绝大多数真实错误** ——
 「目录非空」「文件已存在」「磁盘满」「配额超限」在 v3 里全是 4。
@@ -151,7 +179,12 @@ pflags：
 
 〔决策〕**创建文件时的默认权限 0644**，目录 0755，都可配。
 不传 ATTRS 会让服务端用它自己的默认值（通常受 umask 影响），
-结果不可预测 —— 传明确的值。
+结果不可预测 —— 传明确的值。**任何带 `CREAT` 的打开都是这样**：`OpenAsync` 收到的属性里没有权限就补上 0644
+（曾经只有 `OpenWriteAsync` / `OpenAppendAsync` 传，直接用 `OpenAsync` 的都没传）。
+
+〔决策〕**自相矛盾的 pflags 在本地就拒**（`ArgumentException`，不发 `OPEN`）：`TRUNC` / `EXCL` 没配 `CREAT`（draft-02 §6.3 要求一起用），
+或者既不读也不写。只想截短一个已有的文件（.NET 的 `FileMode.Truncate`）：以写方式打开，再 `SetLengthAsync(0)` ——
+照字面配上 `CREAT` 的话，文件不存在时会被建出来。
 
 **打开之后先问一次长度。** 不截断的打开（读、续写、不带 `TRUNC` 的写）拿到 handle 后立刻对它发一次 `FSTAT`，
 得到的大小就是流的 `Length` 的起点 —— `Seek(SeekOrigin.End)`、§5.5 的预读边界、§6.6 续传的前缀都靠它。
@@ -183,12 +216,28 @@ uint32   extended_count —— flags & 0x80000000
 1. **`uid` 与 `gid` 共用一个标志位，`atime` 与 `mtime` 共用一个。**
    要设 mtime 就必须同时给 atime。〔决策〕只想改 mtime 时，
    先 `STAT` 取回当前 atime 一并写回。
-2. **时间是 32 位 Unix 秒**，2038 年会溢出。v3 没有解法，照实现。
-   〔决策〕读到的值按无符号解释可以撑到 2106 年 ——
-   但服务端通常按有符号发，所以**按有符号读**，与 OpenSSH 一致。
+2. **时间是 32 位 Unix 秒**，v3 没有更宽的字段。
+   〔决策〕**按无符号读写**（`uint`）：1970-01-01 到 2106-02-07，与 OpenSSH 一致 ——
+   黑盒核对过：靶机上一个 2040 年的文件，OpenSSH 的 sftp-server 发的是 2208988800，它自带的 `sftp` 显示 2040 年。
+   〔历史〕曾经认为「服务端通常按有符号发」而按有符号读：2040 年的文件读成 1903 年，2038 年之后的时间也写不进去（Q8）。
+   〔决策〕**写出时装不下就抛**（`ArgumentOutOfRangeException`，范围 1970-01-01 到 2106-02-07），不截断：
+   直接截成 32 位的话，范围外的时间被写成别的年份 —— 「保留时间戳」会把它写到服务端。
 3. `permissions` 的高位是文件类型（`S_IFMT`）：
    `0o100000` 普通文件、`0o040000` 目录、`0o120000` 符号链接。
    **v3 没有单独的类型字段，类型只能从这里取。**
+
+〔决策〕扩展属性的 `data` 是二进制，**按原样的字节交出**（`SftpExtendedField.Data`），不按 UTF-8 解成字符串 —— 解了，非法的字节就变了，写回去也不再是原来那串。
+交出去的列表是只读视图，下转型改不动。
+
+〔决策〕扩展属性最多留 1024 对，**多出来的读掉、丢弃** —— 不能读到上限就停：在 `NAME` 应答里，下一项会从剩下的字节中间开始解析。
+不会空转：每一对至少 8 个字节，计数再大，循环次数也被报文长度封住。
+
+〔决策〕**写出时只带认得的标志位**（上表那五个）。stat 回来的属性里可能带着本库不认识的位（v4 起的字段）；原样写回而不写对应字段的话，
+拿 stat 的结果改一项再 `SETSTAT`，发出去的就是一个畸形报文 —— 服务端按那个位去读一个不存在的字段。
+
+〔决策〕**读到不认识的标志位就报协议错误**（`SshProtocolException`，只影响这一次调用）：v3 没定义那些位的字段，
+它们的字节在哪、多长都说不清，接着读就是从错位的地方解析 —— 在 `NAME` 应答里，后面每一项的名字与属性都会是错的。
+v3 的服务端（OpenSSH 的 sftp-server）不会发它们；曾经默默忽略那些位。
 
 ### 4.3 `SSH_FXP_READ` / `SSH_FXP_WRITE`
 
@@ -209,12 +258,20 @@ uint32   extended_count —— flags & 0x80000000
 
 - 每次返回**一批**目录项，不是全部。
 - 返回 `STATUS = EOF` 表示读完。
+  〔决策〕一批要么至少有一项、要么就是 EOF；**连着 16 次回空批**（count = 0）判协议错误 —— 曾经会一直读下去，直到调用方取消。
+- 〔性能〕**预取下一批**：一批到了就把下一个 `READDIR` 发出去，补链接、交给调用方的同时它已经在路上；
+  调用方中途不要了（`break`、取消），那个在路上的请求的结局照样被看过，不留未观察的异常。
+- 〔决策〕**属性里没有权限位的项补一次 `LSTAT`**（拿不到照旧）。没有权限位就分不出是目录、链接还是文件（类型只在权限的高位里，§4.2）——
+  曾经一律当成文件，宿主进不了这样的目录。
 - `longname` 是 `ls -l` 风格的一行文本，**格式未标准化**。
   〔决策〕**不解析 `longname`**，一切信息取自 ATTRS。
   解析它是各家 SFTP 客户端 bug 的经典来源（时间格式、locale、列对齐全都因服务端而异）。
   但**保留原文**供使用者需要时用。
 - `.` 与 `..` **会**出现在结果里。〔决策〕`SftpFileSystem` 层默认过滤掉，
   提供开关。
+- 〔决策〕**名字不合法的项一律丢掉**：空名字、含 `/` 或 NUL 的。目录项只能是一个名字；服务端回 `../x`、`a/b`、
+  `/etc/passwd` 或空串时，拼出来的完整路径指向这个目录以外（或者就是它自己）—— 照着它递归复制、删除，动的就是别处的东西。
+  丢掉的项不交给调用方，也不算错误（一个怪项不该让整个目录列不出来）。
 
 ### 4.5 `SSH_FXP_SYMLINK` 的参数顺序
 
@@ -238,6 +295,10 @@ string   linkpath       ← 在哪里创建链接
 
 这条必须在代码注释里也写清楚，否则将来一定会有人"顺手修正"它。
 
+〔决策〕**建完回读一次**（自检，不是开关）：`linkpath` 上读得到链接就算成了（指向的文字服务端可能规范化过，不逐字比）；
+读不到、而 `targetpath` 上多了一条指回 `linkpath` 的链接，就是服务端按 draft 的顺序解析了 —— 删掉建错的那一条，报错。
+服务端不支持 `READLINK` 时不查。〔历史〕曾经不查：顺序与服务端相反时链接建错地方，而且不报错。
+
 ### 4.6 `SSH_FXP_REALPATH`
 
 用于把相对路径、`~`、`.`、`..` 规范化成绝对路径。
@@ -246,6 +307,19 @@ string   linkpath       ← 在哪里创建链接
 〔决策〕**连接建立后立刻对 `"."` 做一次 `REALPATH`**，
 拿到工作目录作为 `SftpFileSystem.WorkingDirectory` 的初值。
 这是唯一可靠的「用户家目录在哪」的答案 —— 比拼 `/home/{user}` 靠谱得多。
+
+### 4.7 文件名的编码
+
+SFTP v3 的文件名是 `string`，**没有规定编码**（v4 起才定为 UTF-8）。GBK、Shift-JIS、Latin-1 的老服务器、老 NAS、嵌入式设备很常见：
+名字里的字节不是合法的 UTF-8。
+
+〔决策〕**默认按 UTF-8，解不开的字节无损往返。**合法的 UTF-8 照常解；解不开的每个字节 `b`（只可能是 0x80–0xFF）单独变成孤立的低代理
+`U+DC00 + b`，编码时把孤立的 `U+DC80`–`U+DCFF` 还原成那个字节。合法的 UTF-8 永远解不出孤立代理，这个映射不会和真实的名字撞上。
+列出来的名字界面上显示成替换字符，但拿它回去开、删、改名、建链接，到服务端的还是原来那串字节。
+曾经一律宽容解码：解不开的字节变成 U+FFFD，再按 UTF-8 编回去已经是另一串字节 —— 这些文件**打不开、删不掉、改不了名**，链接项被误报成断链。
+
+〔决策〕**可以指定服务端的编码**（`SftpOptions.FileNameEncoding`，如 GBK）：名字照那个编码解与编，显示才对；那种编码下非法的字节不保证往返。
+路径参数、目录项的名字与 `longname`、`READLINK` / `REALPATH` 的结果都走同一套；状态消息与扩展名不是文件名，照旧按 UTF-8。
 
 ---
 
@@ -298,10 +372,20 @@ flowchart LR
 | 判定 | 每发 32 个请求评估一次，数这一窗里有几个请求是**等着**才拿到在途额度的 |
 | 扩 | 超过一半在等 → 深度是瓶颈，翻倍，直到 `SftpOptions.MaxPipelineDepth`（默认 256） |
 | 收 | 一次都没等过 → 收到四分之三（不低于起始值）。收额度**不阻塞**：额度正被占着就下一窗再说，不在这里把调用方卡住 |
-| 关掉 | `SftpOptions.AdaptivePipelineDepth = false`：深度固定在起始值，内存占用确定（在途数 × 块大小），代价是高 RTT 链路上吞吐被「深度 × 块大小 ÷ RTT」封死 |
+| 关掉 | `SftpOptions.IsPipelineDepthAdaptive = false`：深度固定在起始值，内存占用确定（在途数 × 块大小），代价是高 RTT 链路上吞吐被「深度 × 块大小 ÷ RTT」封死 |
 
 理由：按带宽时延积算深度要先估出带宽，而带宽估计在一条还有别的流量的链路上很不稳；
 「有没有等额度」是更直接、也更难估错的信号 —— 与通道窗口按「见底」来扩（`05-connection.md` §3.3）是同一个思路。
+
+〔决策〕**单个流不另设一个与起始深度一样大的上限。**开着自适应时，流自己的写入槽与预读上限取 `MaxPipelineDepth`，
+让管线的在途额度成为唯一的限流点 —— 「有没有等额度」这个信号只在管线额度被用光时才记得到。
+曾经流的上限取 `MaxInFlight`，与管线的起始深度相等：流总是先卡住、管线额度永远空着，
+单文件传输（最常见的用法）的深度从来不长，窗口钉死在起始值。关掉自适应时流的上限就是 `MaxInFlight`。
+
+续传：流水线写的完成顺序不保证与偏移顺序一致，断线时远端长度只是「已确认的最高偏移」。
+`SftpFileSystem.MaxUnconfirmedWriteBytes` 给出单个写入流最多能有多少字节在途（开着自适应时按深度上限算 ——
+断线那一刻深度长到了多少事后无从得知）；只凭远端长度续传时从长度往回退这么多再比对。
+能拿到断线那条流的 `DurableLength` 时用它，不必回退。
 
 **块大小的取法**：〔决策〕从使用者指定的 `SftpOptions.BlockSize` 出发（0 = 不指定），
 取它与下面几项上限的最小值，再夹到 [1, 256 KiB]：
@@ -309,7 +393,7 @@ flowchart LR
 | 上限 | 为什么要算进来 |
 | --- | --- |
 | `max-write-length` | 超长的 `WRITE` 会被拒 —— OpenSSH 收到超长报文直接断开 SFTP 会话，连同别的在途请求一起 |
-| `max-read-length` | 超长的 `READ` 会被截短，而顺序读把短读当成「中间有洞」（§5.5），每一块都整队作废，预读永远建不起来 |
+| `max-read-length` | 超长的 `READ` 会被截短：顺序读要先为缺口补发请求、学到服务端实际给的长度之后才顺（§5.5）；宣告了就一开始按它发 |
 | `max-packet-length` 减 1 KiB | 数据之外还要装下请求头（长度、类型、id、最长 256 字节的 handle、偏移），1 KiB 绰绰有余 |
 | 256 KiB | 本端肯收的报文上限（§2 的 256 KiB + 1024）：一块 `DATA` 应答连同协议头要装得下 |
 
@@ -358,6 +442,17 @@ flowchart LR
 释放时的竞态下也可能是 `ObjectDisposedException`。在途额度只有应答才还得回来，而收工之后不会再有应答；不放的话，
 列目录时并发解析的那一批链接（§8）之类的排队者就永远等下去。
 
+〔决策〕**收工是公开的信号**：`SftpFileSystem.IsConnected` 变假，`Closed`（`Task<Exception>`）以上表的那个原因**成功**完成 ——
+不以异常完成，没人等它时也不会变成未观察的任务异常。这个对象不会自己恢复：使用者看到它就丢掉、在同一条连接上重新 `ConnectAsync`。
+曾经没有这个信号，宿主只能看「对象还在不在」：sftp-server 退出、服务端按 `ChannelTimeout` 关掉闲置通道之后，
+那个会话的文件面板一直坏着，直到整条 SSH 连接重连。
+
+〔决策〕**收工不制造未观察的任务异常。**已经被放弃的请求（等的人取消了）收工时不设异常；放弃与故障赶在一起时，放弃的一方接手看一眼那个故障。
+还没发出去（排在发送锁上）就赶上收工的请求同样放弃：收工已经把故障设在它上面，「没发出去」那条路曾经只撤回账本、不看它。
+握手时等 `VERSION` 的那个任务也一样：握手超时之后流水线才收工，等它的人早走了，故障设上之后就地看一眼。
+文件流的在途写失败时把错误记在流上（之后的写与 `FlushAsync` / 关闭报出带续传点的中断），写任务本身不以异常结束。
+没人看的异常在 GC 时触发 `UnobservedTaskException`，宿主据此写进崩溃日志 —— 一次断线让几十个写同时「崩溃」，崩溃日志里全是其实不是崩溃的记录。
+
 ### 5.5 顺序读的预读
 
 **问题**：文件流的顺序读（`ReadAsync`）若一次只发一个 `READ`、等它回来再发下一个，
@@ -372,8 +467,10 @@ flowchart LR
   只读文件头几个字节的用法不会平白多发一串请求。
 - **不越过已知长度预读**：只对「已知长度之内」的偏移预发；已知长度之外至多一个请求 ——
   用来读到 `EOF`，或者发现文件在打开之后变长了。已知长度来自打开时的 `FSTAT`，读到的数据会把它往后推。
-- **短读**（服务端回的字节少于请求的，而且不是 `EOF`）：交出这些字节，其后已发的请求整队作废 ——
-  它们的偏移与读位置之间隔着一个洞，最简单也最不会错的做法是从读位置重来（§4.3 的循环读语义不变）。
+- **短读**（服务端回的字节少于请求的，而且不是 `EOF`）：交出这些字节，〔决策〕**只为缺口补发请求、插到队首，后面已发的请求照用，窗口不动**（Q11）。
+  整块都在已知长度之内还读不满，说明服务端的读上限比块小（又没宣告 limits）：之后的请求按它实际给的长度发（不低于 4 KiB），缺口也按这个长度切开。
+  缺口那里要是到了文件末尾，补发的会回 `EOF`，照常当读完了（§4.3 的循环读语义不变）。
+  〔历史〕曾经整队作废、窗口回到 1、从读位置重来 —— 对每一块都短读的服务端，吞吐塌到一块 / RTT，已经读回来的后面几块也白读了。
 - **作废的请求不能丢着不管**：它们的应答照样会到，到了就释放（载荷是从池里租的）。
 - **取消只取消这一次等待**：预读请求属于流、不属于某一次 `ReadAsync`；调用方取消一次读，队伍原样留着，下一次读接着用。
 - 读到 `EOF` 或错误状态：整队作废，`EOF` 返回 0，错误照常抛。
@@ -427,11 +524,23 @@ flowchart LR
 （`SftpTransferInterruptedException.DurableLength`），
 让上层不必再去 stat 一次、更不必盲退。
 
+〔决策〕**截短文件（`SetLengthAsync`）时，截断点之后的确认一律作废**，`DurableLength` 跟着回退；截之前先等在途的写落地
+（截断之后才到的写会把文件又撑长、中间留一个空洞）。扩长不动它 —— 服务端补的零不是我们写的数据。
+曾经不回退：之后再断开，报出的续传点会跨过已经被截掉的数据。
+
 ### 6.3 顺序保证的另一条路
 
 〔决策〕同时提供 `SftpWriteMode.Sequential`：
 在途请求数固定为 1，牺牲吞吐换「文件长度就是可信长度」。
 用于那些必须保证任何时刻文件都是前缀完整的场景（例如写配置文件）。
+
+〔决策〕**流水线模式按整块发。**顺序的 `WriteAsync` 把不足一块的尾巴留在本端，与后面的写凑满一块再发；
+`FlushAsync`、释放、读（`ReadAsync` / `ReadAtAsync`）、`SetLengthAsync`、`GetAttributesAsync`、按偏移的 `WriteAtAsync`
+之前都先把它发出去（读要读到写过的内容，截断之后不能被它又撑长，与按偏移的写重叠时先写的要先到）；
+`Seek` 之后接不上的尾巴在下一次写时先发。
+理由：在途写入按**请求个数**限流，每个 `WRITE` 不论大小都占一个名额。曾经每次调用各自按块切 ——
+调用方每次写 256 KiB、服务端的块是 255 KiB（OpenSSH 的 `limits@openssh.com`）时，每次都切成「一大一小」两个请求，
+在途字节少了一半，高 RTT 链路上的上传吞吐跟着掉一半。顺序模式不攒：它的承诺是每次写返回时已经确认落盘。
 
 ---
 
@@ -444,7 +553,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | 同步成员 | 行为 |
 | --- | --- |
 | `Read` / `Write` / `SetLength`（及单字节、`Span` 重载） | 抛 `NotSupportedException`，消息里指明该用的异步版本 |
-| `Flush` | **不阻塞的空操作**（本端没有缓冲）；已知的写入失败照样抛出。要确认落盘用 `FlushAsync` |
+| `Flush` | **不阻塞的空操作**：不发流水线攒着的尾巴（§6.3），也不等确认；已知的写入失败照样抛出。要发完并确认落盘用 `FlushAsync`（释放时也会做） |
 | `Dispose` | **不阻塞**：收尾（等在途写入确认、关句柄）交给后台，立刻返回；看不到收尾的错误（写入中断、`CLOSE` 失败，§6.5），要看就用 `await using` |
 
 `Flush` 保留为不抛的空操作，是因为包装流（`StreamWriter` 之类）在自己的收尾里会同步调用它；
@@ -454,6 +563,12 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 `BeginRead` / `EndRead` / `BeginWrite` / `EndWrite` **照常工作**，都转到异步实现上。
 〔决策〕必须显式重写它们：`Stream` 的默认实现把它们绕到同步的 `Read` / `Write` 上，
 不重写的话，调用方明明走的是异步形态，拿到的却是「只支持异步」的 `NotSupportedException`。
+
+〔决策〕**取消令牌只管「等」，不管已经入队的请求。**流水线写的 `WriteAsync` 返回时 `WRITE` 还在路上：调用方的令牌只用于等写槽
+（以及顺序模式下等这一块的确认），入队的 `WRITE` 不带它，只会以应答或流水线收工（§5.4）结束。`FlushAsync(ct)` 被取消时同样只是不再等，
+抛 `OperationCanceledException`，在途的写照样被确认、记账，之后再 `FlushAsync` 照常冲完。
+曾经入队的 `WRITE` 带着发起它的那一次 `WriteAsync` 的令牌：令牌之后被取消，已经发出的 `WRITE` 照样落盘，本端却不再记账
+（`DurableLength` 偏小），流还被标成写入故障，`FlushAsync` / 关闭抛「传输中断，从 N 续传」而不是取消。与 §5.5「预读请求属于流」是同一个思路。
 
 ### 6.5 关闭：`CLOSE` 的应答要看
 
@@ -468,8 +583,9 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | --- | --- |
 | 在途写入有失败 | 抛 `SftpTransferInterruptedException`（带 `DurableLength`）。`CLOSE` 照发，但它的状态不再看 —— 先发生的才是根因 |
 | 写入都确认了，**可写的流**上 `CLOSE` 回了错误状态 | 抛 `SftpException`（码与服务端原话照 §3.3） |
-| 只读的流上 `CLOSE` 回了错误状态 | 不报 |
-| `CLOSE` 发不出去或等不到应答（通道已断、流水线已坏） | 不报 |
+| 只读的流上 `CLOSE` 回了错误状态 | 不报。〔决策〕既然不报，**关闭就不等 `CLOSE` 的应答**：`CLOSE` 在后台发，句柄额度等应答回来再还 —— 小文件下载省掉一整轮往返。同一条通道上之后的请求排在它后面，服务端按到达顺序处理 |
+| `CLOSE` 发不出去或等不到应答（通道已断、流水线已坏，或超过 `CloseTimeout`） | 不报 |
+| 在途写入超过 `CloseTimeout`（默认 30 秒）还没确认完 | 抛 `SftpTransferInterruptedException`（带 `DurableLength`）；`CLOSE` 照发、句柄额度照还。曾经没有时限：服务端不再应答时关闭一直等下去，关标签页、取消上传都挂住 |
 | 已经关过的流再关（含同步 `Dispose` 之后） | 空操作，不抛 |
 
 〔决策〕**可写的流要看 `CLOSE` 的状态。** 有的服务端（NFS 的延迟写、配额）直到关闭时才报出写入失败；
@@ -514,21 +630,27 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 
 | 扩展 | 用途 | 没有时的行为 |
 | --- | --- | --- |
-| `posix-rename@openssh.com` | **原子**重命名（覆盖目标） | 退化到 `SSH_FXP_RENAME`，**并把这个事实报出来** |
+| `posix-rename@openssh.com` | **原子**重命名（覆盖目标），`RenameAsync(..., overwrite: true)` | 抛 `SftpException`（`OperationUnsupported`），**不退化** —— 普通 `SSH_FXP_RENAME` 在目标存在时失败，悄悄退化等于换了语义；「先删目标再改名」不是原子的，由调用方自己决定要不要 |
 | `hardlink@openssh.com` | 建硬链接 | 抛 `Unsupported` |
 | `fsync@openssh.com` | 强制落盘 | 抛 `Unsupported` |
-| `statvfs@openssh.com` | 文件系统用量 | 抛 `Unsupported` |
-| `limits@openssh.com` | §5.2 | 用保守默认 |
-| `copy-data` | **服务端内**复制，不经过网络 | 退化到「下载再上传」 |
-| `home-directory` | 取指定用户的家目录 | 用 `REALPATH "."` |
-| `expand-path@openssh.com` | 展开 `~` | 用 `REALPATH` |
+| `limits@openssh.com` | §5.2；宣告了 `max-open-handles` 就按它排队：每个开着的文件、目录占一个额度，关了还回来，额度用完时新的 `OPEN` / `OPENDIR` 等着，而不是撞上服务端的上限得到一个随机的「操作失败」 | 用保守默认；句柄不限 |
+| `statvfs@openssh.com` | 文件系统用量：`GetFileSystemInfoAsync(路径)` 交回与 POSIX `statvfs` 一一对应的 11 个字段（顺序已与真 OpenSSH 的 `stat -f` 核对），加上按 `f_frsize`（为 0 时按 `f_bsize`，与 `df` 一致）算出的总容量、空闲、普通用户还能写多少（`AvailableBytes`，上传前预检看这个）、是否只读；字节数溢出时饱和 | 抛 `Unsupported`（看 `HasStatVfs`） |
+| `copy-data` | **服务端内**复制，不经过网络：`CopyFileAsync(源, 目标, 覆盖, 进度)`。目标按源的权限位（rwx）创建；不覆盖时 `CREAT\|EXCL`、覆盖时 `CREAT\|TRUNC`。〔决策〕**按段复制**（默认每段 64 MiB 一个请求）：OpenSSH 的 sftp-server 是单线程的，一个请求复制几个 GB 会把整条 SFTP 通道堵住几分钟；分段之后别的请求插得进来，也有了进度、在两段之间取消得了。源的长度在开始时取一次；服务端没给长度时一个请求复制到 EOF（长度 0）。中途失败或取消时目标留着已复制的部分（与 `cp` 一致）。宿主同一台服务器上的复制走它 | 抛 `Unsupported`（看 `HasCopyData`）；宿主退回「下载再上传」 |
+| `home-directory` | 取指定用户的家目录：`ExpandPathAsync("~用户名…")` 在没有 `expand-path` 时用它 | `~用户名` 报 `Unsupported`；`~`、`~/…` 不需要它（用 `REALPATH "."`，§4.6） |
+| `expand-path@openssh.com` | 展开 `~`：`ExpandPathAsync(路径)` 把 `~`、`~/…`、`~用户名`、`~用户名/…` 整条交给服务端（顺带规范化，已与真 OpenSSH 的 `$HOME` 核对）；不以 `~` 开头的等同 `GetRealPathAsync`。`REALPATH` 本身不展开 `~` | `~`、`~/…` 用登录时的工作目录拼、再 `REALPATH`；`~用户名` 改用 `home-directory` |
+| `lsetstat@openssh.com` | 设属性但**不跟随**符号链接（`touch -h` / `chown -h`）：`SetLinkAttributesAsync`，同步目录时保留链接自身的时间戳 | 抛 `Unsupported`（看 `HasLSetStat`），**不退化**成跟随链接的 `SETSTAT` —— 那会改到目标 |
+| `users-groups-by-id@openssh.com` | 把数字 uid / gid 翻成名字：`LookupUserAndGroupNamesAsync(uid 们, gid 们)`，与问的一一对应、不认识的为 `null`（线上是空串，已与真 OpenSSH 的 `id` 核对）。请求是两个 `string`，各装着一串 `uint32`；应答是两个 `string`，各装着一串 `string`。回的条数对不上报格式不对（不让名字错位安到别的 id 上）；一次最多各 4096 个 | 抛 `Unsupported`（看 `HasUsersGroupsById`）；宿主照旧显示数字 |
+
+〔决策〕**按句柄设时间**（v3 的 `FSETSTAT`，不是扩展）：`SftpFileStream.SetTimesAsync(访问时间, 修改时间)` 在关闭之前用同一个句柄设，
+一次往返；`SetLastWriteTimeAsync(路径, …)` 要先 `STAT` 取回访问时间再 `SETSTAT`（两者共用一个标志位，只给一个会把另一个抹成 1970 年），两次往返。
+设之前先等攒着的与在途的写落地 —— 之后才到的写会把修改时间又改成「现在」。宿主上传时保留时间戳走的就是这一条。
 
 ### 7.2 能力查询是公开 API
 
 ```
 SftpCapabilities Capabilities { get; }
   bool HasPosixRename / HasHardlink / HasFsync / HasStatVfs / HasCopyData ...
-  IReadOnlyDictionary<string,string> RawExtensions { get; }
+  IReadOnlyDictionary<string, ReadOnlyMemory<byte>> RawExtensions { get; }   // 冻结的，改不动
 ```
 
 〔决策〕**能力必须可查，而不只是内部降级。**
@@ -545,8 +667,20 @@ SftpCapabilities Capabilities { get; }
 | 4 | `string` | 扩展名 |
 | 5+ | 扩展相关 | |
 
-`ISftpExtension` 是公开的扩展点（架构 §8 第 10 项），
-让使用者能加厂商私有扩展而不必改库。
+**公开的扩展点**：`SftpFileSystem.SendExtendedAsync(扩展名, 载荷)` —— 本库没有内置的厂商私有扩展（群晖、某些 NAS、插件要用的东西）走这里。
+
+| 应答 | 结果 |
+| --- | --- |
+| `SSH_FXP_EXTENDED_REPLY` | 载荷（request-id 之后的部分）原样交回 |
+| `SSH_FXP_STATUS` OK | 交回空 |
+| `SSH_FXP_STATUS` 其它 | 抛 `SftpException`（`Operation = Extension`，消息带扩展名）；不认识这个扩展是 `OperationUnsupported` |
+
+〔决策〕**扩展点只到「扩展名 + 载荷 → 应答」这一层。**请求照样走同一条流水线：request-id、在途额度、取消之后迟到的应答都由本库管，
+管线的时序约束不交出去（AGENTS 4.1「协议管道永不公开」）。要类型化，在调用方包一层即可 ——
+规划里的 `ISftpExtension` 接口因此不做：接口在「名字 + 字节」之上加不了任何东西。
+
+〔决策〕**不先查宣告**（`SftpCapabilities.RawExtensions`）：有的服务端支持却不宣告，要不要先看一眼由调用方决定。应答是对端给的字节，按不可信输入解析。
+〔已核对〕对真 sftp-server：经它发 `limits@openssh.com`，应答与库内置的解读一致；不认识的名字回 `OperationUnsupported`。
 
 ---
 
@@ -575,6 +709,10 @@ SftpCapabilities Capabilities { get; }
 `LinkTarget` 为 `null`，跟随 `STAT` 失败就按断链处理 —— 一个怪链接不该让整个目录列不出来。
 **流水线本身坏了**（通道断开、收到畸形帧）不在此列，照常抛：那不是这一项的事。
 
+〔决策〕**取单个路径的条目（`GetEntryAsync`）与列目录同一个口径**：先 `LSTAT`，是链接才并发补 `READLINK` 与跟随的 `STAT`
+（普通文件一轮往返，链接两轮）；路径不存在时为 `null`。名字取路径最后一个 `/` 之后的那一段 —— SFTP 的分隔符永远是 `/`，
+不能用本机的路径函数取（Windows 上会把远端名字里合法的 `\` 当成分隔符）。
+
 ---
 
 ## 九 边界与错误速查
@@ -585,7 +723,7 @@ SftpCapabilities Capabilities { get; }
 | handle 超过 256 字节 | `ProtocolError`（draft-02 规定的上限） |
 | 收到未知 `request-id` 的应答 | 〔决策〕忽略 + debug 日志（可能是已取消请求的迟到应答，§5.3） |
 | 收到未知报文类型 | `ProtocolError`（SFTP 层没有 `UNIMPLEMENTED` 机制） |
-| 服务端 version > 3 | 降到 3 继续 |
+| 服务端 version > 3 | 〔决策〕**拒绝**，`SftpUnavailableException`（`ProtocolError`）：draft-02 §4 要求服务端回双方版本里较小的那个，我们发的是 3；回得更大的服务端要么有缺陷、要么会按自己的版本说话（v4 起 ATTRS 结构不同），按 v3 解析就是静默错位。〔历史〕曾经降到 3 继续 |
 | 服务端 version < 3 | 〔决策〕**拒绝**，抛 `SftpUnsupportedVersion`。v0–v2 差异过大，不值得支持 |
 | `READ` 返回的数据多于请求的 length | `ProtocolError` |
 | `READDIR` 返回的 `count` 与实际项数不符 | `ProtocolError` |

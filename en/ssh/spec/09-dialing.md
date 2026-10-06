@@ -45,7 +45,7 @@ If the target is an IP literal, send it as an IP; otherwise send it as a domain 
 
 | Field | Meaning |
 | --- | --- |
-| `Kind` | `Tcp` / `Socks5` / `HttpConnect` / `SshJump` / `Custom` |
+| `Kind` | `Tcp` / `Socks5` / `HttpConnect` / `SshJump` / `ProxyCommand` / `InMemory`; a dialer the caller implemented is always `Custom` |
 | `Target` | The endpoint this hop is trying to reach (`host:port`) |
 | `Succeeded` | Whether this hop succeeded |
 | `Elapsed` | Time spent on this hop |
@@ -54,14 +54,22 @@ If the target is an IP literal, send it as an IP; otherwise send it as a domain 
 The order is **nearest to farthest**: item 0 is the hop closest to the local machine.
 When an inner dialer fails, the outer dialer **preserves** the hop information given by the inner one **as-is**, and only appends its own after it (if it got as far as itself).
 
+〔Decision〕**`ISshTransportDialer` does not ask implementers to declare "what kind am I".** It used to have a public `Kind` member: an implementation that picks its route on every dial
+(direct this time, through a proxy next time — the host's proxy dialer works that way) cannot give a true value and could only record "the last one"; and the member was only read when the dialer served as a proxy's inner dialer (`via`).
+Now only the library's own dialers report a kind, and a dialer the caller implemented is always recorded as `Custom` in the hop information — the only answer that cannot be wrong.
+For the same reason, the host key decision material (`SshHostKeyContext`) dropped `HopKind`, which was never assigned and was always `Tcp`: trust is about the logical host, not how it was reached.
+
 Reason code conventions:
 
 | Situation | `Reason` |
 | --- | --- |
-| The proxy itself cannot be reached | Same as a direct connection (`DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`) |
+| The proxy itself cannot be reached (when dialing the proxy directly: cannot resolve, refused, timed out, unreachable) | `ProxyUnreachable` (retryable); which of them is in `InnerException` (the original `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable`) and in `Hops`. When the proxy is reached through another proxy or a jump host (nesting), the reason that hop reported is kept. 〔History〕This used to be the same as a direct connection, so callers could not tell whether the target or the proxy was down, and the host had to rewrite every proxy failure into `ProxyRefused` |
 | The proxy refuses to forward to the target | `ProxyRefused` |
-| The proxy requires authentication and we have no credentials, or the credentials are rejected | `ProxyAuthRequired` |
+| The proxy requires authentication and we have no credentials | `ProxyAuthRequired` |
+| The proxy rejects the credentials we configured | `ProxyAuthFailed` |
+| The request cannot even be sent locally: the host name does not fit the proxy protocol, the credentials are too long, the `ProxyCommand` shell cannot start | `InvalidConfiguration` |
 | What the proxy says does not conform to the protocol | `ProxyRefused`, with `Detail` stating what was received |
+| The proxy accepts the connection but never answers the handshake, and the connect timer fires | `Timeout` (`Phase` is `Dialing`), with `Hops` recording "reached the proxy + this hop failed" — the same approach as for jump hosts (§2.4), not reported as "TCP connect timed out" |
 
 ### 2.3 No over-reading when reading handshake replies
 
@@ -88,10 +96,16 @@ Therefore:
 - 〔Decision〕**Authentication on a jump host pauses the outer timer too.** Jump host authentication is often waiting for a person (typing a password, reading a one-time code off a phone);
   it runs under the jump host's own authentication timer. Counted against the outer connect timeout, a user spending twenty seconds on a one-time code for the jump host
   would long since have run out a fifteen-second outer connect timeout. The outer connect timeout is designed for network round trips; time spent waiting for a person does not belong in it.
+- 〔Decision〕**Pausing still holds when the jump connection is built by the caller's callback.** Callers that prepare credentials per hop (connecting to ssh-agent first, say) use
+  `DialerChain.Jump(endPoint, (context, ct) => …)`: once the callback has the hop's `SshConnectionOptions` ready,
+  it connects with `context.ConnectAsync(options, ct)` rather than calling `SshConnection.ConnectAsync` directly — the context carries the outer timer in.
+  The callback used to receive only a cancellation token, so the outer timer could not be passed in: the host takes this path for every hop, and typing a one-time code on a jump host for longer than the outer connect timeout got cut off.
 - When the outer timer expires inside a jump hop, the failure is `Timeout` (`Phase` `Dialing`), the message says it timed out while connecting via which jump host,
   or while the jump host was forwarding to the target, and `Hops` marks that hop. 〔Decision〕It is not reported as "TCP connect timed out": the outer connection is indeed still "dialing",
   but what is stuck is the jump host's handshake or forwarding, not the local TCP. If the caller cancelled, that propagates as cancellation, not as a timeout —
   the inner hop sees the same cancelled token, so only the timer itself remembering "did I expire" can tell the two apart.
+- 〔Decision〕After connecting, the time spent in each phase is exposed (`SshConnection.ConnectTimings`: dialing, version exchange, first key exchange, authentication). Key exchange and authentication **include the time spent waiting for a person**
+  (the host key decision, typing a password or one-time code) — the timer pauses during that time, but the elapsed time is recorded as it is: troubleshooting asks "how long did this step actually take".
 
 ### 2.5 Direct TCP: staggered concurrent attempts for multiple addresses (RFC 8305)
 
@@ -104,7 +118,10 @@ otherwise it first resolves the name and gets **all** addresses (it does not do 
    if an attempt in progress **fails, start the next immediately** without waiting out the delay.
 3. **The first to connect wins**: all other attempts still in progress are cancelled; any that happened to connect just before being cancelled are closed right away — an unwanted connection must not linger.
 4. If all fail, the **last** failure is reported, classified as `DnsFailure` / `TcpRefused` / `TcpTimeout` / `TcpUnreachable` (`08-failures.md` §3),
-   with a single `Tcp` entry in `Hops`.
+   with a single `Tcp` entry in `Hops`. 〔Decision〕The classification follows the socket error faithfully: not found, a temporary DNS failure (`EAI_AGAIN`, the most common one when the network is down)
+   and an unrecoverable DNS error → `DnsFailure`; refused → `TcpRefused`; timed out → `TcpTimeout`; network or host unreachable, local network down,
+   host not responding → `TcpUnreachable`; anything else (a local firewall blocking outbound traffic, a local address not available, …) → `Unknown`.
+   Anything unrecognized used to be reported as `TcpRefused`: with the network down, the user saw "connection refused" and went checking the server.
 
 ```mermaid
 sequenceDiagram
@@ -170,8 +187,8 @@ Selecting a method we did not offer is a protocol error.
 | Password length | 1 | 1–255 |
 | Password | N | UTF-8 |
 
-〔Decision〕When the encoded username or password exceeds 255 bytes, **reject locally**; do not truncate.
-The reply is two bytes: sub-negotiation version and status; a non-zero status is judged `ProxyAuthRequired` (credentials rejected).
+〔Decision〕When the encoded username or password exceeds 255 bytes, **reject locally** (`InvalidConfiguration`); do not truncate.
+The reply is two bytes: sub-negotiation version and status; a non-zero status is judged `ProxyAuthFailed` (credentials rejected).
 
 ### 3.3 Connect request
 
@@ -181,7 +198,7 @@ The reply is two bytes: sub-negotiation version and status; a non-zero status is
 | Command | 1 | `1` (CONNECT) |
 | Reserved | 1 | `0` |
 | Address type | 1 | `1` IPv4 / `3` domain name / `4` IPv6 |
-| Target address | 4 / 1+N / 16 | The domain-name form is a one-byte length followed by the name (max 255) |
+| Target address | 4 / 1+N / 16 | The domain-name form is a one-byte length followed by the name (max 255; non-ASCII names are converted to Punycode first, and a name that cannot be converted or is too long is judged `InvalidConfiguration`) |
 | Target port | 2 | Big-endian |
 
 ### 3.4 Reply
@@ -229,12 +246,21 @@ sequenceDiagram
   and an extra round trip on the connection setup path is pure latency.
 - All line endings are `CRLF`; the request ends with an empty line.
 
+〔Decision〕**The host name is validated before it goes into the request, and if it fails the proxy is not contacted at all.** Non-ASCII names are converted to Punycode
+per IDNA (as for SOCKS5 — the request is encoded as ASCII, and encoding them directly would turn them into `?`); after conversion only letters, digits and `.` `-` `_` are allowed;
+a name containing a colon must parse as an IPv6 address and is re-formatted from the parsed address. Otherwise `SshConnectException` is thrown (`InvalidConfiguration`, not retryable).
+Rationale: with the host name pasted verbatim into the request line and the `Host` header, a `\r\n` in it could inject headers into the request sent to the proxy;
+and host names often do not come from whoever wrote the configuration (`ssh://` links, imported sessions, the quick-connect box).
+
 ### 4.2 Response
 
 - Read up to the first empty line (`CRLF CRLF`); response headers are capped at 16 KiB, and exceeding that is judged `ProxyRefused`.
 - A 2xx status code is success; over-read bytes are handed back to the upper layer (§2.3).
-- 407: judged `ProxyAuthRequired` if no credentials are configured; if they are configured (meaning they were rejected) it is likewise judged `ProxyAuthRequired`,
-  with `Detail` carrying the value of the `Proxy-Authenticate` header.
+- 〔Decision〕A 1xx (except 101) is an interim response: skip it and read on to the final response (RFC 9110 §15.2); several interim responses together are still bound by the response header size limit.
+  〔History〕Early versions treated it as a refusal.
+- 407: judged `ProxyAuthRequired` if no credentials are configured; if they are configured (meaning they were rejected) it is judged `ProxyAuthFailed`,
+  with `Detail` carrying the value of the `Proxy-Authenticate` header. 〔Decision〕The two are separate: one means "configure them", the other "correct them"; they used to share `ProxyAuthRequired`,
+  so the host had to tell them apart by whether credentials were configured.
 - Other status codes are judged `ProxyRefused`, with `Detail` carrying the status line.
 - 〔Decision〕When the target port is 22 and the proxy replies 403 / 405 / 501, **give a suggestion directly** in the message:
   "this proxy may only allow 80/443 — please use SOCKS5 instead, or have the server listen on 443".
@@ -245,6 +271,24 @@ sequenceDiagram
 - No NTLM / Negotiate / Digest. They all require multiple round trips and are rare in SSH dialing scenarios;
   users who need them implement their own dialer.
 - Redirects are not followed.
+
+### 4.4 TLS (`DialerChain.Tls`, RFC 8446)
+
+`DialerChain.Tls(options, via)` wraps a TLS layer around **the endpoint** that `via` connects to — it is not a separate hop, and the hop information records the kind of `via`.
+The handshake is done by the BCL's `SslStream`, with the protocol version chosen by the operating system. Two uses:
+
+- **HTTPS proxy**: as the inner dialer of an HTTP proxy, `HttpConnect("proxy", 443, via: DialerChain.Tls())` — the leg to the proxy runs over TLS, so Basic credentials no longer cross the network in clear text.
+- **SSH wrapped in TLS on port 443** (networks that only allow HTTPS, with deep packet inspection): used directly as the connection's dialer, with sslh / stunnel on the server stripping the TLS before handing over to sshd.
+
+〔Decision〕**Certificate validation is strict by default**: by the system's rules (trusted chain, matching name, within validity). When a self-hosted stunnel uses a self-signed certificate,
+pin that certificate's fingerprint with `SshTlsOptions.RemoteCertificateValidation` rather than accepting everything — TLS that accepts everything does not stop a man in the middle
+(SSH's own host key check still applies, but proxy credentials carried inside the TLS are exposed). `SshTlsOptions.ServerName` overrides the SNI and the name checked (for connecting by IP to a certificate issued for a domain).
+
+〔Decision〕**A failed handshake is reported as `TlsFailed`** (dialing phase, with hop information): an untrusted certificate, a mismatched name, or a peer that does not speak TLS.
+When `via` cannot reach the endpoint, `via`'s failure is reported as is (not as a TLS problem); when the connection's timer expires, it is `Timeout`.
+
+〔Note〕On a failed handshake `SslStream` sends its alert with a **synchronous** `Write`, while in-memory streams and jump-host channel streams only support asynchronous writes —
+the resulting `NotSupportedException` would hide the real handshake failure. During the handshake the carrier stream swallows that one kind of failure of a synchronous write (the alert is a courtesy; the connection is torn down right after), and behaves normally after the handshake.
 
 ---
 
@@ -269,7 +313,9 @@ sequenceDiagram
 - The originator address of `direct-tcpip` is filled with `127.0.0.1`, port `0`: we have no real originating socket,
   and fabricating a realistic-looking address would only mislead the server's logs.
 - A rejected channel is judged `ProxyRefused`, with `Detail` carrying the reason code and description from `CHANNEL_OPEN_FAILURE`;
-  a failure to connect to the jump host is thrown as-is, but `Hops` marks the failure as being at the jump hop.
+  a failure to connect to the jump host is thrown as-is, but `Hops` marks the failure as being at the jump hop. 〔Decision〕**When the jump host's own authentication fails, an `SshAuthenticationException` is still thrown**: the per-attempt records and the methods the server offered stay at the top level, and the message names the hop (one already reported this way from a deeper hop passes through unchanged rather than being wrapped again). 〔History〕It used to be rewritten to `SshConnectException`, leaving that structured information only in `InnerException`, so the host treated it as "cannot connect" rather than "authentication failed".
+  〔Decision〕**Only `CHANNEL_OPEN_FAILURE` means "refused to forward".** If the jump host itself drops or violates the protocol while the tunnel is being opened, report its own reason code
+  (`ClosedByPeer` is retryable, `ProtocolError` is not), with `Hops` still marking the forwarding hop. This used to be rewritten to `ProxyRefused` every time, so a dropped connection was described as "the jump host refused".
 - 〔Decision〕The returned stream **owns** the jump connection: when the stream is disposed, first close the channel, then dispose the jump connection.
   The jump connection is not shared with other dials — sharing would make one connection's lifetime depend on another's.
 - When the jump connection drops mid-way, reads on the stream throw the jump connection's failure (**not** end-of-stream, `05-connection.md` §4.4) and writes fail —
@@ -298,11 +344,18 @@ When treating an SSH channel as a bidirectional byte stream:
 - Substitutions in the command line (`ssh_config(5)`): `%h` target host, `%p` port, `%r` username, `%n` original host name, `%%` a percent sign.
 - The command is interpreted by the system shell: `/bin/sh -c` on Unix-like systems, `cmd.exe /c` on Windows.
 - 〔Decision〕**Check the values before substituting `%h` / `%n` / `%r`**: host names may only contain letters, digits and `.` `-` `_` `:` (IPv6),
-  user names only letters, digits and `.` `-` `_` `@`; if anything else is present (shell metacharacters, `%`, whitespace, control characters), nothing is substituted and dialing fails with `ProxyRefused`.
+  user names only letters, digits and `.` `-` `_` `@`; if anything else is present (shell metacharacters, `%`, whitespace, control characters), nothing is substituted and dialing fails with
+  `InvalidConfiguration` (not retryable — retrying changes nothing; the input has to change).
   Host and user names often don't come from whoever wrote the config (an `ssh://` link, an imported session, a quick-connect box); substituted verbatim into a shell command line,
   `x;touch /tmp/pwn`, `x&calc` or `%VAR%` becomes a command that gets executed (the CVE-2023-51385 class).
   Values are rejected rather than escaped: the two shells have different quoting rules, and `cmd`'s are especially hard to get right; legitimate names only need these characters anyway.
-- The program exits before the handshake completes: judged `ProxyRefused`, with `Detail` carrying the exit code and the tail of stderr.
+- 〔Decision〕**Values starting with `-` are not substituted either** (same failure). Every character may be legal and the value can still turn into something else: `nc` / `ncat` / `socat` / `ssh`
+  in the template parse values such as `-e` or `-oProxyUseFdpass` as **options** — argument injection (the same class as Git's CVE-2017-1000117).
+  Legitimate host and user names do not start with `-`.
+- The program exits before connecting (before it has written anything to stdout): judged `ProxyRefused` (`Phase` is `Dialing`), with the message carrying the exit code and the tail of stderr (not truncated, at most 4096 characters),
+  and `Hops` carrying the `ProxyCommand` hop. 〔Decision〕It used to throw an `IOException`, which connection setup classified as "the peer closed the connection", with the message cut to 256 characters —
+  proxy programs often explain the failure only on the last line of stderr, which is exactly the part that was cut. A program that exits with a non-zero code after it has written data means the connection dropped (`ClosedByPeer`); the message carries stderr as well.
+- The local shell cannot start (the program `ComSpec` points to is missing or not executable): judged `InvalidConfiguration` — retrying will not help.
 - When the stream is disposed, close the program's standard input to give it a chance to exit gracefully; if it still has not exited after a short wait, terminate the whole process tree.
 - 〔Limitation, stated honestly〕On Windows, a child process's standard input and output are anonymous pipes, and anonymous pipes do not support overlapped IO:
   asynchronous reads and writes on them are completed by the runtime in a blocking manner on thread-pool threads. This is a platform limitation, not a choice of this library;
@@ -316,23 +369,47 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 
 | `ssh_config` item | Connection parameter |
 | --- | --- |
-| `HostName` / `Port` / `User` | Target endpoint and username (when `User` is absent, use the default username given by the caller) |
-| `IdentityFile` | Read the private keys one by one (`~` and `%d` `%u` `%h` `%r` `%%` expanded; silently skipped if the file does not exist); for encrypted private keys, ask the caller for the passphrase (`PassphraseProvider`), and skip if none is obtained. **A key that cannot be read skips only itself** (unrecognized format, wrong passphrase, no permission to read), and the caller is told the path and the reason via `SshConfigConnectOptions.IdentityFileSkipped`. Within one resolution each file (by full path) is read once, and jump hosts and the target share the same decrypted signer — one KDF run, one passphrase prompt; nothing is cached across calls |
+| `HostName` / `Port` / `User` | Target endpoint and username (when `User` is absent, use the default username given by the caller). In `HostName`, `%h` becomes the name the user typed and `%%` becomes `%` (`Host *.prod` with `HostName %h.example.com`); 〔History〕it used to be expanded only for `Match host` comparisons, and connecting used the literal `%h.example.com`. A `Port` (or the port in `ProxyJump host:port`) that is not an integer in 1–65535 is reported as `InvalidConfiguration`, naming the host and the value (`SshHostConfig.Port` itself yields 22); 〔History〕it used to be passed to the connection options as is, throwing a BCL argument exception |
+| `IdentityFile` | Read the private keys one by one (`~` and tokens expanded, see below the table — the expanded paths are public via `SshHostConfig.ExpandIdentityFiles`, with `none` left out; silently skipped if the file does not exist); for encrypted private keys, ask the caller for the passphrase (`PassphraseProvider`), and skip if none is obtained. **A key that cannot be read skips only itself** (unrecognized format, wrong passphrase, no permission to read), and the caller is told the path and the reason via `SshConfigConnectOptions.IdentityFileSkipped`. Within one resolution each file (by full path) is read once, and jump hosts and the target share the same decrypted signer — one KDF run, one passphrase prompt; nothing is cached across calls |
 | `IdentitiesOnly` | No extra action needed: this library never pulls keys from the agent automatically; which keys are used is determined entirely by the credential list. Keys from the configuration are placed **before** the caller's template credentials (consistent with `ssh` trying `IdentityFile` first) |
 | `Compression yes` | Enable `zlib@openssh.com` in the algorithm list |
 | `ServerAliveInterval` / `ServerAliveCountMax` | Keep-alive policy |
 | `ConnectTimeout` | Connect timeout (`SshConnectionOptions.ConnectTimeout`, §2.4); each jump host uses its own host's configuration |
-| `UserKnownHostsFile` | The host key policy uses that file instead (only the first path if several are given); `none` / `/dev/null` → **no** `known_hosts` is read or written (`KnownHostsPolicy.WithoutFile`: every host counts as unseen, and accepting it records nothing). When `StrictHostKeyChecking` is `ask` / absent and the caller supplied a policy, this item has no effect (see the next row) |
-| `StrictHostKeyChecking` | `yes` → reject unseen hosts; `accept-new` / `no` / `off` → accept and record (a **changed** key is still rejected); `ask` / absent → if the caller supplied `SshConfigConnectOptions.HostKeyPolicy`, use the caller's, even if the configuration sets `UserKnownHostsFile`; otherwise, with `UserKnownHostsFile` set, use that file and ask `AskUnknownHost` about unseen hosts (reject if no ask callback is given), and with neither set, use the default `known_hosts` and reject unseen hosts |
-| `ProxyJump` | Comma-separated jump chain; each jump host is **resolved against the same configuration** (with its own `User`, `Port`, `IdentityFile`); `none` means not used. Which of the caller's credentials a jump host gets: see below |
-| `ProxyCommand` | Proxy command dialer; `none` means not used |
+| `UserKnownHostsFile` | The host key policy uses that file instead (only the first path if several are given; `~` and `%d` `%u` `%h` `%r` `%%` are expanded for this host and user — 〔History〕`%h` / `%r` used to become empty strings, putting every host into one file); `none` / `/dev/null` → **no** `known_hosts` is read or written (`KnownHostsPolicy.WithoutFile`: every host counts as unseen, and accepting it records nothing). When `StrictHostKeyChecking` is `ask` / absent and the caller supplied a policy, this item has no effect (see the next row) |
+| `StrictHostKeyChecking` | `yes` → reject unseen hosts; `accept-new` / `no` / `off` → accept and record (a **changed** key is still rejected); `ask` / absent → if the caller supplied `SshConfigConnectOptions.HostKeyPolicy`, use the caller's, even if the configuration sets `UserKnownHostsFile`; otherwise, with `UserKnownHostsFile` set, use that file and ask `AskUnknownHost` about unseen hosts (reject if no ask callback is given), and with neither set, use the default `known_hosts` and reject unseen hosts. `AskUnknownHost` is handed to the policy only when it asks: under `yes` / `accept-new` it is not called (`spec/03` §5) |
+| `ProxyJump` | Comma-separated jump chain; each jump host is **resolved against the same configuration** (with its own `User`, `Port`, `IdentityFile`); `none` means not used. The first hop is reached through its own `ProxyJump` / `ProxyCommand`; **every later hop is reached through the previous one, and its own `ProxyJump` / `ProxyCommand` is not resolved** (〔History〕it used to be resolved and then discarded: a `ProxyCommand` was approved for nothing, and a cycle in a chain that was never used was still reported); 〔Decision〕a `ProxyJump` consisting only of the host itself (inherited from `Host *.corp` when the bastion forgot `ProxyJump none`) is treated as a direct connection rather than reported as a cycle. Which of the caller's credentials a jump host gets: see below |
+| `ProxyCommand` | Proxy command dialer, **executed only with the caller's approval** (see below); `none` means not used |
+| `CertificateFile` | Certificates, paired with the loaded private keys by the public key inside the certificate; the `key-cert.pub` next to each key is paired automatically too (ssh's default behavior). **The certificate goes before its key**: the certificate is presented first, falling back to the bare key when the server does not trust the CA. A certificate whose key is not among the loaded `IdentityFile`s, or that cannot be read, goes to `IdentityFileSkipped` |
+| `ConnectionAttempts` | How many times to try dialing on failure (one second apart, at most 100): the dialer is wrapped, retrying only the dial itself (TCP, DNS, proxy, jump-host layer), with the jump chain and proxy command redone together; failures after the connection is established are not retried |
+| `SetEnv` / `SendEnv` / `RemoteCommand` | Session parameters (`SshHostConfig.ApplyToShell`): `SetEnv name=value` (several per line and across lines, first one wins) plus the local environment variables selected by `SendEnv` wildcards (`-pattern` is not handled); `RemoteCommand` becomes the command run in the pseudo-terminal (`none` does not count). Values set explicitly in the template are left alone |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | Session parameters (agent and X11 forwarding for shell / exec), not connection parameters. Forwarding turned on by them is requested with `Continue` (`07-forwarding.md` §7.5.8): when there is no local agent / display, or the server refuses, the shell starts normally |
 | Values of `ForwardAgent` | Four forms (`ssh_config(5)`): `yes` → forward the default agent; `no` (default) → do not forward; an agent socket path (with `~` and `%d` `%u` `%h` `%r` expanded) → forward that one; `$ENV_VAR_NAME` → forward the one the variable's value points to, and do not forward when the variable is unset or empty. `yes` / `no` are case-insensitive. 〔History〕It used to accept only `yes`: a configuration that gave a path was treated as `no`, and forwarding silently stayed off |
 | `ForwardX11Timeout` | Validity period of the X11 forwarding turned on by `ForwardX11` (`07-forwarding.md` §7.5.7). `ssh_config` time format: a number followed by `s` / `m` / `h` / `d` / `w`, no unit means seconds, several parts add up (`1h30m`); `0` means no expiry. An invalid value is ignored and the default of 20 minutes applies |
+| `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | Applied to the default algorithm lists in the syntax of §7.2 (both directions together for encryption and MAC); a mistake is `InvalidConfiguration`, naming the host and the reason |
+| `PubkeyAcceptedAlgorithms` (old name `PubkeyAcceptedKeyTypes`) | Applied in the syntax of §7.2 to the signature algorithms the library uses for public key authentication by default; if `ssh-rsa` remains in the result, SHA-1 RSA signatures are allowed (`AllowSha1RsaSignatures`) —— the most common line for old servers, `+ssh-rsa`. Other forms are only validated for now |
+| `LocalForward` / `RemoteForward` / `DynamicForward` plus `GatewayPorts`, `ExitOnForwardFailure`, `ClearAllForwardings`, `PermitRemoteOpen` | Not connection parameters: started after connecting by `SshConfigFile.StartForwardsAsync`, see §7.3 |
+| `AddressFamily` / `BindAddress` / `BindInterface` | The direct TCP dialer only connects to target addresses of that family (`inet` / `inet6`; `any` means no restriction) and connects from the given local address (`BindInterface` takes all addresses of that interface, picking the one of the same family as the target for each attempt). No usable target address is `DnsFailure`; a `BindAddress` that is not an IP address, or an interface that does not exist locally, is `InvalidConfiguration`. Not applied via jump hosts or proxy commands (the local end is not governed by this host's configuration) |
+| `HostKeyAlias` | The host key policy looks up and records under the alias instead of the host name, **without the port** (OpenSSH records the alias itself, not `[alias]:port`, even on a non-22 port —— verified black-box against OpenSSH 10.5); the type preference and host key rotation use the alias too. Also used for `%k` |
+| `GlobalKnownHostsFile` | Read-only global known_hosts files (possibly several): consulted together with `UserKnownHostsFile` on lookup (`@revoked` and `@cert-authority` count too), while recording only writes our own file; unreadable ones are treated as absent. 〔Decision〕Read only when configured; the system directory's default file is not looked up |
+| `IdentityAgent` | Handed to the caller: `SshHostConfig.TryGetIdentityAgent` (`none` → no agent; `SSH_AUTH_SOCK` or unset → the default one; `$VAR` → the variable's value, treated as `none` when unset; a path → `~` and tokens expanded). The library does not create agent credentials for the caller (no implicit fallback, 04 §2.2) |
 
+**Tokens in paths** (shared by the paths of `IdentityFile`, `CertificateFile`, `UserKnownHostsFile` and `ForwardAgent`, `SshHostConfig.Expand`):
+`%d` local home directory, `%u` local user, `%h` host (after `HostName` rewriting), `%r` login user, `%p` port, `%n` the name the user typed,
+`%l` / `%L` local host name (full / first label), `%C` (SHA-1 of `%l%h%p%r`, lowercase hex), `%j` (`ProxyJump`), `%k` (`HostKeyAlias`, or the host when absent), `%%`.
+Unknown tokens are left as they are.
+
+**Two things not handled**: `RequestTTY` —— in this library a shell always has a pseudo-terminal, and running a command without one is a different entry point (`ExecuteAsync`) the caller picks; configuration cannot pick it for them;
+the `%i` token (local uid) —— .NET has no managed API for the uid, and calling a platform function for one token is not worth it.
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;
 picking a deterministic one is better than picking one that depends on ordering details.)
+
+〔Decision〕**A `ProxyCommand` from the configuration runs only with the caller's approval** (`SshConfigConnectOptions.ApproveProxyCommand`), for the same reason as `Match exec` (§7.1):
+configuration files are often copied from elsewhere, synced in, or given by someone else, and one `Host *` line plus one `ProxyCommand …` line means "run a local program before connecting to any host".
+The callback receives an `SshProxyCommandRequest`: the host name and the command line **after expanding `%h` `%p` `%r` `%n`** (expanded for that hop's own host and port), which is what will run.
+With no callback, or when it returns `false`, the mapping fails with `InvalidConfiguration` — **it does not silently fall back to a direct connection**: hosts configured with `ProxyCommand`
+are often unreachable directly, and connecting directly could bypass a proxy the user set on purpose. When `ProxyJump` takes precedence the command is not used, so nothing is asked.
+Callers using `DialerChain.ProxyCommand` directly wrote the command themselves and do not go through this approval.
 
 〔Decision〕Jump chain resolution has a depth limit (8) and detects cycles: a configuration where `a`'s jump host is `b` and `b`'s jump host is `a`
 should produce an error, not infinite recursion.
@@ -351,8 +428,11 @@ on Windows that meant reading and writing a file named `none` in the current dir
 
 ### 7.1 Evaluating `Include` and `Match`
 
+〔Decision〕**A `#` starts a comment only at the start of a line, or when preceded by whitespace and outside quotes**: a `#` inside a word is part of the value (`IdentityFile ~/.ssh/id_#work`),
+while a trailing comment such as `Port 22 # note` is still removed. 〔History〕Early versions treated a `#` anywhere on the line as a comment, cutting `id_#work` down to `id_`.
+
 `Include` is expanded only in `SshConfigFile.LoadAsync` (`Parse` is pure text parsing and does not touch the file system).
-One line may list several paths; `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
+One line may list several paths (whitespace inside quotes does not separate them: write a path with spaces as `"~/my dir/x"`; 〔History〕the quotes used to be removed before splitting on whitespace, cutting it in two); `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
 and wildcard matches are sorted ordinally — directory enumeration order differs between file systems, and under "first value wins" an undetermined order means an undetermined result.
 
 - 〔Decision〕**Expanded in place, as a conditional include.** The included file's contents land at the position of the `Include` line:
@@ -366,6 +446,13 @@ and wildcard matches are sorted ordinally — directory enumeration order differ
   (those blocks applied to every host unconditionally); and settings after the `Include` ended up in the included file's last block.
 - **Cycle detection looks only at the current include chain** (comparing normalized full paths): including the same file from two `Host` blocks is a normal pattern, not a cycle.
   The depth limit is 16: anything deeper is not expanded, and no error is raised — the rest of the configuration remains usable.
+- 〔Decision〕**One load reads at most 256 files** (including the top-level one, `MaxIncludedFiles`); once the budget is spent, further `Include`s are not expanded and no error is raised.
+  Cycle detection looks only at the current chain and the depth limit only bounds depth: when N files `Include dir/*` each other, every chain without a cycle is walked,
+  which is on the order of N!/(N−k)! expansions (about ten million for 10 files).
+- 〔Decision〕**Only regular files are read, at most 1 MiB each** (`MaxConfigFileBytes`); a larger file is skipped entirely. **The size is checked before opening**:
+  device files and FIFOs report a size of 0; `Include /dev/zero` would read forever, and opening a FIFO blocks until someone writes to it —
+  the cancellation token cannot reach either case. Anything of size 0 is never opened (a genuinely empty file has no settings anyway). Reading is still capped,
+  so a file that grows or is replaced after its size was checked cannot be read without limit.
 
 Each `Match` condition has three outcomes: satisfied, not satisfied, and **cannot be evaluated**. It cannot be evaluated when:
 
@@ -373,12 +460,64 @@ Each `Match` condition has three outcomes: satisfied, not satisfied, and **canno
 | --- | --- |
 | An unrecognized condition | Always |
 | `canonical` / `final` | Always — this library does no host name canonicalization and has no "final re-parse" pass |
-| `exec` | When the caller supplied no `SshConfigMatchContext.ExecEvaluator` (by default no command is ever run) |
+| `exec` | When the caller supplied no `SshConfigMatchContext.ExecEvaluator` (by default no command is ever run); when the command has an unknown token, or a substituted value cannot be safely handed to a shell (see below) |
 | `user` / `localuser` | When the context has no remote user name / local user name |
 
 - 〔Decision〕**If any condition cannot be evaluated, the whole block does not apply — negated or not.** "Cannot be evaluated" used to count as "not satisfied", and a leading `!` turned it into "satisfied":
   `Match !exec "…"` applied to every host when commands were not run, which is exactly the case the configuration's author wanted to exclude. Cannot be evaluated means cannot be evaluated; a `!` does not make it true.
 - Conditions are ANDed; a `Match` with nothing after it does not apply.
+- 〔Decision〕**The `Match exec` evaluator is asynchronous and receives an `SshMatchExecRequest`**: the command as written, the command with `%h %n %r %u %%` expanded by the library (`ExpandedCommand` — run that one),
+  and the host and users; the cancellation token is passed along. Substituted values pass the same allow-list as `ProxyCommand` (end of §7); if one is unsafe or a token is unknown, the condition is undecidable and the evaluator is not asked.
+  A context with an evaluator is resolved with `ResolveAsync`; the synchronous `Resolve` rejects it outright instead of silently not running it.
+  〔History〕It used to be a synchronous `Func<string, bool>` given only the raw command, with no token and no host or user: callers substituting `%h` themselves were back in the CVE-2023-51385 class of problem.
 - **`Match host` compares against the host name after `HostName` rewriting** (if an earlier block set `HostName`, that is used, with `%h` replaced by the name the user typed);
   `Match originalhost` and `Host` blocks compare against the name the user typed. `Match host` used to compare against the typed alias every time, so blocks written for the real host name never matched.
-- `CreateConnectionOptionsAsync` knows only the host name when evaluating, so blocks with `user` / `localuser` / `exec` conditions do not apply on that path.
+- `CreateConnectionOptionsAsync` knows the host name and the local user name when evaluating, so `localuser` is evaluated normally; when `ProxyJump bob@jump` names the jump user, `user` is evaluated normally for that hop.
+  The target's remote user is known only after the configuration has been resolved (`User` itself lives in the configuration), so blocks with a `user` condition do not apply to the target; this path runs no commands, so `exec` is always undetermined.
+  〔History〕This path used to pass only the host name, so `localuser` could never be evaluated on it.
+
+### 7.2 Algorithm list syntax (`SshAlgorithmSpec`)
+
+The four algorithm lists of `ssh_config` and the host's "custom algorithm lists" in a connection profile share one parser (`SshAlgorithmSpec.Apply` / `ApplyTo`):
+
+| Form | Result |
+| --- | --- |
+| `+a,b` | Appended after the defaults (names already in the defaults are not repeated) |
+| `-a,b` | Removed from the defaults; `*` / `?` wildcards allowed (case-sensitive, as in the protocol) |
+| `^a,b` | Moved to the front, with the remaining defaults following in their original order |
+| `a,b` | Replaces the list entirely |
+| Blank | The defaults as they are |
+
+Names are separated by commas or whitespace; duplicates count once.
+
+〔Decision〕**Which names may be written follows `SshAlgorithmCatalog`.** Implemented names are accepted (including legacy ones that are off by default —— that is exactly how `+ssh-rsa` is used);
+mistakes throw `SshAlgorithmSpecException` with a structured reason: `Empty` (no names), `Unknown`, `Unimplemented` (known but not implemented:
+CBC, 3des, group1 and the like can never be agreed), `NothingLeft` (everything removed). **A removal entry without wildcards must still be a known name**:
+a misspelled `-chacha20-poly1305` (missing `@openssh.com`) removes nothing while the user believes it is off.
+〔History〕This parser used to exist only in the host, so these keys had no effect when importing `~/.ssh/config`.
+
+### 7.3 Forwarding keys (`StartForwardsAsync`)
+
+`SshHostConfig.GetForwards()` parses the three keys into structured endpoints (`SshConfigForward`); unlike other keys these three **accumulate**: every line is a forward.
+With `ClearAllForwardings yes` the list is empty.
+
+| Form | Meaning |
+| --- | --- |
+| `8080` / `127.0.0.1:8080` / `[::1]:8080` | Listening port (optionally with an address; IPv6 in brackets) |
+| `*:8080` / `:8080` | Listen on all interfaces |
+| A side containing `/` | A Unix socket path (the same test ssh uses) |
+| `RemoteForward port` (no target) | Remote dynamic forwarding (`07-forwarding.md` §4.6) |
+| Port `0` | Assigned by the system (local) or the server (remote); the forwarder reports the actual port |
+
+Mistakes (a missing side, a port out of range, a target without a port, a socket for dynamic forwarding…) are `InvalidConfiguration`, with the original line in the message.
+
+`SshConfigFile.StartForwardsAsync(connection, config, onFailure)` starts them all after connecting and returns the forwarders that started (disposed by the caller):
+
+- 〔Decision〕**All forms are checked first**; if one is wrong, none starts —— that is a configuration error, not "this one failed to start".
+- Local / dynamic forwards without a listening address bind to **loopback**, or to all interfaces with `GatewayPorts yes`; `localhost` is loopback, `*` is all interfaces.
+  The listening address of a remote forward is passed to the server as-is (`localhost` when omitted).
+- The allowlist for remote dynamic forwarding comes from `PermitRemoteOpen`. 〔Decision〕**When the config omits it, it is `any`** (OpenSSH's default): unlike the library API, which requires an explicit list (§4.6),
+  a `RemoteForward port` written into the config is itself the config author's explicit choice; `any` / `none` / a list mean what they say.
+- 〔Decision〕**`ExitOnForwardFailure yes`: if one forward fails to start, everything already started is torn down and the whole call fails** (`SshForwardException`, `ForwardSetupFailed`, with the line in the message) ——
+  scripts and automation need exactly "don't run if a required forward is not up". Without it the failure goes to `onFailure` and the rest start as usual.
+- Combinations the library does not support yet (the server listening on a socket with a local TCP target, or the reverse) are handled as "this one failed to start".

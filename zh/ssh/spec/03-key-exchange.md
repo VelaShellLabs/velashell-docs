@@ -117,6 +117,11 @@ sequenceDiagram
 提前在这里报，错误指向的是配置本身。
 主机密钥算法名**不在这里查**：它们由主机密钥的解析与验签把关（§5.3），未知类型在那里有明确的错误。
 
+〔决策〕**每条清单在设值时抄一份只读的存下来**，之后调用方改自己手里那份不影响已经交出去的清单。
+曾经原样存下调用方给的集合：传一个 `List` 进来、校验之后再改，连接把这份清单存进重协商的上下文，
+下一次重协商用的就是改过的、没校验过的清单；`SshAlgorithmSet.Default` 里的数组下转型就能改，加密与 MAC 两个方向还共用同一个数组。
+设成 `null` 当场抛 `ArgumentNullException`。也因此 `SshAlgorithmSet` 的相等比较按清单内容（含顺序）而不是按引用。同样的规矩也用在 `AgentForwardOptions.AllowedKeys` 与 `SftpFileAttributes.Extended` 上。
+
 ### 2.3 藏在 `kex_algorithms` 里的三个指示符
 
 这三个名字**不是密钥交换方法**，是塞在同一个列表里的标志位。
@@ -176,8 +181,8 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 > 编号 30/31 是**方法专用**的，不同 KEX 方法可以赋予不同含义
 > （见 `Protocol/SshMessageNumber.cs` 的注释：30–49 刻意不进全局枚举）。
-> 我们支持的方法恰好都用 30/31 这一对，但 `diffie-hellman-group-exchange-*`
-> 多了一组前置报文，见 §3.5。
+> 我们支持的方法几乎都用 30/31 这一对，只有 `diffie-hellman-group-exchange-*`
+> 多了一组前置报文、之后换成 32/33，见 §3.5。
 
 ### 3.2 `curve25519-sha256`（RFC 8731）
 
@@ -211,6 +216,9 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 - **必须验证对端公钥点在曲线上**且不是无穷远点。
   .NET 的 `ECDiffieHellman.ImportSubjectPublicKeyInfo` / `ECParameters` 校验会做这件事，
   **但必须确认异常被正确翻译成协议错误而不是漏出去**。
+  〔决策〕**导入之前库自己先查一遍**：两个坐标都小于 p，且满足 y² = x³ − 3x + b (mod p)（SEC 2 的三条曲线，a 都是 −3）。
+  平台那一层各是各的（Windows 的 CNG、Linux 的 OpenSSL、macOS 的 Apple），曾经只在 Windows 上验证过；
+  坐标不小于 p 的编码与减去 p 之后的点同余、方程照样成立，要单独拦。全零（无穷远点写不出来）代入方程得 0 = b，一并拒掉。
 - 〔注意〕nistp521 的坐标是 66 字节（521 位），`0x04 ‖ X ‖ Y` 共 133 字节。
   按 64 或 65 字节假设写死的实现会在这条曲线上崩掉。
 
@@ -231,8 +239,9 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 ### 3.5 `diffie-hellman-group-exchange-sha256`（RFC 4419）
 
-> **实现状态（2026-09-25）**：**尚未实现**。它不在默认清单里，密钥交换工厂也没有注册它，
-> 放进清单会被连接前的校验拒绝（§2.2）。下面是实现它时要照的规格。
+> **实现状态（2026-10-06）**：**已实现**（`DiffieHellmanGroupExchange`），在默认清单里排在椭圆曲线之后、DH 标准群之前 ——
+> 客户端的顺序为准，只有别的都谈不成时才会选中它。已对真 OpenSSH 10.3 核对（首次交换与重协商）；
+> OpenSSH 10 起服务端默认不开 DH 那几种，互通环境用 `scripts/ssh/interop/kex-gex.sh` 追加进服务端清单。
 
 **比其它方法多两个报文**，因为群是服务端按客户端要求现给的：
 
@@ -248,10 +257,17 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 - 〔决策〕`min = 2048`、`n = 3072`、`max = 8192`。
   **不接受服务端给出小于 2048 位的 `p`** —— logjam（CVE-2015-4000）之后 1024 位不可接受。
-- **必须校验** `p` 是素数、`g` 在合理范围、`p` 的位数落在我们请求的 `[min, max]` 内。
-  素性检验用 Miller-Rabin（BCL 没有直接 API，`System.Numerics.BigInteger` 上自己实现，
-  轮数 ≥ 64）。〔决策〕这一步**可缓存**：同一个 `(p, g)` 通常被服务端复用，
-  按 `SHA-256(p ‖ g)` 缓存检验结果，避免每次连接都花几十毫秒。
+- **必须校验** `p` 是素数、`g` 在合理范围（`1 < g < p-1`）、`p` 的位数落在我们请求的 `[min, max]` 内。
+  先查便宜的（位数、奇偶、`g` 的范围），再做素性检验。
+- 素性检验用 BouncyCastle 的 `Primes.HasAnySmallFactors` 与 `Primes.IsMRProbablePrime`（Miller-Rabin，随机底，**64 轮**，
+  合数蒙混过关的概率 ≤ 4⁻⁶⁴）。〔决策〕**不自己写 Miller-Rabin** —— BCL 没有这个 API，BC 有（ssh 库 AGENTS 3.3「不自己写密码学原语」）。
+- 〔决策〕素性检验是这一种方法真正的成本：BC 单线程跑 64 轮，3072 位约 2 秒、8192 位半分钟以上。三件事把它压下来：
+  1. **各轮并行**：每轮一个独立的随机底，按核数分给线程池（每次调 `IsMRProbablePrime(p, random, 1)`）；
+  2. **与往返重叠**：收到 `GEX_GROUP` 就在后台起跑，同时发 `GEX_INIT`、等 `GEX_REPLY`；算共享密钥之前才等它的结论；
+  3. **缓存**：检验过的 `p` 按 `SHA-256(p)` 记在进程里（上限 64 个，满了清空），服务端复用同一个群时不再检验。
+     只记「是素数」—— 不是素数的连接本来就失败了。
+
+  对真 OpenSSH（3072 位的群）整次连接约 0.4–0.5 秒。
 - `H` 的输入里**包含** `min ‖ n ‖ max ‖ p ‖ g`，见 §4.2。
 
 ### 3.6 后量子混合：`mlkem768x25519-sha256` 与 `sntrup761x25519-sha512`
@@ -270,6 +286,8 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
   正是为了避开 `mpint` 的前导零问题。**写错这一条，表现同样是概率性签名失败。**
 - ML-KEM 在 .NET 11 的 BCL 里有（`System.Security.Cryptography.MLKem`）；
   sntrup761 没有，需要自实现或用 BouncyCastle。
+  〔决策〕`MLKem.IsSupported`（Windows 的 CNG、OpenSSL 3.5 起）时 ML-KEM-768 走 BCL，否则退回 BouncyCastle；
+  两种实现互通（一边生成、另一边封装）有用例钉住。曾经一律走 BouncyCastle。
   〔决策〕**M1 先只做 `mlkem768x25519-sha256`**；sntrup761 放到 M5，
   因为 OpenSSH 9.9+ 已经把 ML-KEM 排在前面，sntrup761 只是对 8.5–9.8 的兼容。
 - `sntrup761x25519-sha512@openssh.com` 是同一算法的旧名（OpenSSH < 9.9 用它）。
@@ -365,6 +383,10 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 外层 string 的内容是「`mpint r` 后接 `mpint s`」的拼接，
 而不是 r、s 直接拼成定长字节。DER 编码同样不对。
 
+〔决策〕**签名 blob 必须恰好是这两个字段，后面多一个字节都不作数**（ECDSA 内层的两个 mpint 之后同样如此）；
+**签名算法必须是这把钥能出的那一类**（P-256 的钥不验 `ecdsa-sha2-nistp384` 的签名，RSA 的钥不验 `ssh-ed25519` 的）。
+〔历史〕早期外层不看末尾，绑定也只靠「这把钥有没有对应的原生对象」间接成立。
+
 ### 5.3 验证顺序（顺序本身是安全属性）
 
 ```mermaid
@@ -391,6 +413,7 @@ flowchart TD
    放在验签前是为了不给弱密钥任何计算资源。
 3. **策略裁决独立计时。** 〔决策〕`IHostKeyPolicy.EvaluateAsync` 的耗时
    **不计入 `ConnectTimeout`**，由独立的 `HostKeyDecisionTimeout`（默认无限）约束。
+   策略自己抛的取消（裁决计时器没到点、调用方也没取消：用户关掉了询问框）不是超时，报 `Aborted`（`08-failures.md` §2.1）。
 
    理由：这是直接冲着一个现实缺陷去的 —— 交互式客户端在这里要弹窗问用户，
    而弹窗摆着的时间如果算进连接超时，用户点完「信任」这一轮已经被判死，
@@ -422,7 +445,17 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 | `KeyBlob` / `KeyType` / `KeyBits` | 原始材料 |
 | `Sha256Fingerprint` / `Md5Fingerprint` | 展示用。SHA-256 是 base64 无填充，与 OpenSSH 一致 |
 | `Key.IsCertificate` / `Key.Certificate` | CA 签发的主机证书（§5.5）。证书的指纹是**证书里那把钥**的指纹，与 `ssh-keygen -l` 一致 |
-| `RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图。它对人眼比对确实有效 |
+| `Key.RandomArt` | 〔决策〕提供 OpenSSH 风格的 ASCII 指纹图（算法见下）。它对人眼比对确实有效 |
+
+**指纹图（`SshPublicKey.RandomArt`）的画法**，与 `ssh-keygen -lv` 逐字节一致（用例拿真 `ssh-keygen` 的输出比对）：
+
+- 输入是 SHA-256 指纹的 32 字节摘要（与 `Sha256Fingerprint` 同一个：证书画的是证书里那把钥）。
+- 画布 17 列 × 9 行，每格一个计数，起点在正中（第 8 列、第 4 行，从 0 数）。
+- 按字节顺序，每个字节从最低位起取四组 2 位：第 0 位为 1 往右、为 0 往左；第 1 位为 1 往下、为 0 往上 ——
+  每一步都是斜着走。撞墙时那个方向不动（坐标夹在 0–16、0–8 之间）。走到的格子计数加 1。
+- 计数 0–14 依次画成 ` .o+=*BOX@%&#/^` 里的一个字符，更多的也画 `^`；起点画 `S`、终点画 `E`（重合时画 `E`）。
+- 上框是 `+`、居中的 `[类型 位数]`（`ED25519 256`、`ECDSA 384`、`RSA 3072`）用 `-` 补到 17 个字符、`+`；
+  居中时左边取 `(17 − 长度) / 2` 向下取整，其余补在右边。下框同样居中 `[SHA256]`。左右两边是 `|`。行与行之间用 `\n`。
 
 `SshHostKeyVerdict` 只能由四个工厂成员得到：`Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`。
 **拒绝必须带原因文本**，它会原样进 `SshConnectException.Message` ——
@@ -445,6 +478,30 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 `KnownHostsPolicy` 的另外两条：取反模式（`!pattern`）对上时**整行**都不算这台主机
 （`*.corp,!untrusted.corp` 不能经 `*.corp` 把密钥信给 `untrusted.corp`）；
 追加记录前先看文件末尾有没有换行，没有就补一个 —— 否则新记录接在最后一行后面，两条一起坏掉。
+〔决策〕行首的标记只认 sshd(8) 定义的 `@revoked` 与 `@cert-authority`（大小写照原样），**认不出的整行跳过** ——
+把 `@revoked` 写成 `@revoke` 想吊销一把钥时，按普通受信行去用就是让这把钥对模式匹配到的所有主机都成了「已知」。
+〔决策〕查询与写出时主机名**一律小写**（与 OpenSSH 一致：它写之前先小写化，散列行算的就是小写名字的 HMAC）。
+原样拿去算的话，用户填的是大写时散列行一条都对不上 —— 有中间人时「密钥变了」降级成「没见过，要信任吗」，
+类型偏好的保护也一并失效；本库写出的散列行也就读不回 OpenSSH 那边。
+〔决策〕**主机名里有 `known_hosts` 另有含义的字符时不写**（`KnownHostsFile.IsRecordableHost`）：`,` `*` `?` `!` `[` `]` `#`、空白、
+控制字符，以及开头的 `@` `|`。主机名那一栏本身是一张模式表，`x,*` 写进去这把钥就对所有主机生效；而主机名可能来自外部启动链接、
+`ssh_config` 的 `HostName`。`FormatEntry` / `AppendAsync` 抛 `ArgumentException`；`KnownHostsPolicy` 在「信任并记住」时遇到这样的名字，
+**这次连接也不放行**（`InvalidConfiguration`）—— 记不下来就不该悄悄当成「只信这一次」。散列行同样拒绝：这样的名字本来就不是一台主机。
+〔决策〕**读写 `known_hosts` 失败报 `HostKeyStoreFailed`**（`KnownHostsFile.LoadAsync` / `AppendAsync` 抛 `SshConnectException`，原异常在 `InnerException` 里）。
+读不出来时没法判断认不认识这台主机，连接不放行 —— 当成「没见过」去问，等于在真有记录的时候把一把来路不明的钥递给用户去点「信任」。
+〔决策〕**平时只追加，删记录另走一条改写路径**（Q4）：只有两个场合删 —— 「密钥变了」、使用者确认是重装之后一键删掉旧的记录
+（`KnownHostsPolicy.RemoveHostKeysAsync`，报错文案让人手工去做的那件事；本库从不自己删，「变了」的裁决照旧是拒绝），
+以及主机密钥轮换时删掉服务端不再出示的旧钥（[spec/05 §6.4.1](05-connection.md)）。两者都落到 `KnownHostsFile.RemoveHostKeysAsync`：
+- **只动专属于这台主机的记录**：散列行（一行只代表一个名字）对上了整行删；明文行把这台主机的名字拿掉 —— 一行记着几个名字（`host,10.0.0.5`）时别的名字照旧受信，名字拿光了才整行删。
+  `@revoked`、`@cert-authority`、带通配或取反的行不动（它们管的不止这一台）；别的行连同换行符原样保留。给了指纹只删那几把。
+- **临时文件 + 原子替换 + 冲突重试**：新内容先写进同一目录下的临时文件；替换之前再读一次原文件，与改写所依据的不一样（多半是别的进程刚追加了一条）就按新内容重来，
+  最多 5 次（Windows 上文件正被别的进程开着也算冲突）；一样才原子地换上去，Unix 上权限照旧。中途失败原文件不受影响；没有可删的时文件一个字节都不动。
+  比较与替换之间仍有一个极短的窗口，那时追加进来的一条会丢 —— 所以平时不改写。〔历史〕曾经只追加、从不改写。
+
+〔决策〕**「信任并记住」时写不进去，这次连接照常进行**（与 OpenSSH 一样只是提醒）：信任已经给了，只是没记下来。
+`PersistAsync` 抛出的异常里，取消照实抛出；本库别的原因（上一条的 `InvalidConfiguration`）是策略有意不放行，也照实抛出；
+其余 —— `HostKeyStoreFailed` 与调用方策略自己的异常 —— 记在 `SshConnection.HostKeyPersistFailure` 上（经跳板时记在那一跳自己的连接上），下次连接还会再问。
+曾经整条连接因此失败，报的还是「对端关闭了连接」、判为可重试。
 
 ### 5.5 主机证书（`*-cert-v01@openssh.com`）
 
@@ -467,6 +524,10 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 - 协商出证书算法时 `K_S` 必须是证书，协商出普通算法时 `K_S` 必须不是 —— 不符即 `HostKeyRejected`；
 - RSA 长度下限看的是**证书里那把钥**（它的类型串是 `ssh-rsa-cert-v01@openssh.com`，按类型串比 `ssh-rsa` 会让检查落空）。
 
+〔决策〕**询问回调与「没见过时怎么办」（`UnknownHost`）只能二选一。** 给了询问回调（构造函数的 `askUnknownHost`）又设成
+`Reject` / `AcceptAndPersist`，回调永远不会被调用 —— 设值时就抛 `ArgumentException`，不再静默忽略回调；不认识的取值抛
+`ArgumentOutOfRangeException`。`ssh_config` 那一路照此只在「问」的时候把调用方的询问回调交给策略（`spec/09` §7）。
+
 **`KnownHostsPolicy` 的裁决**（按顺序，前一条成立就不看后面）：
 
 1. 对上这台主机的 `@revoked` 行里，钥等于证书里那把钥、整张证书或签发它的 CA 公钥之一 → `Revoked`。
@@ -476,7 +537,9 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
    - CA 签名验得过：签名覆盖从类型串到签发 CA 公钥（含）的全部字段；
      签名算法限 `ssh-ed25519`、`ecdsa-sha2-nistp256/384/521`、`rsa-sha2-256`、`rsa-sha2-512` ——
      〔决策〕SHA-1 的 `ssh-rsa` 签名不认；CA 公钥本身不能是证书；RSA 的 CA 至少 2048 位；
-   - 当前时刻在 `[valid_after, valid_before)` 里；
+   - 当前时刻在 `[valid_after, valid_before)` 里（两端都按原始的 uint64 秒数比。字段可以取到 9999 年以后的值，
+     那是合法的，验证不许因此抛异常：换算成时刻给人看时，晚于 9999 年末的 `valid_before` 当作不限，
+     `valid_after` 取可表示的最晚时刻）；
    - `valid principals` 非空且含被连的主机名（逐字比较，不区分大小写，不做通配）；
    - 没有 critical option（主机证书没有定义任何一个，不认识的 critical option 必须拒绝）。
 
@@ -520,6 +583,8 @@ Terrapin 攻击的原理是：握手期间中间人可以**插入或删除**报�
    - **首次 KEX 期间收到任何非 KEX 相关的报文（含 `SSH_MSG_IGNORE`、
      `SSH_MSG_DEBUG`、`SSH_MSG_UNIMPLEMENTED`）一律断开。**
      只管首次 KEX —— 重协商期间这几种报文是合法的普通报文。
+   - **对端的第一个报文必须就是 `KEXINIT`。**读它的时候还不知道会协商出严格 KEX，前面的 `IGNORE` / `DEBUG`
+     只能先照 RFC 跳过；协商出严格 KEX 之后回头追究，跳过过就断开（`ProtocolError`）。
    - **每次 `SSH_MSG_NEWKEYS` 之后，双向序号归零** —— 包括每一次重协商。
 
 〔注意〕按「这一次 KEXINIT 里有没有标记」逐次重算是错的：对端重协商时不再带标记，
@@ -578,16 +643,32 @@ K_x = HASH(K ‖ H ‖ "X" ‖ session_id)
 > 接住对端发起的、我们主动发起的、以及两边同时发起的。
 > 阈值落在 `SshRekeyPolicy`，默认开着。
 
+〔决策〕**认证期间对端发起的重协商就地做完。**用户找动态码花了几分钟，服务端按时间的 `RekeyLimit` 就会在认证中途发 `KEXINIT`。
+那时只有认证器一个读者、一个写者，交换直接在建连的那条传输上跑（钉住首次的主机密钥，§8.4），做完接着读在途请求的应答 ——
+它在交换之后、用新密钥到来；认证成功之后挂上的延迟压缩按最新一次的协商结果来。
+曾经 `KEXINIT` 被当成意外的报文，连接以协议错误失败。
+
 〔决策〕我们主动触发的阈值：
 
 | 条件 | 默认值 | 理由 |
 | --- | --- | --- |
 | 收发字节数 | **1 GiB**（任一方向） | RFC 4253 §9 的建议 |
-| 时长 | **1 小时** | 同上 |
+| 时长 | 〔决策〕**默认不看**（显式给 `maxInterval` 才看，下限 1 分钟） | OpenSSH 的客户端与服务端默认也只按数据量换钥（`ssh -G` 是 `rekeylimit 0 0`，`sshd_config` 默认 `RekeyLimit default none`）。处理不好客户端发起重协商的老设备上，按时长换钥等于定时断线：我们的 `KEXINIT` 发出去之后闸门已关、收不回，等到时限自判超时（Q1）。〔历史〕曾经默认 1 小时 |
 | AES-GCM 的 invocation counter | 接近 2⁶⁴ 时**强制** | 计数器回绕会重用 nonce，那是灾难性的 |
+| 同一套密钥下的单向报文数 | **2³¹**，**与策略无关、关不掉** | 序号是 32 位的：chacha20-poly1305 的 nonce 就是序号，同一套密钥下回绕就是 nonce 重用、报文可以被伪造；HMAC 套件则可以被重放（RFC 4344 §3.1） |
 
 〔决策〕**阈值可配但有下限**：字节数不低于 64 MiB，时长不低于 1 分钟。
 太频繁的重协商本身是一个拒绝服务面（每次都要做非对称运算）。
+报文数阈值另有**上限** 2³¹（`SshRekeyPolicy.MaximumPackets`），构造时就拒绝更大的值。
+
+〔决策〕**报文数是硬约束，不是策略的一项。**会话不论 `SshRekeyPolicy` 如何（`Disabled` 也一样），
+任一方向在同一套密钥下到 2³¹ 个报文就主动重协商；传输层另有最后一道保险：同一套密钥下第 2³² 个报文
+（再多一个序号就回绕到这套密钥用过的值）拒绝收发、断开连接。曾经报文数只是策略的一项，
+`Disabled` 或一个大于 2³² 的阈值就能把它关掉 —— 一条能被公开 API 关掉的密码学硬约束。
+
+〔决策〕**每次重协商做完都报一次**（`SshConnection.Rekeyed` 事件：起因、第几次、耗时、新协商出的算法）：对端发起的、按阈值发起的、显式请求的都报，
+失败的不报（连接随之判死）。耗时从收到对端的 `KEXINIT` 算到新密钥装好 —— 这段时间通道数据暂存、发不出去，「终端偶尔卡一下」要从这里对得上；
+最近一次的也留在 `LastRekeyDuration`。事件在接收循环上同步调用，订阅者不要阻塞；订阅者抛的异常吞掉。
 
 ### 8.2 发送闸门
 
@@ -626,7 +707,14 @@ RFC 4253 §7.1 的原话是：一旦发出 `KEXINIT`，
 
 〔决策〕**重协商有超时**（默认 2 分钟）：我们的 `KEXINIT` 一直等不到对端的，或者交换卡在半路，
 都以 `Timeout`（`Phase = Rekeying`）断开。闸门关着的时候通道数据一律暂存、保活探测也发不出去 ——
-没有超时，连接就无声地停在那里。
+没有超时，连接就无声地停在那里。到点是**直接判死**，不只是取消交换的令牌：交换的报文走发送泵，
+本端发送卡住（对端不读、链路半断）时「等这一帧发出去」不响应取消，判死停下发送泵，卡着的写才放得出来。
+曾经对端发起的重协商只取消令牌，本端发送一卡住就永远等下去。
+
+〔决策〕**只在交换成功时开闸。**交换失败（主机密钥变了、验签失败、超时）时闸门不开，连接随即判死；
+暂存区由发送泵的收尾丢掉，等着背压的发送方也由那里放出来，拿到连接关闭的异常。曾经失败时也照样开闸：
+发送泵可能抢在判死之前把暂存的通道数据写出去 —— `KEXINIT` 之后、`NEWKEYS` 之前发应用数据违反 RFC 4253 §7.1，
+刚判定「主机密钥变了」之后更不该再往外发东西。
 
 ### 8.3 接收侧
 
@@ -665,8 +753,9 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | X25519 结果全零 | `ProtocolError` | 否 |
 | ECDH 点不在曲线上 | `ProtocolError` | 否 |
 | DH `e`/`f` 越界 | `ProtocolError` | 否 |
-| GEX 的 `p` 小于 2048 位 | `NegotiationFailed` | 否 |
-| GEX 的 `p` 非素数 | `ProtocolError` | 否 |
+| GEX 的 `p` 小于 2048 位或大于 8192 位 | `NegotiationFailed` | 否 |
+| GEX 的 `p` 非素数（偶数、有小因子、Miller-Rabin 找到合数证据） | `ProtocolError` | 否 |
+| GEX 的 `g` 不满足 `1 < g < p-1` | `ProtocolError` | 否 |
 | 签名算法名与协商结果不符 | `ProtocolError` | 否 |
 | 签名验证失败 | `HostKeyRejected` | 否 |
 | RSA 模数小于下限 | `HostKeyRejected` | 否（可配置放宽） |
@@ -674,6 +763,7 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | 有 CA 担保的主机证书不合格（§5.5 第 3 条） | `HostKeyRejected` | 是（重签证书后） |
 | 策略拒绝 | `HostKeyRejected` / `HostKeyChanged` | 是（用户改信任后） |
 | 严格 KEX 下、首次 KEX 期间收到 IGNORE/DEBUG | `ProtocolError` | 否 |
+| 严格 KEX 下、对端在 KEXINIT 之前还发了别的报文 | `ProtocolError` | 否 |
 | 重协商时 `K_S` 变了 | `HostKeyChanged` | 否 |
 | KEX 超时 | `Timeout` | 是 |
 

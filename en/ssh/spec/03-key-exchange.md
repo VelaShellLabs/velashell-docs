@@ -118,6 +118,11 @@ the failure then happens during key derivation, surfaces as an unexplained "not 
 Reporting it here points the error at the configuration itself.
 Host key algorithm names are **not checked here**: they are guarded by host key parsing and signature verification (§5.3), where an unknown type gets an explicit error.
 
+〔Decision〕**Each list is copied into a read-only snapshot when it is set**, so later changes to the caller's own copy do not affect the list already handed over.
+The caller's collection used to be stored as-is: pass in a `List`, change it after validation, and since the connection keeps that list in its re-keying context,
+the next re-key uses the changed, unvalidated list; the arrays in `SshAlgorithmSet.Default` could be changed by a downcast, and the two directions of encryption and of MAC even shared one array.
+Setting `null` throws `ArgumentNullException` on the spot. For the same reason `SshAlgorithmSet` compares equal by list contents (order included), not by reference. The same rule applies to `AgentForwardOptions.AllowedKeys` and `SftpFileAttributes.Extended`.
+
 ### 2.3 The three indicators hidden in `kex_algorithms`
 
 These three names **are not key exchange methods**; they are flags stuffed into the same list.
@@ -177,8 +182,8 @@ All KEX methods we support have the same two-step shape; only the public key con
 
 > Numbers 30/31 are **method-specific**; different KEX methods may assign them different meanings
 > (see the comment in `Protocol/SshMessageNumber.cs`: 30–49 are deliberately kept out of the global enum).
-> The methods we support all happen to use the 30/31 pair, but `diffie-hellman-group-exchange-*`
-> has an additional set of preceding messages; see §3.5.
+> Almost all the methods we support use the 30/31 pair; only `diffie-hellman-group-exchange-*`
+> has an additional set of preceding messages and then switches to 32/33; see §3.5.
 
 ### 3.2 `curve25519-sha256` (RFC 8731)
 
@@ -212,6 +217,9 @@ Both names are sent, and they share one implementation.
 - **The peer's public key point MUST be verified to be on the curve** and not the point at infinity.
   .NET's `ECDiffieHellman.ImportSubjectPublicKeyInfo` / `ECParameters` validation does this,
   **but it MUST be confirmed that the exception is correctly translated into a protocol error rather than leaking out**.
+  〔Decision〕**The library checks first, before importing**: both coordinates are less than p, and y² = x³ − 3x + b (mod p) holds (the three SEC 2 curves all have a = −3).
+  The platform layer differs per platform (CNG on Windows, OpenSSL on Linux, Apple on macOS) and used to be verified only on Windows;
+  an encoding with a coordinate not less than p is congruent to the point minus p, so the equation still holds and it must be rejected separately. All zeros (the point at infinity cannot be written) gives 0 = b and is rejected along the way.
 - 〔Note〕The coordinates of nistp521 are 66 bytes (521 bits); `0x04 ‖ X ‖ Y` totals 133 bytes.
   Implementations that hard-code an assumption of 64 or 65 bytes will crash on this curve.
 
@@ -232,8 +240,9 @@ Both names are sent, and they share one implementation.
 
 ### 3.5 `diffie-hellman-group-exchange-sha256` (RFC 4419)
 
-> **Implementation status (2026-09-25)**: **not implemented yet**. It is not in the default list and not registered with the key exchange factory,
-> so putting it in the list is rejected by the pre-connect check (§2.2). What follows is the specification to implement it against.
+> **Implementation status (2026-10-06)**: **implemented** (`DiffieHellmanGroupExchange`). In the default list it comes after the elliptic curves and before the DH standard groups ——
+> the client's order wins, so it is only chosen when nothing else can be agreed. Checked against a real OpenSSH 10.3 (initial exchange and rekey);
+> since OpenSSH 10 the server does not enable the DH methods by default, so the interop environment appends it to the server's list with `scripts/ssh/interop/kex-gex.sh`.
 
 **Two more messages than the other methods**, because the group is supplied by the server on the fly according to the client's request:
 
@@ -249,10 +258,17 @@ Both names are sent, and they share one implementation.
 
 - 〔Decision〕`min = 2048`, `n = 3072`, `max = 8192`.
   **A `p` smaller than 2048 bits supplied by the server is not accepted** —— after logjam (CVE-2015-4000), 1024 bits is unacceptable.
-- **MUST validate** that `p` is prime, that `g` is in a reasonable range, and that the bit length of `p` falls within our requested `[min, max]`.
-  Primality testing uses Miller-Rabin (the BCL has no direct API; implement it ourselves on `System.Numerics.BigInteger`,
-  with ≥ 64 rounds). 〔Decision〕This step **may be cached**: the same `(p, g)` is usually reused by a server,
-  so cache the test result keyed by `SHA-256(p ‖ g)` to avoid spending tens of milliseconds on every connection.
+- **MUST validate** that `p` is prime, that `g` is in a reasonable range (`1 < g < p-1`), and that the bit length of `p` falls within our requested `[min, max]`.
+  The cheap checks come first (bit length, parity, the range of `g`), then the primality test.
+- Primality testing uses BouncyCastle's `Primes.HasAnySmallFactors` and `Primes.IsMRProbablePrime` (Miller-Rabin, random bases, **64 rounds**,
+  so a composite passes with probability ≤ 4⁻⁶⁴). 〔Decision〕**We do not write Miller-Rabin ourselves** —— the BCL has no such API and BC does (the ssh library's AGENTS 3.3: "do not write cryptographic primitives").
+- 〔Decision〕The primality test is the real cost of this method: BC running 64 rounds on one thread takes about 2 seconds at 3072 bits and over half a minute at 8192 bits. Three things bring it down:
+  1. **Rounds in parallel**: each round uses an independent random base, and the rounds are spread over the thread pool by core count (each call is `IsMRProbablePrime(p, random, 1)`);
+  2. **Overlapped with the round trip**: it starts in the background as soon as `GEX_GROUP` arrives, while `GEX_INIT` is sent and `GEX_REPLY` awaited; its verdict is awaited only before computing the shared secret;
+  3. **Cached**: a verified `p` is remembered in the process keyed by `SHA-256(p)` (at most 64, cleared when full), so a server reusing a group is not tested again.
+     Only "is prime" is remembered —— a connection with a composite `p` has failed anyway.
+
+  Against a real OpenSSH (a 3072-bit group) a whole connection takes about 0.4–0.5 seconds.
 - The inputs of `H` **include** `min ‖ n ‖ max ‖ p ‖ g`; see §4.2.
 
 ### 3.6 Post-quantum hybrids: `mlkem768x25519-sha256` and `sntrup761x25519-sha512`
@@ -271,6 +287,8 @@ Both have the same shape: **a KEM run in parallel with X25519**, with the shared
   precisely to avoid the `mpint` leading-zero problem. **Get this wrong and the symptom is, again, probabilistic signature failure.**
 - ML-KEM is available in the .NET 11 BCL (`System.Security.Cryptography.MLKem`);
   sntrup761 is not, and must be implemented ourselves or taken from BouncyCastle.
+  〔Decision〕When `MLKem.IsSupported` (CNG on Windows, OpenSSL 3.5 onwards) ML-KEM-768 goes through the BCL, otherwise it falls back to BouncyCastle;
+  a test pins down that the two implementations interoperate (one side generates, the other encapsulates). It used to go through BouncyCastle unconditionally.
   〔Decision〕**M1 does only `mlkem768x25519-sha256`**; sntrup761 is deferred to M5,
   because OpenSSH 9.9+ already ranks ML-KEM first, and sntrup761 is only for compatibility with 8.5–9.8.
 - `sntrup761x25519-sha512@openssh.com` is the old name of the same algorithm (used by OpenSSH < 9.9).
@@ -366,6 +384,10 @@ introduced by RFC 8332.
 the content of the outer string is the concatenation "`mpint r` followed by `mpint s`",
 not r and s concatenated directly as fixed-length bytes. DER encoding is also wrong.
 
+〔Decision〕**A signature blob must be exactly these two fields; a single extra byte after them makes it invalid** (likewise after the two inner mpints of ECDSA);
+**the signature algorithm must be one this key can produce** (a P-256 key does not verify an `ecdsa-sha2-nistp384` signature, an RSA key does not verify an `ssh-ed25519` one).
+〔History〕Early versions did not look at the end of the outer blob, and the binding held only indirectly through "does this key have the matching native object".
+
 ### 5.3 Verification order (the order itself is a security property)
 
 ```mermaid
@@ -392,6 +414,7 @@ flowchart TD
    It is placed before signature verification so as not to spend any computing resources on weak keys.
 3. **Policy rulings are timed independently.** 〔Decision〕The time taken by `IHostKeyPolicy.EvaluateAsync`
    **is not counted against `ConnectTimeout`**; it is bounded by a separate `HostKeyDecisionTimeout` (infinite by default).
+   A cancellation thrown by the policy itself (the decision timer did not fire and the caller did not cancel: the user closed the prompt) is not a timeout; it is reported as `Aborted` (`08-failures.md` §2.1).
 
    Rationale: this targets a real defect directly —— an interactive client pops up a dialog here to ask the user,
    and if the time the dialog sits there counted against the connect timeout, by the time the user clicks "Trust" this attempt has already been declared dead,
@@ -423,7 +446,17 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 | `KeyBlob` / `KeyType` / `KeyBits` | Raw material |
 | `Sha256Fingerprint` / `Md5Fingerprint` | For display. SHA-256 is base64 without padding, consistent with OpenSSH |
 | `Key.IsCertificate` / `Key.Certificate` | Host certificate issued by a CA (§5.5). A certificate's fingerprint is the fingerprint of **the key inside it**, consistent with `ssh-keygen -l` |
-| `RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture. It genuinely helps with visual comparison |
+| `Key.RandomArt` | 〔Decision〕Provide an OpenSSH-style ASCII fingerprint picture (algorithm below). It genuinely helps with visual comparison |
+
+**How the fingerprint picture (`SshPublicKey.RandomArt`) is drawn**, byte-for-byte identical to `ssh-keygen -lv` (tests compare against real `ssh-keygen` output):
+
+- The input is the 32-byte SHA-256 digest behind the fingerprint (the same one as `Sha256Fingerprint`: for a certificate, the key inside the certificate).
+- The canvas is 17 columns × 9 rows with one counter per cell; the walk starts in the middle (column 8, row 4, counting from 0).
+- Byte by byte, each byte yields four 2-bit groups starting from the least significant bits: bit 0 set moves right, clear moves left; bit 1 set moves down, clear moves up —
+  every step is diagonal. At a wall that direction stays put (coordinates are clamped to 0–16 and 0–8). The cell reached has its counter incremented.
+- Counts 0–14 are drawn as one character of ` .o+=*BOX@%&#/^` in order, larger counts also as `^`; the start cell is drawn `S` and the end cell `E` (`E` when they coincide).
+- The top border is `+`, a centred `[TYPE BITS]` (`ED25519 256`, `ECDSA 384`, `RSA 3072`) padded with `-` to 17 characters, `+`;
+  centring puts `(17 − length) / 2` rounded down on the left and the rest on the right. The bottom border centres `[SHA256]` the same way. The sides are `|`. Lines are joined with `\n`.
 
 An `SshHostKeyVerdict` can only be obtained from four factory members: `Accept` / `AcceptAndPersist` / `Reject(message)` / `RejectChanged(message)`.
 **A rejection MUST carry a reason text**, which goes verbatim into `SshConnectException.Message` ——
@@ -446,6 +479,30 @@ the "host key changed" check is bypassed, and a policy that accepts new hosts wi
 Two more rules for `KnownHostsPolicy`: when a negated pattern (`!pattern`) matches, the **whole line** does not apply to this host
 (`*.corp,!untrusted.corp` must not trust the key for `untrusted.corp` via `*.corp`);
 before appending a record, check whether the file ends with a newline and add one if not — otherwise the new record is glued onto the last line and both break.
+〔Decision〕A leading marker is recognized only if it is one of the two sshd(8) defines, `@revoked` and `@cert-authority` (case as written); **a line with an unrecognized marker is skipped entirely** —
+when someone means to revoke a key and writes `@revoke` instead of `@revoked`, using the line as an ordinary trusted entry would make that key "known" for every host the pattern matches.
+〔Decision〕Host names are **lower-cased** for lookups and when writing (as OpenSSH does: it lower-cases before writing, and a hashed line is the HMAC of the lower-case name).
+Hashing the name as typed means a hashed line never matches when the user typed upper case — with a man in the middle, "key changed" degrades into "never seen, trust it?",
+the key type preference stops protecting as well, and hashed lines this library writes cannot be read back by OpenSSH.
+〔Decision〕**A host name containing characters that mean something else in `known_hosts` is not written** (`KnownHostsFile.IsRecordableHost`): `,` `*` `?` `!` `[` `]` `#`, whitespace,
+control characters, and a leading `@` or `|`. The host field is itself a pattern list; with `x,*` written into it, the key becomes valid for every host, and host names can come from external launch links
+or `HostName` in `ssh_config`. `FormatEntry` / `AppendAsync` throw `ArgumentException`; when `KnownHostsPolicy` meets such a name on "trust and remember",
+**the connection is not allowed either** (`InvalidConfiguration`) — if it cannot be remembered, it must not silently become "trust just this once". Hashed lines are refused too: such a name is not a host anyway.
+〔Decision〕**Failures to read or write `known_hosts` are reported as `HostKeyStoreFailed`** (`KnownHostsFile.LoadAsync` / `AppendAsync` throw `SshConnectException`, with the original exception in `InnerException`).
+When the file cannot be read there is no way to tell whether this host is known, so the connection is not allowed — treating it as "never seen" and asking would, when a record really exists, hand the user a key of unknown origin to click "trust" on.
+〔Decision〕**Append-only in normal operation, with a separate rewrite path for removing records** (Q4): records are removed in only two situations —— when the key "changed" and the user has confirmed a reinstall, a one-click removal of the old record
+(`KnownHostsPolicy.RemoveHostKeysAsync`, the thing the error message tells people to do by hand; the library never removes on its own, and the verdict for "changed" is still a rejection),
+and during host key rotation, removing old keys the server no longer presents ([spec/05 §6.4.1](05-connection.md)). Both go through `KnownHostsFile.RemoveHostKeysAsync`:
+- **Only records that belong to this host alone are touched**: a hashed line (one line stands for one name) is removed whole when it matches; on a plain line this host's name is taken out —— when a line lists several names (`host,10.0.0.5`) the other names stay trusted, and the line is removed only once no names remain.
+  `@revoked`, `@cert-authority`, and lines with wildcards or negation are left alone (they cover more than this host); all other lines are kept as they are, line endings included. When fingerprints are given, only those keys are removed.
+- **Temporary file + atomic replace + retry on conflict**: the new content is first written to a temporary file in the same directory; before replacing, the original is read again, and if it differs from what the rewrite was based on (most likely another process just appended a record), the rewrite starts over from the new content,
+  at most 5 times (on Windows, the file being held open by another process also counts as a conflict); only when it matches is the file replaced atomically, keeping its permissions on Unix. A failure part way leaves the original untouched; with nothing to remove, not a single byte of the file changes.
+  A very short window remains between the comparison and the replacement, and a record appended in it is lost —— which is why the file is not rewritten in normal operation. 〔History〕It used to be append-only, never rewritten.
+
+〔Decision〕**When "trust and remember" cannot write the record, this connection goes ahead** (only a warning, as in OpenSSH): the trust has been granted, it just was not recorded.
+Among the exceptions thrown by `PersistAsync`, cancellation propagates as-is; any other library reason (the `InvalidConfiguration` of the previous rule) means the policy deliberately refuses, and also propagates as-is;
+the rest — `HostKeyStoreFailed` and exceptions from the caller's own policy — are recorded in `SshConnection.HostKeyPersistFailure` (through a jump host, on that hop's own connection), and the next connection asks again.
+This used to fail the whole connection, reported as "the peer closed the connection" and marked retryable.
 
 ### 5.5 Host certificates (`*-cert-v01@openssh.com`)
 
@@ -468,6 +525,10 @@ The verification order in §5.3 gains two rules:
 - When a certificate algorithm is negotiated, `K_S` must be a certificate; when a plain algorithm is negotiated, it must not be — a mismatch is `HostKeyRejected`;
 - the RSA minimum length applies to **the key inside the certificate** (its type string is `ssh-rsa-cert-v01@openssh.com`, so comparing the type string to `ssh-rsa` would skip the check).
 
+〔Decision〕**An ask callback and "what to do with an unseen host" (`UnknownHost`) are either-or.** With an ask callback given (the constructor's `askUnknownHost`) and `UnknownHost`
+set to `Reject` / `AcceptAndPersist`, the callback would never be called — setting it throws `ArgumentException` instead of silently ignoring the callback; an undefined value throws
+`ArgumentOutOfRangeException`. Accordingly, the `ssh_config` path hands the caller's ask callback to the policy only when it asks (`spec/09` §7).
+
 **How `KnownHostsPolicy` decides** (in order; once a rule applies, later ones are not consulted):
 
 1. An `@revoked` line matching the host whose key is the key inside the certificate, the whole certificate, or the CA that signed it → `Revoked`.
@@ -477,7 +538,9 @@ The verification order in §5.3 gains two rules:
    - the CA signature verifies: it covers every field from the type string up to and including the signing CA's public key;
      the signature algorithm is limited to `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-256`, `rsa-sha2-512` —
      〔Decision〕SHA-1 `ssh-rsa` signatures are not accepted; the CA key must not itself be a certificate; an RSA CA must be at least 2048 bits;
-   - the current time is within `[valid_after, valid_before)`;
+   - the current time is within `[valid_after, valid_before)` (both ends are compared as raw uint64 seconds. The fields may hold values past the year 9999;
+     those are legal and must not make validation throw: when converted to a point in time for display, a `valid_before` past the end of 9999 is treated as unlimited,
+     and a `valid_after` past it becomes the latest representable time);
    - `valid principals` is non-empty and contains the host name being connected to (exact comparison, case-insensitive, no wildcards);
    - there are no critical options (none are defined for host certificates, and an unrecognized critical option must be rejected).
 
@@ -521,6 +584,8 @@ The mitigation has two parts, both required:
    - **Receiving any non-KEX-related packet during the first KEX (including `SSH_MSG_IGNORE`,
      `SSH_MSG_DEBUG`, `SSH_MSG_UNIMPLEMENTED`) always disconnects.**
      This applies to the first KEX only —— during a rekey these are ordinary, legal packets.
+   - **The peer's first packet must be `KEXINIT`.** When it is read, whether strict KEX will be negotiated is not yet known, so any `IGNORE` / `DEBUG`
+     before it can only be skipped per the RFC; once strict KEX is negotiated this is checked retroactively, and if anything was skipped the connection is dropped (`ProtocolError`).
    - **After every `SSH_MSG_NEWKEYS`, both sequence numbers are reset to zero** —— including every rekey.
 
 〔Note〕Recomputing it from "does this KEXINIT carry the marker" each time is wrong: when the peer omits the marker on rekey,
@@ -579,16 +644,32 @@ Either side may initiate rekeying at any time by sending `SSH_MSG_KEXINIT`.
 > handles rekeying initiated by the peer, initiated by us, and initiated by both sides simultaneously.
 > The thresholds live in `SshRekeyPolicy`, enabled by default.
 
+〔Decision〕**A rekey initiated by the peer during authentication is completed in place.** If the user takes a few minutes to find a one-time code, a time-based `RekeyLimit` on the server sends `KEXINIT` in the middle of authentication.
+At that point the authenticator is the only reader and the only writer, so the exchange runs directly on the connection-setup transport (pinning the host key of the first exchange, §8.4), and then reading continues for the reply to the request in flight —
+it arrives after the exchange, under the new keys; the delayed compression attached after authentication succeeds follows the latest negotiation result.
+`KEXINIT` used to be treated as an unexpected message, and the connection failed with a protocol error.
+
 〔Decision〕Thresholds at which we trigger rekeying ourselves:
 
 | Condition | Default | Rationale |
 | --- | --- | --- |
 | Bytes sent/received | **1 GiB** (in either direction) | Recommendation of RFC 4253 §9 |
-| Duration | **1 hour** | Same as above |
+| Duration | 〔Decision〕**Not checked by default** (only when `maxInterval` is given explicitly, minimum 1 minute) | OpenSSH's client and server also rekey by data volume only by default (`ssh -G` reports `rekeylimit 0 0`; `sshd_config` defaults to `RekeyLimit default none`). On old devices that mishandle client-initiated rekeying, time-based rekeying means a scheduled disconnect: once our `KEXINIT` is out the gate is closed and cannot be taken back, until the time limit declares the exchange dead (Q1). 〔History〕It used to default to 1 hour |
 | AES-GCM invocation counter | **Forced** when approaching 2⁶⁴ | Counter wraparound would reuse nonces, which is catastrophic |
+| Packets in one direction under the same keys | **2³¹**, **independent of the policy and cannot be turned off** | The sequence number is 32 bits: chacha20-poly1305's nonce is the sequence number, so wrapping under the same keys reuses nonces and lets messages be forged; HMAC suites become open to replay (RFC 4344 §3.1) |
 
 〔Decision〕**Thresholds are configurable but have lower bounds**: bytes no lower than 64 MiB, duration no lower than 1 minute.
 Overly frequent rekeying is itself a denial-of-service surface (each one requires asymmetric operations).
+The packet threshold also has an **upper bound** of 2³¹ (`SshRekeyPolicy.MaximumPackets`); larger values are rejected at construction.
+
+〔Decision〕**The packet count is a hard constraint, not an item of the policy.** Whatever `SshRekeyPolicy` says (`Disabled` included),
+the session rekeys as soon as either direction reaches 2³¹ packets under the same keys; the transport has a last line of defense as well: the 2³²-th packet under the same keys
+(one more and the sequence number would wrap to a value these keys have already used) is refused in both directions and the connection is dropped. The packet count used to be just an item of the policy,
+and `Disabled` or a threshold above 2³² could switch it off — a cryptographic hard constraint that the public API could turn off.
+
+〔Decision〕**Every completed rekey is reported** (the `SshConnection.Rekeyed` event: cause, ordinal, duration, newly negotiated algorithms): peer-initiated, threshold-initiated and explicitly requested ones alike;
+failed ones are not (the connection is declared dead). The duration runs from receiving the peer's `KEXINIT` to the new keys being installed — channel data is held back during that time, which is where "the terminal hiccups now and then" lines up;
+the latest one also stays in `LastRekeyDuration`. The event is raised synchronously on the receive loop, so subscribers must not block; exceptions thrown by subscribers are swallowed.
 
 ### 8.2 Send gate
 
@@ -627,7 +708,14 @@ so an exchange the peer starts at the same moment cannot put its first frame ahe
 
 〔Decision〕**Rekeying has a timeout** (2 minutes by default): if our `KEXINIT` never gets the peer's, or the exchange stalls midway,
 the connection is dropped with `Timeout` (`Phase = Rekeying`). While the gate is closed, all channel data is stashed and keepalive probes cannot go out —
-without a timeout the connection would simply stop, silently.
+without a timeout the connection would simply stop, silently. Reaching the deadline **faults the connection directly** rather than only cancelling the exchange's token: the exchange's messages go through the send pump,
+and when our sending is stuck (the peer does not read, the link is half-dead), "wait for this frame to go out" does not respond to cancellation; faulting stops the send pump, which is what releases the stuck write.
+A rekey initiated by the peer used to only cancel the token, and once our sending got stuck it waited forever.
+
+〔Decision〕**The gate opens only when the exchange succeeds.** When it fails (host key changed, signature check failed, timeout), the gate stays closed and the connection is torn down;
+the stash is dropped by the send pump's teardown, which also releases senders waiting on backpressure with a connection-closed exception. It used to open the gate on failure too:
+the send pump could write the stashed channel data before the connection was torn down — application data after `KEXINIT` and before `NEWKEYS` violates RFC 4253 §7.1,
+and nothing more should go out right after deciding that "the host key changed".
 
 ### 8.3 Receiving side
 
@@ -666,8 +754,9 @@ Blocking the receiving side as well would lose data.
 | X25519 result is all zeros | `ProtocolError` | No |
 | ECDH point not on the curve | `ProtocolError` | No |
 | DH `e`/`f` out of range | `ProtocolError` | No |
-| GEX `p` smaller than 2048 bits | `NegotiationFailed` | No |
-| GEX `p` not prime | `ProtocolError` | No |
+| GEX `p` smaller than 2048 bits or larger than 8192 bits | `NegotiationFailed` | No |
+| GEX `p` not prime (even, has a small factor, or Miller-Rabin finds a witness of compositeness) | `ProtocolError` | No |
+| GEX `g` not satisfying `1 < g < p-1` | `ProtocolError` | No |
 | Signature algorithm name does not match the negotiation result | `ProtocolError` | No |
 | Signature verification fails | `HostKeyRejected` | No |
 | RSA modulus below the minimum | `HostKeyRejected` | No (can be relaxed by configuration) |
@@ -675,6 +764,7 @@ Blocking the receiving side as well would lose data.
 | A host certificate vouched for by a CA is invalid (§5.5 item 3) | `HostKeyRejected` | Yes (after the certificate is re-issued) |
 | Rejected by policy | `HostKeyRejected` / `HostKeyChanged` | Yes (after the user changes trust) |
 | IGNORE/DEBUG received during the first KEX under strict KEX | `ProtocolError` | No |
+| Under strict KEX, the peer sent other packets before its KEXINIT | `ProtocolError` | No |
 | `K_S` changed during rekeying | `HostKeyChanged` | No |
 | KEX timeout | `Timeout` | Yes |
 

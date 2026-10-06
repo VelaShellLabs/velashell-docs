@@ -129,7 +129,7 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ 尚未实现 | 〔互操作〕老设备常只给这个。规格见 03 §3.5；实现之前放进清单会在连接前被拒绝（03 §2.2） |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备、加固过的服务端常只给这个。排在椭圆曲线之后、DH 标准群之前；群由服务端现给，要查（03 §3.5） |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启**（§6.6） |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | 不是真算法，是**指示符**，见 03 |
 
@@ -200,6 +200,18 @@ CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）用 `Wit
 使用者也可以自己组清单，但每一类都不能为空，且密钥交换、加密、MAC、压缩这四类里的每个名字
 都必须是本库实现了的。**连接开始时、拨号之前**就校验，不合格直接抛 `ArgumentException`，
 不去拨号。规则与理由见 03 §2.2。
+
+〔决策〕**算法目录公开**（`SshAlgorithmCatalog`）：每一类（`SshAlgorithmCategory`）实现了哪些名字（`Implemented`，
+按偏好顺序：默认清单在前、老算法在后）、常见却没实现的有哪些（`KnownUnimplemented`，如 CBC、`umac-*`、`ssh-dss`）。
+使用者让用户自己写清单时据此当场说清「没实现」还是「不认识」。它与上面的校验、各个工厂表同一个口径，用例逐个核对。
+〔历史〕曾经没有这份目录，宿主用 `Default.WithLegacyInterop()` 推算实现了哪些，再手工维护一份「认得但没实现」的名单。
+
+〔决策〕**只含 FIPS 认可算法的清单**：`SshAlgorithmSet.FipsApprovedOnly`，与 RHEL 的 FIPS 加密策略对 SSH 放行的一致 ——
+密钥交换只用 NIST 曲线的 ECDH 与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
+MAC 只用 HMAC-SHA2；不含 X25519、Ed25519、ChaCha20-Poly1305 与后量子混合。**它只限定了算法，不等于本库通过了 FIPS 140 验证**：
+AES、SHA-2、ECDH、ECDSA、RSA 走 BCL（Windows 上是经过验证的 CNG，别的平台取决于系统的 OpenSSL），DH 标准群的模幂走 BouncyCastle。
+面向 FIPS 的后量子混合（`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`）暂不实现：还没有能对照验证线上格式的服务端，
+写了也只能自己证明自己（03 §3.6）。
 
 ## 七 算法优先级的排法
 

@@ -15,6 +15,7 @@
 | **本地转发** | `-L` | 我们（本机） | `direct-tcpip` 通道 |
 | **动态转发** | `-D` | 我们（本机，跑 SOCKS5） | `direct-tcpip` 通道，目标由 SOCKS 握手给出 |
 | **远程转发** | `-R` | 服务端 | 服务端发起 `forwarded-tcpip` 通道，我们连本地目标 |
+| **远程动态转发** | `-R [bind:]port`（不给目标） | 服务端 | 服务端发起 `forwarded-tcpip` 通道，通道里跑 SOCKS5，我们按放行名单连它要的目标（§4.6） |
 | **直连隧道** | 无（`-W` 近似） | 无人监听 | `direct-tcpip` / `direct-streamlocal`，流直接交给调用方 |
 
 **第四种最容易被忽略，但常常是最该用的那一种。**
@@ -46,13 +47,14 @@ sequenceDiagram
         end
     else 被拒（AllowTcpForwarding no / 目标连不上）
         S->>F: CHANNEL_OPEN_FAILURE(reason)
-        F->>App: TCP reset 〔未实现：今天是正常关闭〕
+        F->>App: TCP reset
     end
 ```
 
-〔未实现〕服务端拒绝开隧道时，设计是**重置**本机那条连接（RST）：拒绝也是出错，与 §2.2 的「出错不是 EOF」同一条规则。
-今天的实现是报 `Error`、**正常关闭**那条连接（FIN），本机应用读到的是一个没有任何数据的结尾。
-（动态转发另有 SOCKS 失败应答告诉客户端原因，§3.2。）
+〔决策〕服务端拒绝开隧道（或者到 §3.2 的开通道时限还没应答）时，**重置**本机那条连接（RST），并报 `Error`（`ChannelOpen`）：
+拒绝也是出错，与 §2.2 的「出错不是 EOF」同一条规则。〔历史〕曾经**正常关闭**那条连接（FIN），本机应用读到的是一个没有任何数据的结尾，
+分不出「服务端拒了」与「目标什么也没回」。转到远端 Unix 套接字的本地转发同样处理；在本机 Unix 套接字上监听时，套接字不一定支持 linger 0，照样关掉。
+（动态转发另有 SOCKS 失败应答告诉客户端原因，回完正常关闭，§3.2。）
 
 ### 2.1 `direct-tcpip` 的额外字段
 
@@ -100,7 +102,8 @@ TCP 与 SSH 通道都支持半关闭，**必须逐方向对应**；而**正常�
 
 | `BindAddress` | 行为 |
 | --- | --- |
-| `127.0.0.1`（〔决策〕**默认**） | 只有本机能连 |
+| 不给（〔决策〕**默认**）/ `localhost` | **两个环回**：`127.0.0.1` 与 `::1`，同一个端口；只有本机能连 |
+| `127.0.0.1` | 只听 IPv4 环回 |
 | `0.0.0.0` / `::` | 局域网可连。**必须由使用者显式指定** |
 | 具体网卡地址 | 只在那张网卡上监听 |
 
@@ -108,7 +111,12 @@ TCP 与 SSH 通道都支持半关闭，**必须逐方向对应**；而**正常�
 默认绑 `0.0.0.0` 等于把它暴露给同网段的所有人。
 OpenSSH 的默认也是这个（`GatewayPorts no`）。
 
-〔决策〕**端口 0 表示由系统分配**，分配结果通过 `PortForwarder.BoundEndPoint` 回传。
+〔决策〕**两个环回都听**（Q5）：不少运行时把 `localhost` 先解析成 `::1`（Node 17 起就是），只听 `127.0.0.1` 的话它们连不上、或者先去试 `::1`；
+而 `[::1]:同一端口` 空着，同机任何进程都能抢先绑上，先试 `::1` 的客户端就把数据库口令之类交给了它 —— 正是「默认绑环回」想防的同机暴露。
+这台机器没有 IPv6 环回时只听 `127.0.0.1`；`[::1]` 上那个端口已经被别的进程占着时**不起这个转发**（`ForwardBindFailed`，消息说清为什么），
+端口给 0 时换一个端口再试。〔历史〕曾经默认只听 `127.0.0.1`。
+
+〔决策〕**端口 0 表示由系统分配**，分配结果通过 `LocalPortForwarder.BoundEndPoint`（IPv4 那个）与 `BoundEndPoints`（全部）回传。
 
 ### 2.4 监听器的韧性与收尾
 
@@ -127,6 +135,34 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 〔决策〕**释放要等每条连接都收完尾才返回。** 转发器逐条登记处理中的连接；释放时停下监听、
 取消全部连接（按出错中止），再等它们收完尾，最后才放掉并发名额等资源。
 曾经是直接放掉：还在收尾的连接随后去还一个已经释放的名额，异常落在没人观察的任务里；释放返回时连接也还开着。
+
+### 2.5 Unix 域套接字
+
+> 依据：OpenSSH `PROTOCOL` 的 `direct-streamlocal@openssh.com`；ssh_config(5) 的 `StreamLocalBindMask` / `StreamLocalBindUnlink`。
+
+两个方向，可以组合：
+
+| 写法 | API | 本机监听 | 出站 |
+| --- | --- | --- | --- |
+| `-L 8080:/var/run/docker.sock` | `LocalPortForwarder.StartToUnixSocket(connection, 远端路径)` | TCP | `direct-streamlocal@openssh.com`（只有 `socket_path ‖ reserved`） |
+| `-L /路径/local.sock:host:port` | 任一种起法 + `LocalPortForwardOptions.ListenSocketPath` | 本机的套接字文件 | 照原样（TCP 目标、远端套接字、SOCKS 都行） |
+
+用途：本机的 Docker 客户端、数据库工具直接操作远端的 `docker.sock` / 数据库套接字，远端不必开任何 TCP 端口；
+本机这头在套接字文件上监听时，**按文件权限隔离** —— 多用户机器上别的用户借不走你的隧道（环回端口则对所有用户开放）。
+
+〔决策〕**本机套接字文件的权限**：非 Windows 上起监听之后设成 `0600`（同 OpenSSH 默认的 `StreamLocalBindMask 0177`）。
+从创建到改权限之间有一小段窗口，放在只有自己进得去的目录里（如 `$XDG_RUNTIME_DIR`）就没有这个问题 ——
+进程级的 umask 在多线程进程里改不得，不拿它来堵。Windows 上套接字文件沿用所在目录的 ACL（放在用户目录下）。
+
+〔决策〕**路径上已经有文件时默认报错、原样留着**（`ForwardBindFailed`）：那多半是上一次没收拾干净，也可能是别人的套接字。
+`AllowSocketReplacement = true`（同 `StreamLocalBindUnlink yes`）才先删掉再监听。
+
+〔决策〕**路径太长当场报**（Linux / Windows 108 字节、macOS 104 字节，都含结尾的 0）。
+
+〔决策〕**收工时删掉自己建的套接字文件**：释放、SSH 连接断了都删；绑定本身失败时不删 —— 那个文件不是我们的。
+
+到远端套接字的隧道开不开得成（服务端要 `AllowStreamLocalForwarding`）要等第一条连接来了才知道，与 TCP 目标一样；
+开不成报 `Error`（`ChannelOpen`）。〔已核对〕对真 OpenSSH：Windows 上的套接字文件 → 服务端 `ssh-agent` 的套接字，经它加的钥 `ssh-add -l` 列得出来。
 
 ---
 
@@ -154,9 +190,13 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 这是动态转发最重要的一条语义 —— `curl --socks5-hostname` 依赖它。
 本地解析会导致「DNS 走本地、连接走隧道」的分裂，
 在内网域名场景下直接失效，而且泄漏了访问目标。
+〔决策〕域名按 UTF-8 解，非 ASCII 的转成 Punycode 再交出去（与 SOCKS5 拨号器一致）；不是合法 UTF-8、或转不成 Punycode 的回 `0x08`。
+〔历史〕早期按 ASCII 解，非 ASCII 字符一律成了 `?`，连的是一个不存在的主机。
 
 〔决策〕**长度为 0 的域名回 `0x08`（地址类型不支持），关掉这一条。** 空名字不是一个目标：
 放过去的话，开隧道那一步因为参数不合法而失败，客户端收不到任何 SOCKS 应答，分不出是哪里错了。
+〔决策〕**目标端口为 0 回 `0x01`（一般性失败），同样在握手阶段就关掉这一条**，记成 SOCKS 握手错误。
+〔历史〕早期放过去：开隧道时参数不合法而抛，客户端一句应答也收不到，错误还被记成「搬运出错」。
 
 ### 3.2 应答码映射
 
@@ -166,13 +206,17 @@ OpenSSH 的默认也是这个（`GatewayPorts no`）。
 | 2 `CONNECT_FAILED` | 0x05 connection refused |
 | 3 `UNKNOWN_CHANNEL_TYPE` | 0x01 general failure |
 | 4 `RESOURCE_SHORTAGE` | 0x01 general failure |
-| 通道打开超时 〔未实现〕 | 0x06 TTL expired |
+| 通道打开超时（`ChannelOpenTimeout`） | 0x06 TTL expired |
 
 映射对不对是有实际后果的：`curl` 和浏览器会根据 REP 码决定要不要重试、
 以及报给用户哪句话。一律回 `0x01` 等于把信息丢了。
 
-〔未实现〕开通道还没有单独的时限，最后一行因此用不上：今天转发器一直等服务端的应答；
-等到之前转发器被释放或 SSH 连接断了，这条连接不回任何应答就关掉。
+〔决策〕**开通道有单独的时限**（`LocalPortForwardOptions.ChannelOpenTimeout`，默认 30 秒，不限时写 `Timeout.InfiniteTimeSpan`），
+本地转发与动态转发共用：服务端要先连上目标才确认，连一个不通的目标时要等它自己的 TCP 连接超时（常见的是两分钟上下）才回拒绝 ——
+浏览器与 curl 等不了那么久，也看不出原因。到点放弃这一条：动态转发回 `0x06`，本地转发重置本机连接（§二），都报 `Error`（`ChannelOpen`）。
+迟到的确认由连接收尾、立刻关掉（`CHANNEL_OPEN` 已经发出去了，应答照常走完、不从账本里摘掉），不占服务端的会话名额。
+〔历史〕曾经没有这个时限，最后一行用不上：转发器一直等服务端的应答。
+转发器被释放或 SSH 连接断了时，还在等的那条不回任何应答就关掉。
 没有原因码的失败（比如本端的通道数或窗口预算撞满）回 `0x01`。
 
 ### 3.3 握手时限
@@ -207,13 +251,28 @@ sequenceDiagram
     R->>S: 连到服务端的 bind_port
     S->>F: CHANNEL_OPEN "forwarded-tcpip"<br/>bind_addr ‖ bind_port ‖ orig_addr ‖ orig_port
     F->>F: 按 bind 地址+端口找到对应的转发器
-    alt 找得到
-        F->>S: CHANNEL_OPEN_CONFIRMATION
-        Note over F: 连本地目标，双向搬运
-    else 找不到
+    alt 找不到
         F->>S: CHANNEL_OPEN_FAILURE(1)
+    else 找得到，先连本地目标
+        alt 连上了
+            F->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over F: 双向搬运
+        else 连不上
+            F->>S: CHANNEL_OPEN_FAILURE(2)「连不上转发的本机目标」
+            Note over F: 本地记一笔 TargetConnect 错误
+        end
     end
 ```
+
+〔决策〕**本机目标在确认通道之前连好**，与 agent 转发（§7.1）同一个时序：连不上就回 `CHANNEL_OPEN_FAILURE(2)`（connect failed），
+描述只说「连不上转发的本机目标」—— 本机的地址不往外送。〔历史〕早期先确认、再去连：目标连不上时远端看到的是「接受之后立刻关闭」，
+服务端日志里也没有 connect failed。
+
+〔决策〕**处理器拒绝时的原因码照实回**：连不上要连的东西（本机目标、本机 agent）回 2，并发名额满了回 4（resource shortage），
+其余回 1。〔历史〕早期一律回 1。
+
+〔决策〕**连接事件的 `Source` 是 `forwarded-tcpip` 里的 originator**（是谁连上了服务端那个暴露出来的端口）：认得出是 IP 地址就是 `IPEndPoint`，
+否则按主机名给 `DnsEndPoint`（不去解析）；Unix 套接字转发没有这一段，是 `null`。〔历史〕早期整个丢掉，`Source` 永远是 `null`。
 
 ### 4.2 三个必须
 
@@ -245,8 +304,18 @@ sequenceDiagram
 
 SSH 连接已经断了（取消请求发不出去，或者宽限期里断了）就不再等 —— 那时不会再有回连。
 
+〔决策〕**等取消请求的应答有时限（5 秒）。**半死的链路上（保活没开、或者周期很长）应答可能永远不来，
+不设时限的话释放一直卡到 TCP 重传放弃（Linux 默认约 15 分钟），调用方的「停止隧道」跟着卡住。
+到点就当链路已经不可用：照常摘处理器、结束连接，不再等宽限期 —— 与通道释放的时限（`05-connection.md`）是同一个思路。
+
 〔历史〕早期实现一进释放就把自己标成「已释放」，而处理器看到这个标记就拒 ——
 宽限期形同虚设，在途的回连照样被拒。
+
+〔决策〕**建立途中被放弃，服务端随后批准的监听要撤掉。**`tcpip-forward`（或 streamlocal 变体）已经上线、
+调用方在等应答时取消了（或者等应答失败了），而服务端随后回了 `REQUEST_SUCCESS`：
+这时补发一个 `want_reply = false` 的取消请求（不登记应答，不会挂在一个没人等的应答上）。
+应答与「调用方不要了」谁先到由一个原子状态排定，晚到的那一方负责补发 —— 两者同时到达也不漏。
+曾经只摘掉本端的处理器：服务端的监听一直开到连接断开，连进来的全被拒；固定端口紧接着重试，必报「端口已被占用」。
 
 ### 4.4 Unix 套接字变体
 
@@ -268,6 +337,36 @@ SSH 连接已经断了（取消请求发不出去，或者宽限期里断了）�
 只挂在连接上的话，释放转发器之后它的连接照样一直搬下去，直到整条 SSH 连接断开。
 
 SSH 连接断了之后，服务端的监听随之消失，本机没有要放的端口；转发器对象照样要释放（释放时发现连接已断，不等宽限期）。
+
+### 4.6 远程动态转发与放行名单（`PermitRemoteOpen`）
+
+> 依据：RFC 1928（SOCKS5）；ssh(1) 的 `-R` 不给目标的那种写法（OpenSSH 7.6 起）、ssh_config(5) 的 `PermitRemoteOpen`。
+
+用途：远端服务器要访问只有本机到得了的地方（公司内网的包镜像、内部 API），又没有 VPN —— 远端程序把服务端上的那个端口当 SOCKS5 代理用，
+本机替它去连。服务端那头只是一个普通的 `tcpip-forward`（§4.1），不需要服务端额外支持什么。
+
+`RemotePortForwarder.StartDynamicAsync(connection, permitRemoteOpen, options)`：
+
+1. 请服务端监听，与 §4.1 相同（端口 0 时实际端口在应答里）。转发器的种类是 `ForwardKind.RemoteDynamic`（度量与事件的 `kind` 标签按它分）。
+2. 回连来了**先确认**（目标要等握手才知道，没法像 §4.1 那样先连好），并发名额照常占。
+3. 在通道上跑 SOCKS5 的服务端一侧：与 §3.1 同一个子集（只有 `CONNECT`、不认证），同样有握手时限
+   （`RemotePortForwardOptions.SocksHandshakeTimeout`，默认 30 秒）。
+4. 目标不在放行名单里：回 `0x02`（规则不允许），报 `Error`（`ForwardErrorReason.TargetNotPermitted`）。
+5. 在名单里：**本机**解析、连接（域名在本机解析 —— 远端要的正是本机能到的地方）。连不上按原因回码：拒绝 `0x05`、
+   网络不可达 `0x03`、主机不可达或解析不了 `0x04`、超时 `0x06`、其余 `0x01`，报 `Error`（`TargetConnect`）。
+6. 连上了回 `0x00`，之后与别的转发同一个搬运循环（§6）。
+
+〔决策〕**放行名单必须给，没有默认值。**这等于把本机变成远端的 SOCKS 代理：本机能到的内网，远端都能到。
+放哪些出去必须由调用方明说；要全放，显式给 `RemoteOpenPolicy.Any`（OpenSSH 的 `PermitRemoteOpen any`），全不放是 `None`。
+
+〔决策〕**名单的写法与比法**：每条 `主机:端口`，主机可带 `*` / `?` 通配、不分大小写，IPv6 写在方括号里（`[::1]:22`），端口是数字或 `*`。
+**按远端在握手里给的名字比，不先解析**：名单写 IP、远端给域名就对不上，反之亦然 —— 宁可错拒，
+也不让一个解析到内网地址的域名绕过名单。
+
+〔决策〕**失败的应答要确实发出去**：回码之后先冲干净 stdin、发 `EOF`，再关通道；**先记事件、再回应答** ——
+远端一收到应答就可能再来一条，事件不该落在它后面。
+
+〔已核对〕对真 OpenSSH：远端的 OpenBSD `nc -X 5 -x 127.0.0.1:端口` 经它连回本机的服务、双向搬运；名单外的目标被拒。
 
 ---
 
@@ -293,16 +392,24 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // 单条连�
 ```
 
 `ForwardErrorEventArgs.Reason` 是枚举 `ForwardErrorReason`（`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
+`TargetConnect` / `Relay` / `SetupSkipped` / `TargetNotPermitted`；零值是 `Unknown`），不是字符串 —— 调用方按它分流，不必去认一串约定的文字。
 
 同时走 `System.Diagnostics.Metrics`：
 
 | 仪表 | 类型 | 标签 |
 | --- | --- | --- |
-| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind`、`bind` |
-| `velashell.ssh.forward.connections.total` | Counter | `kind`、`bind` |
-| `velashell.ssh.forward.bytes` | Counter | `kind`、`bind`、`direction` |
-| `velashell.ssh.forward.errors` | Counter | `kind`、`bind`、`reason` |
+| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind` |
+| `velashell.ssh.forward.connections.total` | Counter | `kind` |
+| `velashell.ssh.forward.bytes` | Counter | `kind`、`direction` |
+| `velashell.ssh.forward.errors` | Counter | `kind`、`reason` |
+
+〔决策〕**标签只有低基数的 `kind`、`direction`、`reason`，不带监听地址。** 监听地址是高基数的：每条转发一个值，端口给 0 时还是随机的；
+放进标签，时序库里的序列数就跟着开过的转发条数一起涨，而且永不回收。要看某一条转发的流量与连接，用转发器自己的
+`Throughput` / `Connections`（§5.1）。〔历史〕这张表曾经写着 `bind` 标签，代码从来没带过。
+
+〔决策〕**转发器交出自己的停止原因**（`PortForwarder.Completion`）：连接结束了是连接的结束原因（与 `SshConnection.Completion` 同一个），
+本端释放是 `Aborted`，看哪个先到；以成功完成、结果是原因。转发器只会因为这两件事停下 —— 单条连接的失败报 `Error`，转发器照跑。
+〔历史〕曾经没有，宿主的隧道面板要把「运行中」换成带原因的状态，只好自己去挂连接的结束。
 
 〔决策〕**两条路都给**：事件给桌面 UI（要实时刷一个面板），
 Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者自己重写一遍数据面 ——
@@ -317,6 +424,24 @@ Metrics 给服务端场景（接 OpenTelemetry）。二选一都会逼使用者�
 〔实现要点〕计数用 `Interlocked`，读取用 `Volatile.Read`。
 字节计数在**搬运循环里**累加，不是在通道层 —— 通道层的字节数含协议开销，
 而面板上要显示的是应用数据量。
+
+### 5.1 实时吞吐、连接快照与限速
+
+| 成员 | 内容 |
+| --- | --- |
+| `PortForwarder.Throughput` | `ForwardThroughput(SentPerSecond, ReceivedPerSecond)`：**最近三个整秒**的平均（应用字节 / 秒），不含正在走的这一秒 |
+| `PortForwarder.Connections` | 正在搬的连接快照（按序号排）：`Id`（与连接事件一致）、`Source`、`Target`、`StartedAt`、到目前为止的 `BytesSent` / `BytesReceived`；搬完就摘掉 |
+| `LocalPortForwardOptions.MaxBytesPerSecond` / `RemotePortForwardOptions.MaxBytesPerSecond` | 每个方向每秒最多搬多少应用字节；`null`（默认）不限，不为正在设值时就抛 |
+
+〔决策〕**吞吐取整秒窗口的平均，不报瞬时值。**瞬时值随每一块数据跳动，面板上一跳一跳的读不出东西；
+不含正在走的这一秒，代价是一到两秒的滞后。
+
+〔决策〕**限速按转发器、按方向**：一个转发器的全部连接共用一个令牌桶（每个方向一个）——
+「这条隧道最多占多少带宽」是转发器的事，不是单条连接的，否则开十条连接就是十倍。
+允许**一秒额度的突发**，之后欠着、按欠额等；歇够了额度补回来，但不超过一秒的量。
+
+〔决策〕**在搬运循环里、写到另一头之前等**：等的时候不再读，数据留在读缓冲里，背压经 TCP 窗口 / 通道窗口自然传回发送方 ——
+不另开缓冲，也不丢数据。用途：慢链路上开着好几条隧道时，不让一条下载把交互终端挤满。
 
 ---
 
@@ -409,6 +534,10 @@ agent 服务没起时远端的 `ssh` / `git` 一直挂到 shell 关掉。文件�
 曾经给的是 32 KiB，签一段稍长的数据（`ssh-keygen -Y sign`、证书）就卡死在那里。
 窗口只是额度，不是预先分配的内存；平常的报文只有几百字节。长度为 0 或超过 256 KiB 的报文按畸形处理，关掉这条通道。
 
+〔决策〕**本机 agent 客户端的一次问答做到一半被打断（取消、读写出错、长度不合理），这条 agent 连接作废**：
+agent 协议没有请求 id，请求可能只写了一半、应答可能还在路上，之后的调用一律以 `AgentUnavailable` 失败，由调用方重连
+（`ConnectAsync` 连上的客户端在会话声明那条路上自己重开，§7.4）。〔历史〕早期照常接着用，下一问读到的是上一问迟到的答案。
+
 ### 7.2 安全要求
 
 > **Agent 转发是一把上膛的枪。** 远端主机上的 root 可以在转发期间
@@ -419,7 +548,7 @@ agent 服务没起时远端的 `ssh` / `git` 一直挂到 shell 关掉。文件�
 1. **默认关闭**，必须逐连接显式开启。
 2. **必须支持「只转发指定的密钥」**（`AgentForwardOptions.AllowedKeys`），
    而不是把整个 agent 暴露出去。
-3. **可选的签名确认回调**（`AgentForwardOptions.ConfirmEachSignature`）：
+3. **可选的签名确认回调**（`AgentForwardOptions.ApproveSignature`）：
    每次远端请求签名时问一次使用者。对跳板场景这是唯一能让人安心的做法。
 
 〔决策〕**放行名单按证书里的那把钥比较。** 证书与它的钥用的是同一把私钥：放行了钥就等于放行了它的证书，
@@ -443,8 +572,49 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 之后收到的是签名请求 —— 往 agent 里加钥（§7.3）时还有**明文私钥**。抢先建管道的人只能把属主设成自己。
 不靠把模拟级别降到 Identification 来防：OpenSSH 的 agent 服务要以连进来的用户身份保存密钥，降级会把正常的 agent 一起弄坏。
 
+〔决策〕**本机 agent 的默认端点**（`SshAgentClient.DefaultEndpoint`，连 agent 与 agent 转发不指定端点时都用它）：其它平台照
+`SSH_AUTH_SOCK`；Windows 上 `SSH_AUTH_SOCK` 是命名管道（`\\.\pipe\…`）时采纳它 —— 1Password、KeePassXC 这类 agent 会这样配 ——
+否则用 OpenSSH agent 服务的管道。它更常指向 Git Bash / WSL 的 Unix 套接字，那是另一套 agent，.NET 连不上，所以不是管道就不认。
+〔历史〕曾经 Windows 上一律无视 `SSH_AUTH_SOCK`，宿主只好自己再判断一遍。
+OpenSSH agent 服务没在跑（它的管道不在）而当前用户开着 **Pageant** 时用 Pageant：PuTTY 0.75 起它在 `\\.\pipe\pageant.用户名.…`
+上说同一套 agent 协议，管道名后半截随机器而变，所以按「`pageant.` + 当前用户名 + `.`」这个前缀在管道列表里找。两个都在仍用 OpenSSH 的（与以前一致）；
+别的用户的 Pageant 不认。属主检查照旧适用。
+
 〔决策〕**我们只做转发，不做 agent 服务端。**
 本机 agent 由操作系统提供（OpenSSH agent / Pageant / 1Password 等）。
+#### 7.2.1 签名确认要说得出「签来做什么」
+
+> 依据：RFC 4252 §7（`publickey` 的签名输入）；OpenSSH `PROTOCOL`（`publickey-hostbound-v00@openssh.com`）、
+> `PROTOCOL.agent`（`session-bind@openssh.com`）、`PROTOCOL.sshsig`。
+
+确认回调只拿到钥和注释的话，使用者分不出这是自己刚在远端敲的 `git pull`，还是那台机器上有人在拿这把钥登录别处 ——
+「逐次确认」就形同虚设。所以被签的数据认得出来时，`AgentSignatureRequest` 多交几项：
+
+| 属性 | 什么时候有 | 从哪来、为什么当得了真 |
+| --- | --- | --- |
+| `UserName` / `Service` | 被签的是一次公钥登录 | 签名输入里的用户名与服务名。服务端会核对它们与请求一致，这份签名只能拿去以这个用户登录 |
+| `DestinationHostKey` | 登录、且目的主机核实得了 | `publickey-hostbound-v00@openssh.com`：签名输入末尾的主机公钥，服务端会核对是不是自己的。普通 `publickey`：远端那一跳**在同一条 agent 通道上**转来的会话声明（§7.4），**签名我们自己验过**，且会话标识与签名输入里的 `session_id` 相同 |
+| `SignatureNamespace` | 被签的是 SSHSIG（`ssh-keygen -Y sign`、git 的 SSH 提交签名） | 签名输入里的命名空间，如 `git`、`file` |
+
+签名输入的形状：
+
+| 种类 | 字段（按顺序） |
+| --- | --- |
+| 公钥登录（RFC 4252 §7） | string `session_id`；byte `50`；string 用户名；string 服务名；string `publickey`；boolean TRUE；string 签名算法；string 公钥 |
+| 绑定主机密钥的登录 | 同上，方法名换成 `publickey-hostbound-v00@openssh.com`，末尾再加 string 服务端主机公钥 |
+| SSHSIG | 6 字节 `SSHSIG`；string 命名空间；string 保留；string 摘要算法；string 消息摘要 |
+
+〔决策〕**远端的会话声明我们自己验。**不能指望本机 agent 替我们验：不认这个扩展的 agent（Pageant、旧版 Windows agent）
+一律回 `FAILURE`，认它的回的 `SUCCESS` 我们也看不出验没验。不验的话，远端随手拿一把「你信任的主机」的公钥来声明，
+确认框就会说「要登录 github.com」。验不过的声明照样转给 agent（§7.4），只是不拿来当目的主机。
+
+〔决策〕**登录请求里出示的钥必须就是要签的这一把**，否则不当作登录：那份签名哪儿也登录不了，摆出里面的用户名只会误导人。
+
+〔决策〕**只为给人看。**认不出来就什么都不填，绝不因此拒签或改动转给 agent 的请求；进界面的文本清掉控制字符与双向控制符，
+截到 128 字符。只在开了逐次确认时才解析、验签；每条 agent 通道最多记 16 条验过的声明，多出来的挤掉最早的。
+
+〔决策〕**核实不了要明说。**`DestinationHostKey` 为 `null`（远端的 ssh 太旧、不发会话声明，或者**故意**不发）时，
+界面应当写「无法核实」，而不是什么都不写 —— 不写，用户只会默认它是去了自己以为的那台。
 
 ### 7.3 往本机 agent 加钥（`ssh-add`）
 
@@ -474,11 +644,24 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 ⚠️ RSA 这里是 **n 在前、e 在后**，与公钥 blob（e 在前）相反。写反了 agent 照样回 SUCCESS，
 直到第一次签名才露馅。
 
+**「证书 + 私钥」一起加**（`ssh-add` 遇到同名 `-cert.pub` 时做的事，`AddIdentityAsync(私钥, 证书, …)`）：密钥类型换成证书的
+（`ssh-ed25519-cert-v01@openssh.com` 之类），紧跟 string 整张证书；之后**只放证书里没有的私钥部分**：
+
+| 证书类型 | 证书之后的字段（按顺序） |
+| --- | --- |
+| `ssh-ed25519-cert-v01@openssh.com` | string 公钥（32 字节）；string 种子 ‖ 公钥（64 字节）—— 与普通 ed25519 相同 |
+| `ssh-rsa-cert-v01@openssh.com` | mpint d；mpint iqmp；mpint p；mpint q（n、e 在证书里） |
+| `ecdsa-sha2-*-cert-v01@openssh.com` | mpint 私钥标量 d（曲线名与公钥点在证书里） |
+
+加进去之后 agent 的身份列表里是那张证书，签名请求带证书 blob。〔决策〕证书证的不是这把私钥（证书里的公钥与私钥的对不上）、
+或者给的根本不是证书，当场 `ArgumentException`，不发给 agent。〔已核对〕三种证书对真 OpenSSH 10.3 的 `ssh-agent`：
+`ssh-add -l` 列成 `*-CERT`，经它签的名用原公钥验得过。
+
 **约束**：
 
 | 编号 | 名称 | 参数 | 含义 |
 | :-: | --- | --- | --- |
-| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥 |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 秒 | 到期后 agent 自己删掉这把钥。不足一秒向上取整；〔决策〕0、负数或超过 uint32 的有效期在设值时就抛 `ArgumentOutOfRangeException`（曾经被静默钳成 1 秒，加进去的钥一秒后就没了） |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | 无 | 每次签名都由 agent 向使用者确认（`ssh-add -c`） |
 
 **应答**：`6` `SSH_AGENT_SUCCESS` 为成功；`5` `SSH_AGENT_FAILURE` 抛 `SshAgentException`。
@@ -487,8 +670,8 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 
 〔决策〕
 
-1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里；
-   证书签名器（`*-cert-v01@openssh.com`）要「证书 + 私钥」的组合格式，暂不做。其余一律 `ArgumentException`。
+1. **只接受进程内私钥**（`InMemorySshSigner`）。签名器背后是 agent / PKCS#11 / HSM 时私钥根本不在手里。
+   证书走单独的重载，把证书与私钥分开给（见上）。
 2. **没有约束就发 `17`**，不发约束为空的 `25` —— 有的 agent 认 `17` 却不认 `25`。
 3. **请求缓冲用完即清零**。缓冲按上限一次性预留，不让扩容在堆上留下未清零的旧副本。
 4. **不查重**。同一把钥加两次时怎么处理是 agent 的事（OpenSSH 会更新注释与约束）；
@@ -496,6 +679,23 @@ agent 已被锁定（`ssh-add -x`）、agent 不支持这种密钥类型。
 5. **库从不自动加钥**。什么时候往使用者的 agent 里放东西是使用者的决定 ——
    与 04 §2.2「不自动连 agent」是同一条原则。加进去的钥活多久由 agent 决定
    （Windows 的 OpenSSH agent 会把它存进注册表，重启后仍在）。
+
+### 7.3.1 管理 agent 里的钥（删、清空、锁）
+
+> 依据：draft-miller-ssh-agent 的「删除密钥」「锁定与解锁」两节。
+
+| 请求 | 消息号 | 内容 | 方法 | 应答 |
+| --- | :-: | --- | --- | --- |
+| 删一把（`ssh-add -d`） | `18` `SSH_AGENTC_REMOVE_IDENTITY` | string 公钥 blob（证书就给证书 blob） | `RemoveIdentityAsync` | SUCCESS → `true`；FAILURE（没有这把、agent 锁着）→ `false` |
+| 清空（`ssh-add -D`） | `19` `SSH_AGENTC_REMOVE_ALL_IDENTITIES` | 无 | `RemoveAllIdentitiesAsync` | FAILURE 抛 `SshAgentException`（`AgentRefused`，消息点出「锁定」） |
+| 锁（`ssh-add -x`） | `22` `SSH_AGENTC_LOCK` | string 口令 | `LockAsync` | SUCCESS → `true`；FAILURE（已经锁着）→ `false` |
+| 解锁（`ssh-add -X`） | `23` `SSH_AGENTC_UNLOCK` | string 口令 | `UnlockAsync` | SUCCESS → `true`；FAILURE（口令不对、本来没锁 —— agent 不区分）→ `false` |
+
+〔决策〕删一把与锁 / 解锁回 `bool` 而不是抛：「agent 里本来就没有这把」「已经锁着」是正常结果，调用方据此改界面即可。
+清空失败只可能是 agent 锁着或不支持，报错。报文里的口令用完清零。
+
+锁着的 agent（真 OpenSSH 10.3 实测）列身份回空列表、拒绝签名与清空，直到用同一个口令解锁 —— 转发出去的 agent 在这期间也签不了名，
+离开座位时用。
 
 ### 7.4 会话声明（`session-bind@openssh.com`）
 
@@ -710,15 +910,15 @@ byte[d] auth_protocol_data           // 补齐到 4 的倍数
 远程显示写成 `host:N`，macOS launchd 的写成完整的套接字路径 —— 只剩一个 `:N` 的话，
 `xauth` 会去找（或生成）另一个显示的条目。
 〔决策〕转发有**有效期**（默认 20 分钟，对应 `ssh_config` 的 `ForwardX11Timeout`），过期后拒绝新的 `x11` 通道，
-已经建好的不受影响；设成 0 表示整条连接期间都有效。
+已经建好的不受影响；设成不过期（`Timeout.InfiniteTimeSpan`，`ssh_config` 里写 0）表示整条连接期间都有效，0 与负数在设值时就抛。
 〔与 OpenSSH 的有意差异〕`ForwardX11Timeout` 在 OpenSSH 里只管非受信模式；我们**两种模式都管** ——
 受信模式恰恰危险得多，它反而没有期限说不通。
 
-〔决策〕**交给 `xauth` 的 `timeout` 比我们的有效期多 60 秒；有效期为 0 时传 0。**
+〔决策〕**交给 `xauth` 的 `timeout` 比我们的有效期多 60 秒；不过期时传 0。**
 X 的 SECURITY 扩展规定：受限授权在「没有任何连接在用它」的状态持续 `timeout` 秒之后被 X server 清掉，
 0 表示永不过期（不写时默认 60 秒）。两边各自计时：X server 从生成那一刻算起，我们从请求转发时算起 ——
 两者相等时，会出现我们刚接下一条 `x11` 通道、X server 恰好已经清掉授权的临界情况，那条连接被 X server 拒绝。
-多留的余量保证 X server 那边一定晚于我们。有效期为 0 时，给 X server 任何具体的秒数，它都会在空闲那么久之后
+多留的余量保证 X server 那边一定晚于我们。不过期时，给 X server 任何具体的秒数，它都会在空闲那么久之后
 清掉授权，而我们还在接受新的连接 —— 所以两边都不设期限。
 
 ### 7.5.8 失败了怎么办
@@ -784,10 +984,13 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | SSH 会话断开 | 本地/动态转发关监听、放出端口；所有转发器 `IsActive` 变 false；在途连接按出错中止。转发器不因断线另发 `Error`（§2.4、§4.5） |
 | SOCKS 握手非法 | 关掉这一条，计入 `errors`，转发器继续 |
 | SOCKS 请求里的域名长度为 0 | 回 `0x08`，关掉这一条（§3.1） |
+| SOCKS 请求里的端口为 0 | 回 `0x01`，关掉这一条（§3.1） |
 | SOCKS 握手超时（默认 30 秒） | 关掉这一条，触发 `Error`（`ForwardErrorReason.SocksHandshake`），转发器继续（§3.3） |
 | `forwarded-tcpip` 找不到对应转发器 | 回 `CHANNEL_OPEN_FAILURE(1)`；这条连接上一个远程转发都没有时回 `(3)` |
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
-| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）。远程转发：回 `CHANNEL_OPEN_FAILURE(1)`；〔未实现〕触发 `Error` —— 今天只拒掉那条通道，不发事件，也不计入 `errors` |
+| 转发参数的非法值（`MaxConnections` 小于 1、监听端口不在 0–65535、SOCKS 握手时限不为正、绑定地址为 null） | 〔决策〕设值时就抛 `ArgumentOutOfRangeException` / `ArgumentNullException`；起监听之后出了任何错，监听当场关掉。〔历史〕曾经不拦：`MaxConnections = 0` 时监听已经起来、构造转发器才抛，端口一直占到 GC |
+| 在已经断开（或释放）的连接上起转发 | 照实失败：释放了抛 `ObjectDisposedException`，判死了抛那次故障 —— 本地、动态、远程三种一致，不起监听。〔历史〕本地 / 动态转发曾经照样起监听、「成功」返回一个 `IsActive = false` 的转发器 |
+| 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）—— 〔决策〕事件**每秒至多一次**，带着这期间拒了几条；度量里的错误计数照常每条都记（〔历史〕曾经每拒一条报一次，上限撞满时一大波连接让宿主逐条推到界面上）。对端在 accept 之前就重置了的那一条（`ConnectionReset` / `ConnectionAborted`）不退避、也不报 —— 那是那一条自己的事，监听好好的（〔历史〕曾经照「接受失败」报错、整个监听退避 50 ms 起步）。远程转发：回 `CHANNEL_OPEN_FAILURE(4)`（resource shortage，§4.1），同样计入 `errors`、触发 `Error`（`ConnectionLimit`，同样每秒至多一次）；〔历史〕曾经只拒掉那条通道，不发事件，也不计数 |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |
 | 请求 agent 转发时本机 agent 连不上 | 不发 `auth-agent-req`；按 `FailureMode` 抛出或照常启动（§7.1、§7.5.8），原因码沿用 agent 那边的（`AgentNotRunning` / `AgentUnavailable`） |
 | `auth-agent@openssh.com` 通道到来时本机 agent 连不上 | 回 `CHANNEL_OPEN_FAILURE(2)`，描述只写「本机 ssh-agent 不可用」；会话与转发器不受影响（§7.1） |

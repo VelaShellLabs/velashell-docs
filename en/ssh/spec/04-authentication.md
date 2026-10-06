@@ -128,6 +128,11 @@ throw AuthenticationMethodExhausted, with the per-attempt record attached
    Every rescan is triggered by a partial success of a credential not tried before, so the number of scans never exceeds the number
    of credentials. The cost is that one credential may leave several "skipped" entries in the attempt record, one per scan.
 
+〔Decision〕**The only credentials are the library's own: `PasswordCredential`, `PublicKeyCredential`, `KeyboardInteractiveCredential`.**
+`SshCredential` has a `private protected` constructor, so no subclass can be written outside the library — it used to be possible, and such a credential could be put in the list,
+but the authenticator did not recognize it and silently skipped it as "no material": a credential that never takes effect, with no hint at all. The `none` probe (§2.1) is sent by the authenticator itself,
+and `NoneCredential` is an internal type; it used to be public, and putting it in the list only got it skipped.
+
 ### 2.3 Common fields of `USERAUTH_REQUEST`
 
 | # | Type | Field |
@@ -197,7 +202,8 @@ on failure in `SshAuthenticationException.Attempts`:
 | `CredentialLabel` | Name the caller gave the credential (e.g. the private key path), **containing no key material** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | Method list the server offered after this step |
-| `Detail` | E.g. "private key file could not be read", "server does not accept this public key" |
+| `Detail` | E.g. "private key file could not be read", "server does not accept this public key"; clues for a rejected certificate are in §4.5 |
+| `SignatureAlgorithm` | The signature algorithm this `publickey` step used (the retried one after a downgrade); `null` for other methods and for steps skipped before signing |
 
 Its reason to exist is concrete: **so that "this machine requires a one-time code" and "the password was mistyped" can be distinguished in the UI.**
 
@@ -208,10 +214,12 @@ All of these calls happen while **no request is in flight** (before a request is
 so skipping the credential and sending the next credential's request cannot misalign replies.
 
 **Everything else propagates as-is and is never treated as a skip**: a dropped connection (wrapped as `ClosedByPeer`),
-a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback.
+a malformed server message (wrapped as `ProtocolError`), and exceptions thrown by the banner callback (returned as-is, not classified as a dropped connection; see [08 §2.1](08-failures.md)).
 When these happen the request has usually been sent and its reply not yet read. Treating them as a skip would make the
 next credential read the previous credential's reply; the server may already have accepted the user while the client
-reports "all methods failed". Cancellation (`OperationCanceledException`) also propagates as-is.
+reports "all methods failed". Cancellation (`OperationCanceledException`) is not treated as a skip either: one triggered by the caller's token propagates as-is;
+one where neither the caller's token nor the authentication timer fired means the callback itself gave up (the user clicked "Cancel" on a password or one-time-code prompt) —
+the connection ends with `Aborted`, after sending `DISCONNECT(AUTH_CANCELLED_BY_USER)` ([08 §2.1](08-failures.md)).
 
 ---
 
@@ -246,6 +254,13 @@ Rationale: external signing may require the user to press a hardware key, enter 
 for a key the server does not even accept is unacceptable.
 
 This distinction is expressed by `ISshSigner.IsLocalAndCheap`.
+
+〔Decision〕**`PK_OK` must echo the key we asked about** (RFC 4252 §7: the algorithm name and the public key blob are both taken from the request): a mismatched public key blob is a `ProtocolError` —
+we would be signing with a key the server never accepted; besides the algorithm from the request, the key's own type name is also accepted (an `rsa-sha2-256` request echoed as `ssh-rsa`),
+since it names the same key, and the signature algorithm stays the one we chose. 〔History〕Early versions did not look at the echo at all.
+
+〔Decision〕**When the server answers a probe with `SUCCESS` outright (non-compliant, but some implementations do), authentication is complete**: nothing more is signed and no further credential is tried —
+RFC 4252 §5.1 says authentication requests after success are ignored. 〔History〕Early versions recorded it as "this public key is not accepted" and sent the next request, waiting until the authentication timeout.
 
 〔Decision〕**When the key is held in ssh-agent, bind the session with the agent before signing** (`session-bind@openssh.com`, `is_forwarding = false`,
 `07-forwarding.md` §7.4). The agent relies on it to enforce the destination constraints that `ssh-add -h` puts on a key — without the binding, the real OpenSSH agent
@@ -298,19 +313,25 @@ Rules:
 | --- | --- |
 | `server-sig-algs` received (§7) | The highest-priority one among those we support (`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`) |
 | `server-sig-algs` received, but it lists none we can use | 〔Decision〕Still use our own first preference (`rsa-sha2-512`). Servers with incomplete announcements do exist, and a wrong guess costs only one extra round trip |
-| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; 〔Not implemented yet〕if that fails, **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1). Today only the first preference is used, with no retry on failure |
+| `server-sig-algs` not received | 〔Decision〕Try `rsa-sha2-512` first; if it is refused (the probe or the signed request gets `FAILURE`), **downgrade and retry once** with `ssh-rsa` (only if the caller permits SHA-1; a certificate likewise drops to `ssh-rsa-cert-v01@openssh.com`) |
 
 〔Decision〕**Downgrade is off by default** (`AllowSha1RsaSignatures = false`).
 Rationale: unconditional downgrade hands back the gains of Terrapin-style downgrade attacks.
-Those who need to connect to old servers turn it on explicitly. 〔Not implemented yet〕"SHA-1 signature was used this time" is visible in the diagnostics — today the chosen signature algorithm is not recorded in the attempt record.
-Because the retry in the table's third row does not exist yet either, turning the switch on today only takes effect when `server-sig-algs`
-lists `ssh-rsa` but no `rsa-sha2-*` (or when the signer offers only `ssh-rsa`); an old server that sends no `server-sig-algs` still receives only `rsa-sha2-512`.
+Those who need to connect to old servers turn it on explicitly — and the ones that need it most are exactly the old servers that send no `server-sig-algs`, which is why the retry in the table's third row is indispensable.
+When the retry happens, the attempt record (`SshAuthAttempt.Detail`) says "`rsa-sha2-512` was refused, downgraded to `ssh-rsa` (SHA-1) and retried".
+〔Decision〕**Every `publickey` step records the signature algorithm it used in `SshAuthAttempt.SignatureAlgorithm`**; when SHA-1 `ssh-rsa` is picked directly without a downgrade
+(it is the only usable one in `server-sig-algs`, or the only one the key can produce), `Detail` also says "SHA-1 signature used".
+〔History〕Early versions recorded it only for the downgrade retry; when SHA-1 was picked directly, the record did not show it.
 
 〔Note〕**Strip the certificate suffix before deciding "is this SHA-1"** (`SshPublicKey.StripCertificateSuffix`).
 An RSA certificate (§4.5) has three algorithm names: `rsa-sha2-512-cert-v01@openssh.com`, `rsa-sha2-256-cert-v01@openssh.com`
 and `ssh-rsa-cert-v01@openssh.com`. The last one is a SHA-1 signature as well, and with `AllowSha1RsaSignatures = false` it is
 filtered out exactly like `ssh-rsa`. Comparing only against the name `ssh-rsa` means that when logging in with an RSA certificate
 and the server's `server-sig-algs` lists only `ssh-rsa-cert-v01@openssh.com`, SHA-1 still gets picked — the switch would be meaningless.
+
+〔Decision〕**A certificate is also matched against `server-sig-algs` with the suffix stripped** (names listed with the suffix are accepted as well): `server-sig-algs` lists signature algorithms (RFC 8308 §3.1),
+and a certificate's signature algorithm is the one without the suffix. 〔History〕Early versions compared the names as is, so a certificate never matched and always took the first preference —
+a server accepting only `rsa-sha2-256` still received 512, and with SHA-1 allowed a server accepting only `ssh-rsa` never got SHA-1.
 
 〔Note〕The type string in the public key blob is **always `"ssh-rsa"`**, independent of the signature algorithm name (§03 5.1).
 
@@ -328,11 +349,17 @@ pairing the certificate file with the private key. 〔Decision〕**The caller do
 `Create` checks on the spot that the certificate and the private key belong together and fails immediately on a mismatch — otherwise the only symptom
 is the server's `Permission denied`, indistinguishable from "CA not trusted" or "principal mismatch". The library **does not** look for a matching
 `id_*-cert.pub` next to the private key, consistent with §2.2 item 1: it does not read files the caller did not name.
+By default the private key signer passed in belongs to the combined signer and is disposed (zeroed) with it; pass `ownsSigner: false` when the same private key is still used on its own or with another certificate.
+`InMemorySshSigner.FromRsa` / `FromEcdsa` do the same for the `RSA` / `ECDsa` passed in (`ownsKey`), and `SshAgentClient.FromStream` for the stream (`ownsStream`).
 
 〔Decision〕**The client does not validate the validity period of its own certificate.** That is the server's job;
-local validation only produces false negatives when clocks are out of sync. 〔Not implemented yet〕The design is to **put the expiry fact into
-`SshAuthAttempt.Detail`** — when authentication fails, it is the number-one clue. Today the authenticator does not look at the certificate's validity period and `Detail` says nothing about it;
-the validity period is exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`, and saying "your certificate has expired" in the UI is up to the caller.
+local validation only produces false negatives when clocks are out of sync. 〔Decision〕**When a certificate is rejected, the facts visible locally go into `SshAuthAttempt.Detail`**
+— when authentication fails, they are the number-one clue: expired / not yet valid by the local clock (with the Key ID and the time, and the words "by the local clock"), a host certificate,
+the login user not among the principals (listing who the certificate was issued to; empty principals mean valid for every user and do not count). This is written only after a rejection; nothing is held back locally.
+A certificate identity in the agent (whose signer can only hand out the blob) is decoded from the blob and checked the same way.
+〔History〕Early versions did not look at the certificate, and `Detail` said none of this; saying "your certificate has expired" in the UI meant the caller checking `IsTimeValid` itself.
+The validity period is still exposed to the caller through `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid`.
+The two properties that convert to a point in time do not throw on values past the year 9999 (same rule as [03 §5.5](03-key-exchange.md)).
 
 **Certificates in the agent.** When `ssh-add` adds `id_*`, it also adds the matching `id_*-cert.pub`,
 so the agent's identity list often contains entries of type `*-cert-v01@openssh.com`.
@@ -347,7 +374,7 @@ made the whole list fail to parse, and agent authentication, agent forwarding, a
 
 〔Decision〕**An identity that cannot be parsed skips only that entry.** A malformed certificate or a certificate type this library
 does not support (the key inside a certificate must be Ed25519, ECDSA P-256/384/521, or RSA; FIDO `sk-*` and `ssh-dss` are not
-supported) is skipped just like an unrecognized plain key (`sk-*`, `ssh-dss`, vendor-specific types) — failing on one entry would
+supported) is skipped just like an unrecognized plain key (`ssh-dss`, vendor-specific types; plain FIDO `sk-*` keys are recognized, see §4.7) — failing on one entry would
 make the whole agent unusable.
 
 〔Note〕**For RSA certificates, the sign request's flags are set from the algorithm name with the certificate suffix stripped** (`SshAgentClient.SignAsync`).
@@ -355,6 +382,10 @@ In the agent protocol, which SHA-2 an RSA signature uses is expressed by the `SS
 no flag means SHA-1. A certificate's algorithm name is `rsa-sha2-512-cert-v01@openssh.com`; compared directly against `rsa-sha2-512`
 it does not match, the flag stays empty, and the agent produces a SHA-1 `ssh-rsa` signature — which contradicts the algorithm declared
 in the request, and is exactly the kind §4.4 disables by default.
+
+〔Decision〕**The algorithm name in the signature the agent returns is checked**: if it differs from the one requested (with the certificate suffix stripped), the signature is not handed on; an `SshAgentException` (`Unsupported`) is thrown,
+and the credential is skipped as "a problem with the material" (§3.4). An old agent that does not understand the SHA-2 flags still returns an `ssh-rsa` signature: it used to be handed on as-is,
+the authenticator sent it to the server as `rsa-sha2-512`, the user saw only Permission denied, and the intent of `AllowSha1RsaSignatures = false` was quietly bypassed.
 
 〔Decision〕**A certificate's fingerprint is the fingerprint of the key inside it** (`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`),
 matching what `ssh-keygen -l` shows for a certificate. Hashing the whole certificate blob would change the fingerprint on every re-signing,
@@ -364,13 +395,15 @@ fingerprint in the list, and that is correct.
 ### 4.6 Private key files
 
 Local private keys are read by `SshPrivateKeyFile.LoadAsync` / `Parse`, which recognizes the format from the file header. Supported key
-types are Ed25519, RSA, and ECDSA P-256/384/521.
+types are Ed25519, RSA, and ECDSA P-256/384/521. 〔Decision〕An ECDSA curve is **recognized by the curve itself (its OID)**, not by its size: PKCS#8 / SEC1 can carry any curve,
+and secp256k1 and brainpoolP256r1 are 256-bit too — they used to be labelled `nistp256` and handed to the server, the signature failed to verify, and the only symptom was "this public key is not accepted".
+Curves other than the three NIST ones are reported as `Unsupported`.
 
 | Format | File header | Encryption | Decoded by |
 | --- | --- | --- | --- |
 | OpenSSH (`openssh-key-v1`, the `ssh-keygen` default since OpenSSH 7.8) | `BEGIN OPENSSH PRIVATE KEY` | None; or `bcrypt` KDF + `aes{128,192,256}-ctr`, `aes{128,192,256}-cbc`, `aes{128,256}-gcm@openssh.com`, `chacha20-poly1305@openssh.com` | This library |
 | PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | None; or `aes256-cbc` (v2 derives with SHA-1, v3 with Argon2id) | This library |
-| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | None; or PKCS#8's own passphrase encryption | BCL (Ed25519 in PKCS#8 cannot be read) |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | None; or PKCS#8's own passphrase encryption | Decrypted with BouncyCastle; RSA / ECDSA imported with the BCL, Ed25519 (RFC 8410) has its seed extracted by this library |
 | PKCS#1 RSA / SEC1 EC, unencrypted | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | None | BCL |
 | Legacy encrypted PEM | Header of the previous row + `Proc-Type: 4,ENCRYPTED` | Passphrase derived with a single MD5 + 3DES / AES-CBC | **Refused** (see below) |
 
@@ -385,6 +418,102 @@ is thrown **before any passphrase is asked for**, stating clearly that the forma
 helps", and the UI relies on it to decide whether to show the input box again; for an unsupported format no number of prompts helps.
 Such files used to be handed to the BCL, which did not recognize them, yet the verdict was reported as "the passphrase is probably wrong"
 with `NeedsPassphrase = true` — the user kept re-entering the correct passphrase and the UI kept prompting again.
+
+〔Decision〕**Two integrity checks for `.ppk`**:
+① `Private-MAC` is mandatory in v2 / v3, and a missing one is reported as `KeyFormatInvalid` — the check used to be skipped entirely when it was missing, so deleting that line let the public part
+(RSA's n and e, ECDSA's curve and point all come from there) be altered undetected, and a wrong passphrase could not be detected either;
+② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
+so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
+
+〔Decision〕**The Ed25519 private key in a `.ppk` is the 32-byte seed at fixed length (the RFC 8032 private key, bytes as is), not an mpint**: no leading zero is added when the first byte is ≥ 0x80.
+The basis is real `puttygen` (0.83) output — every one of 80 keys was 32 bytes, 47 of them with a first byte ≥ 0x80; samples are kept in the tests together with the public keys exported by `ssh-keygen -y`.
+Files written by mpint rules (one leading zero, or shorter than 32 bytes with leading zeros dropped) are accepted too and normalized to 32 bytes; a misreading is caught on the spot by check ② above.
+〔History〕Early versions read it as an mpint: files whose first byte was ≥ 0x80 (about half) were rejected as "negative mpint" and could not be loaded at all. The test cases back then were all `.ppk` files assembled on the same understanding, so the shared mistake could not show up.
+
+〔Decision〕**`openssh-key-v1` is checked for internal consistency too**, and any mismatch is `KeyFormatInvalid`:
+① the plaintext public section at the head of the file must be the same key as the one derived from the private part (it used to be discarded unread — yet `ssh-keygen -y` and agents list that public section);
+② an Ed25519 private section carries the public key twice (on its own, and after the seed), and the seed yields a third copy; all three must be identical;
+③ an ECDSA key type and curve name must agree (`ecdsa-sha2-nistp256` goes with `nistp256`);
+④ an RSA `n` must be exactly `p·q` (with p and q both greater than 1). A broken file's only symptom used to be "the server does not accept this public key".
+
+〔Decision〕**Reading the public key without a passphrase: `SshPrivateKeyFile.TryReadPublicKey(pem, out key)`.** The public section of `openssh-key-v1` and the
+`Public-Lines` of a `.ppk` are plaintext to begin with, so they can be read even when the private key is encrypted; for unencrypted PKCS#1 / SEC1 / PKCS#8 the public key is derived from the private key.
+Encrypted PKCS#8 and legacy encrypted PEM do not carry the public key in the clear, so the method returns `false`; an unrecognized format or an incomplete file also just returns `false` and does not throw.
+The plaintext copy has **not** been checked against the private key (that needs decryption first), so it is only for showing a fingerprint or writing a `.pub`; authentication uses the key that `Parse` / `LoadAsync`
+decrypts, which is where the checks above happen. The use case is importing a file that has a private key but no `.pub` — a PuTTY user usually has just one `.ppk`.
+
+〔Decision〕**The KDF iteration count of an encrypted PKCS#8 key is capped at ten million** (PBKDF2 under PBES2, and PBES1 / PKCS#12 PBE); it is read from the DER and checked before handing the key to the BCL,
+and a larger count is reported as `KeyFormatInvalid`. The count comes from the file, and **.NET sets no limit when importing encrypted PKCS#8** (3 million iterations import fine in testing): a file altered to `int.MaxValue`
+runs for about five minutes at roughly seven million iterations per second, synchronously and uncancellably. Common values are OpenSSL's 2048 and OWASP's recommended 600,000.
+〔Decision〕**An encrypted PKCS#8 key is decrypted once** (BouncyCastle recovers the plaintext PrivateKeyInfo inside): a failed padding check means a wrong passphrase (`KeyPassphraseIncorrect`);
+once decrypted, **dispatch is by the algorithm identifier in the PrivateKeyInfo** — RSA and ECDSA on the NIST curves are imported by the BCL, Ed25519 is covered by the next item, and Ed448 / DSA / other curves are reported as `Unsupported`
+(`NeedsPassphrase = false`, naming the key type). A plaintext PKCS#8 key is dispatched the same way.
+〔Decision〕**Ed25519 in PKCS#8 is read per RFC 8410 §7** (the BCL cannot import such a key): `privateKey` wraps one more layer, `CurvePrivateKey` (an OCTET STRING),
+holding the 32-byte seed; it is read as BER (required by RFC 5958; RFC 8410 Appendix A has an indefinite-length example), and attributes `[0]` and later extension fields are skipped.
+When a v2 key carries a public key `[1]`, **it is checked to be the one the seed derives**, and a mismatch is `KeyFormatInvalid` (the same rule as for `openssh-key-v1` and `.ppk` above) —
+a real `ssh-keygen` still reads the two incorrect examples in RFC 8410 Appendix A (a public key one byte short) and hands out the public key written in the file. A seed that is not 32 bytes is likewise `KeyFormatInvalid`.
+〔History〕It used to be reported as `Unsupported` across the board, and the encrypted form was reported as "wrong passphrase" even earlier (see below).
+〔History〕An encrypted PKCS#8 key does not reveal its key type, so early versions handed it to the BCL as RSA, then as ECDSA, running the whole KDF on each attempt, and reported "the passphrase is probably wrong" when both failed —
+with an Ed25519 / DSA key inside, the passphrase was in fact right and the UI kept asking for it again. Encryption schemes BouncyCastle does not know still take that old path:
+when the ciphertext is at most 320 bytes ECDSA is tried first (an elliptic-curve key, even P-521 with its public key, is under 260 bytes; the smallest 512-bit RSA key is over 340).
+
+〔Decision〕**A private key file is foreign input, and anything that cannot be understood is an `SshPrivateKeyException` (`KeyFormatInvalid`)**, whatever the format and wherever the error is:
+truncation (a copy and paste lost the last line, with the base64 breaking exactly on a 4-character boundary), malformed fields (a `.ppk` with `Public-Lines: abc`, an RSA key whose p or q is 1).
+The original exception is kept as the inner one. Likewise, **a malformed reply from the agent** (a truncated identity list or signature) is an `SshAgentException` (`ProtocolError`).
+Internal exceptions from the parsing layer, or BCL ones such as `FormatException` / `DivideByZeroException`, used to leak out as they were — callers only catch these two exception types, so they went all the way to the UI.
+
+〔Decision〕**Writing a private key file: `SshPrivateKeyFile.Format(key, passphrase, comment, kdfRounds)`, which writes `openssh-key-v1` only**
+(the `ssh-keygen` default today, usable as is anywhere else). With a passphrase it uses the `bcrypt` KDF (a 16-byte random salt, 16 rounds by default, as `ssh-keygen` does) + `aes256-ctr`;
+without one both the cipher and the KDF are `none`. The private section starts with two identical random check words, and the field order is the same one the reading side uses (Ed25519 is public key ‖ (seed ‖ public key);
+RSA is n, e, d, iqmp, p, q; ECDSA is curve name, public point, d), followed by the comment and padded to the block size (16 when encrypting, 8 otherwise) with 1, 2, 3…;
+the body is wrapped at 70 columns with `\n` line breaks. The plaintext private section, the derived key material and the exported RSA / ECDSA private parameters are all zeroed after use. File permissions (0600 on Unix) are the caller's business.
+New keys come from `InMemorySshSigner.GenerateEd25519()` / `GenerateEcdsa(256 | 384 | 521)` / `GenerateRsa(bits)` (2048–16384, a multiple of 8, 3072 by default).
+Only a real tool decides whether it is right: the tests have a real `ssh-keygen -y` read the files this library writes (with and without a passphrase), and the exported public key must match this library's byte for byte —
+with the padding starting at the wrong value, this library still reads its own output back.
+〔History〕The library used to read only, not write; the host had its own hand-written container that could only write **unencrypted** private keys, and did not zero the private parameters it exported.
+
+### 4.7 FIDO / U2F security keys (through the agent)
+
+> Basis: OpenSSH `PROTOCOL.u2f`.
+
+Keys generated by `ssh-keygen -t ed25519-sk` / `ecdsa-sk` on hardware such as a YubiKey: the private key never leaves the hardware, and every signature needs a touch —— malware on the computer cannot steal the key.
+
+| Type | Public key blob |
+| --- | --- |
+| `sk-ssh-ed25519@openssh.com` | `string` type ‖ `string` public key (32 bytes) ‖ `string` application |
+| `sk-ecdsa-sha2-nistp256@openssh.com` | `string` type ‖ `string` curve name (`nistp256`) ‖ `string` public point (65-byte uncompressed point, must be on the curve) ‖ `string` application |
+
+`SshPublicKey` recognizes both (`IsSecurityKey`, `SecurityKeyApplication`; the signature algorithm name is the type name), so **security keys in the agent are listed and
+can be presented as credentials**: the sign request goes to the agent (no flags), the agent has the hardware sign and the user touch it, and the signature is handed to the server as-is. Forwarding works as usual.
+
+〔Decision〕**Phase one goes through the agent only**: talking to the hardware directly (Windows `webauthn.dll`, libfido2), with its PIN and touch interaction, is a separate step.
+
+〔Decision〕**This library does not verify security-key signatures** (`VerifySignature` is always false for them): the client has no use for it —— the server verifies; and with no hardware implementation at hand to check against,
+an implementation could only vouch for itself. Security keys as host keys, and security-key certificates (`sk-*-cert-v01@openssh.com`), are not supported.
+
+〔Verified〕For both public key types this library produces, a real `ssh-keygen -lf` reads them, labels them `ED25519-SK` / `ECDSA-SK`, and the fingerprints match.
+
+### 4.8 Keys in the system key store (Windows CNG)
+
+In environments with company-issued smart cards, or compliance rules that keep private keys off disk, keys live in a key store and cannot be exported. `CngSshSigner.Open(name, provider, options)` opens a named key in a Windows CNG
+key store as a signer: **the private key is not exported; the key store does the signing**.
+
+| Key store | `CngProvider` |
+| --- | --- |
+| Software key store (default) | `MicrosoftSoftwareKeyStorageProvider` |
+| TPM | `MicrosoftPlatformCryptoProvider` |
+| Smart card | `MicrosoftSmartCardKeyStorageProvider` (or the card vendor's KSP) |
+
+RSA (`rsa-sha2-512` / `-256`) and ECDSA P-256 / P-384 / P-521 are supported; CNG has no Ed25519.
+
+〔Decision〕**`IsLocalAndCheap` is false**: a TPM signature takes a hundred milliseconds or more, and a smart card may ask for a PIN or a confirmation —— so the authenticator first asks the server whether it accepts the key (§4.1 phase one) before signing;
+signing runs on the thread pool and does not block the caller's thread. Since the private key cannot be exported, the key cannot be added to an agent either.
+
+〔Decision〕**Fail immediately when it cannot be opened**: not found or no permission is `KeyFileUnreadable`; a key that cannot sign (ECDH) or an unknown algorithm is `Unsupported`.
+
+PKCS#11 tokens and the macOS Secure Enclave are not part of this step (the `ISshSigner` extension point stays, and users can implement their own).
+
+〔Verified〕**Non-exportable** RSA and ECDSA keys created on the fly in the current user's software key store produce signatures that verify with the public key; against a real sshd, with the public key temporarily added to `authorized_keys`, login works with only that key.
 
 ---
 
@@ -406,12 +535,31 @@ The server may reply with `SSH_MSG_USERAUTH_PASSWD_CHANGEREQ` (**60**, a method-
 | 2 | `string` | Prompt text (UTF-8) |
 | 3 | `string` | Language tag (ignored) |
 
-〔Decision〕**Recognize it, but do not implement the password-change flow** — receiving it is always recorded as one failure of that password credential,
-with the reason in `Detail` ("the server requires the password to be changed first; this library does not implement the password-change flow yet"),
-rather than treated as an incomprehensible message. There is no password-change callback to configure, and the request's "change password" flag is always sent as `FALSE`.
+〔Decision〕**With a new-password callback configured the password is changed; without one the reason is spelled out.** `PasswordCredential.NewPasswordProvider`
+(`Func<SshPasswordChangeRequest, CancellationToken, ValueTask<string?>>`, `null` by default) is called when this message arrives;
+`SshPasswordChangeRequest` carries the server's prompt (as sent; the consumer sanitizes it before putting it on screen) and which attempt this is (`Attempt`, starting at 1).
+Once the callback returns a new password, the library sends a change-password request:
+
+| # | Type | Field |
+| :-: | --- | --- |
+| 1–4 | | Common, method name `"password"` |
+| 5 | `boolean` | `TRUE` |
+| 6 | `string` | Old password (this credential's password) |
+| 7 | `string` | New password |
+
+The server's replies (RFC 4252 §8): success = changed, and signed in; `FAILURE` with partial = changed, more authentication needed;
+`FAILURE` without partial = **not changed** (password change unsupported, or the old password is wrong); another `PASSWD_CHANGEREQ` = the new password was not accepted (too simple, and so on),
+so the callback is asked again with `Attempt` incremented, **at most `PasswordCredential.MaxNewPasswordAttempts` (3) times**.
+No callback, the callback returning `null` (not changing it this time), not changed, or out of attempts are each recorded as one failure of that password credential, with `Detail` saying which;
+when the methods run out the reason is `PasswordExpired` (not the generic "methods exhausted"). A callback throwing `OperationCanceledException` is treated like the keyboard-interactive callback (`Aborted`).
+
+〔Decision〕**The protocol has no "type it again" step**: a mistyped new password becomes the account's password as is. So having the user enter it twice and comparing is the UI's job;
+the library sends exactly the one it is given. Once changed, the password the consumer has saved is stale, and whether to update it is the consumer's call.
 
 Rationale: password expiry is very common in enterprise environments, and "the client simply disconnects without saying why"
-is the kind of failure users find hardest to recover from on their own.
+is the kind of failure users find hardest to recover from on their own; changing it on the spot saves a trip to the administrator or to another client.
+〔History〕Early versions only recognized this message without implementing the password-change flow, and the request's "change password" flag was always sent as `FALSE`.
+OpenSSH's `sshd` never sends this message (expired passwords go through PAM's keyboard-interactive), so the test server plays out the four replies of RFC 4252 §8.
 
 ### 5.2 Security requirements
 
@@ -420,6 +568,12 @@ is the kind of failure users find hardest to recover from on their own.
 - The password's lifetime in memory should be as short as possible; `ZeroMemory` it after use.
   〔Decision〕The credential interface accepts `Func<CancellationToken, ValueTask<...>>` rather than `string`,
   so the caller can decrypt and retrieve it only when actually needed.
+- 〔Decision〕**The same goes for private-key passphrases**: besides the overloads taking `string`, `SshPrivateKeyFile.Parse` / `LoadAsync` have overloads taking `ReadOnlySpan<char>` /
+  `ReadOnlyMemory<char>` — the passphrase can live in the caller's own `char[]` and be cleared by the caller afterwards (a `string` is immutable and cannot be cleared).
+  Every intermediate copy the library derives from the passphrase (UTF-8 bytes, the derived key and IV, the decrypted private section) is zeroed.
+  **The cancellation token reaches the passphrase KDF**: `bcrypt_pbkdf` checks it every round, Argon2 and PBKDF2 check it before starting; cancellation throws `OperationCanceledException`
+  and is not wrapped as "private key format invalid". 〔History〕Early versions used `LoadAsync`'s token only for reading the file, so a high-round key could not be stopped once the KDF started.
+  〔Not implemented〕The private key text itself still comes in as a `string` (the parsers of every format work on `string`) — the contents of an unencrypted key file cannot be cleared; that is the current boundary.
 - Writing the password into any log or `IPacketTap` is **forbidden** (General §5.5).
 
 ---
@@ -500,13 +654,18 @@ sequenceDiagram
 Many servers enable both `password` and `keyboard-interactive`,
 and the latter's only prompt is "Password:".
 
-〔Decision〕**Provide `PasswordCredential.AlsoAnswerKeyboardInteractive` (default `true`)**:
+〔Decision〕**Provide `PasswordCredential.CanAnswerKeyboardInteractive` (default `true`)**:
 when `keyboard-interactive` has exactly one prompt and `echo == false`,
 answer it automatically with the password, without bothering the caller.
 
 Rationale: this is the actual behavior of the OpenSSH client, and it is what users expect.
 But it **must** be possible to turn it off — in a true 2FA scenario, the first prompt may be the one-time code,
 and auto-filling the password only wastes an attempt.
+
+〔Decision〕**Within one keyboard-interactive exchange the password is answered at most once**; later rounds (even if they too are a single non-echoed prompt) get empty strings, so the server rejects cleanly and the next credential is tried.
+Rationale: the usual PAM two-step flow is a "Password:" round followed by a "Verification code:" round, both a single non-echoed prompt.
+Looking only at the shape and not the round would send the password in the second round as well — wasting a failure count, and modules such as pam_radius or Duo
+forward that round's answer to a RADIUS server or a third-party service, so the password leaves the target host.
 
 ---
 

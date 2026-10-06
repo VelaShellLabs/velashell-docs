@@ -15,19 +15,34 @@
 stateDiagram-v2
     [*] --> Opening : send CHANNEL_OPEN
     Opening --> Open : receive OPEN_CONFIRMATION
-    Opening --> Failed : receive OPEN_FAILURE
+    Opening --> Closed : receive OPEN_FAILURE (number returned at once)
     Open --> LocalEof : send CHANNEL_EOF (I will send no more data)
     Open --> RemoteEof : receive CHANNEL_EOF (peer will send no more)
     LocalEof --> BothEof : receive CHANNEL_EOF
     RemoteEof --> BothEof : send CHANNEL_EOF
-    Open --> Closing : send/receive CHANNEL_CLOSE
+    Open --> Closing : we send CHANNEL_CLOSE first
     LocalEof --> Closing
     RemoteEof --> Closing
     BothEof --> Closing
-    Closing --> Closed : CHANNEL_CLOSE both sent and received
-    Failed --> [*]
+    Closing --> Closed : receive the peer's CHANNEL_CLOSE
+    Open --> Closed : receive a CHANNEL_CLOSE the peer sent first (answer it at once) / local dispose / session gone
+    LocalEof --> Closed
+    RemoteEof --> Closed
+    BothEof --> Closed
     Closed --> [*]
 ```
+
+`Closing` appears only when **we close first**; when the peer sends `CLOSE` first we answer it on receipt and go straight to `Closed`. `Closed` means "finished on our side";
+it **does not mean the channel number has been returned to the session** — when we dispose a channel the peer's `CLOSE` may still be in flight, and the number stays reserved until it arrives (rule 2).
+The reason on the `Closed` event depends on **who sent `CLOSE` first**: `ClosedLocally` if we did, `ClosedByPeer` if the peer did, `SessionClosed` if the session went away.
+〔Decision〕**The connection exposes a snapshot of its open channels** (`SshConnection.Channels`: channel number, type, state, open time `OpenedAt`, bytes in both directions, ordered by channel number):
+listing "which shells, tunnels and SFTP sessions are open on this connection" in connection info uses it. A snapshot rather than the channels themselves —— a channel belongs to whoever opened it, and anyone else holding it could close it.
+〔History〕There used to be only a number, `ChannelCount`, and no open time.
+〔Decision〕The same reason is also recorded on `SshChannel.CloseReason` (`Unknown` while the channel is open), **already set before stdout / stderr reach their end** —
+a reader that sees the end can look at it to tell whether the remote process exited, the session went away, or we closed it; after only an EOF, with no `CLOSE` yet, it is still `Unknown`.
+The event stream has a single reader; the property gives the same answer to anyone, any number of times. 〔History〕It used to live only in the event stream, so the host had to infer "remote exited / connection lost / local teardown" from how the read pipe ended.
+〔2026-10-05 correction〕The diagram used to have a `Failed` state that does not exist in the implementation (a failed open goes straight to `Closed`), and said "send/receive `CLOSE` → `Closing`".
+The implementation was corrected at the same time: when our `CloseAsync` sent first and the peer duly answered with `CLOSE`, the event stream used to report `ClosedByPeer` regardless.
 
 **Six hard rules**:
 
@@ -88,6 +103,10 @@ For server-initiated channel types see [`07-forwarding.md`](07-forwarding.md).
 - It constrains the data segment length of a single `CHANNEL_DATA` the **peer** sends to us.
 - The value the peer announces constrains what **we** send to it. OpenSSH usually announces 32 KiB.
 - **The value announced by the peer must be respected**: exceeding it makes the peer disconnect.
+- 〔Decision〕The value the peer announces is **clamped to our own limit** (our packet length limit minus the packet header, the channel header and the maximum padding): taken at face value, a peer announcing 4 GiB
+  would make the stdin pump pack the several MiB queued in the pipe into one packet.
+- 〔Decision〕The peer announces **0**: it accepts no data at all. Whatever is written to stdin fails visibly (the writer's flush gets an `SshChannelException`, `ProtocolError`);
+  completing stdin without writing anything still sends `EOF`. The chunk used to be computed as 0 and taken for "the channel is closed", and the pump quietly exited — stdin silently stopped working, and not even `EOF` was sent any more.
 
 ### 2.3 Replies
 
@@ -150,6 +169,10 @@ During heavy uploads on the same connection (a pile of port-forwarded connection
 if another channel's `WINDOW_ADJUST` queued behind them, the peer would get its window only after all of that had been sent —
 our own upload would slow the download almost to a halt, coupling the two directions. 〔History〕Early on, an adjustment even had to wait for room on the backpressure before it could be enqueued.
 
+〔Decision〕**Senders waiting on backpressure queue in arrival order; when room frees up they are released one at a time from the head of the queue until the room is used up again, and each is charged the moment it is released.**
+〔History〕Early versions woke every waiter after each flush round: they all checked the room, all got through together, the backlog shot past the limit by several messages, and the next round they all went back to sleep together (a thundering herd);
+nor did the first to wait necessarily go first.
+
 So window adjustments go through a separate priority lane: the send pump checks it before taking each item, and an adjustment does not wait on backpressure;
 its bytes still count toward the pending total, so data-plane senders see them. This is safe because:
 
@@ -157,6 +180,17 @@ its bytes still count toward the pending total, so data-plane senders see them. 
 - Jumping only moves it **earlier**; it never passes what it must not pass: once `CLOSE` has been sent, the check under the enqueue lock (§1 rule 6) still stops it;
   during a rekey it is still stashed by the send gate, and the stash preserves order;
 - It has no ordering constraint relative to the data we send — it is about our **receiving**, not our **sending**.
+
+〔Decision〕**Interactive channels use an interactive lane that takes turns with the normal queue** (Q7). Each channel has at most one data frame in the queue at a time (the stdin pump sends the next frame only after the previous one has been flushed),
+but when a pile of tunnel connections and SFTP are sending at once, the normal queue holds one frame from each of them; a keystroke in a terminal queued behind them has to wait until they are all on the wire ——
+over 3 seconds with a 2 MiB backlog on a 5 Mbit/s uplink. Frames sent by interactive channels (`SshChannelOptions.IsInteractive`; channels opened by `OpenShellAsync` are interactive automatically) go into the interactive lane,
+and after the window adjustments the send pump **takes turns** between the interactive lane and the normal queue (taking from the other when one is empty), so a keystroke waits for at most one frame from the normal queue.
+
+- **Taking turns, not priority**: when a large paste goes into a terminal, or many terminals are scrolling at once, the normal queue still gets every other turn and is never starved;
+- **All** of a channel's frames go through the same lane —— those it sends itself and those the receive loop sends on its behalf (`CHANNEL_CLOSE`, request replies) —— so the order of its own frames is unchanged,
+  `CLOSE` still follows its data, and request replies still line up in FIFO order; the lane is fixed when the channel is opened and never changes (switching lanes midway would reorder its own frames);
+- There was never an ordering constraint relative to other channels or to connection-level messages; during a rekey, frames from the interactive lane are still stashed by the send gate, and the stash preserves order.
+- Not solved: bytes already handed to the operating system's socket send buffer still go out first. 〔History〕There used to be a single FIFO (plus the priority lane for window adjustments).
 
 ### 3.3 Adaptive window
 
@@ -235,7 +269,7 @@ refunding by window size, or refunding twice, makes the budget grow with every r
 | 3 | `uint32` | `data_type_code` — **1 = stderr**, others reserved |
 | 4 | `string` | Data |
 
-〔Decision〕**Extended data with `data_type_code != 1`: discard, count against the window, log one debug entry.**
+〔Decision〕**Extended data with `data_type_code != 1`: discard, count against the window, log one debug entry.** (There is no logger yet, see `08-failures.md` §10; today it is only discarded and counted against the window.)
 No error — the semantics of reserved values may be defined in the future, and disconnecting would prevent us from coexisting with newer implementations.
 
 ### 4.3 Shape of the data-plane API
@@ -259,7 +293,7 @@ There are two reasons, and the second is a hard one:
 
 〔Important〕**The two streams share a single channel window** (RFC 4254 §5.2: `CHANNEL_EXTENDED_DATA` counts against the window too).
 Each pipe has its own buffer, but there is only one window: if one side is not read, once its data fills the window **the other side stalls too**.
-So either read both sides (`ReadToEndAsync` reads them concurrently) or set the stderr you do not care about to `Discard`.
+So either read both sides (concurrently; that is how `RunAsync` reads them) or set the stderr you do not care about to `Discard`.
 
 〔Decision〕**stderr can be explicitly discarded** (`SshChannelOptions.StderrMode = SshStderrMode.Discard`).
 In that case the library still receives packets as usual and **replenishes the window immediately**, but does not buffer — otherwise discarding would turn into a deadlock.
@@ -267,7 +301,15 @@ In that case the library still receives packets as usual and **replenishes the w
 〔Decision〕**Completing `StandardInput` sends EOF.** When the caller completes this `PipeWriter` (`Complete` / `CompleteAsync`),
 the library does what `SendEofAsync` does: first send everything already written, then send `CHANNEL_EOF` (§1 item 1: EOF is not closing the channel).
 `SendEofAsync` and `CompleteStandardInputAsync` are still there; the only difference is that they **wait** until the EOF is queued before returning.
-EOF is sent only once: whichever first moves the channel to "local EOF" sends it; neither sends it while the channel is closing or already closed.
+EOF is sent only once: whichever first moves the channel to "local EOF" records that an EOF is owed, and the stdin pump sends it after flushing everything already written (under the channel's own lifetime);
+nothing is sent while the channel is closing or already closed. 〔Decision〕If `SendEofAsync` is cancelled while waiting for the flush, it merely stops waiting, and the EOF is still sent — it used to send the EOF itself after waiting,
+so a cancellation meant the EOF was never sent and a remote `cat` / `sort` waited for input forever.
+
+〔Decision〕**`StandardInput` belongs to the caller; the library never completes it on the caller's behalf.** Writing after the channel has closed makes `WriteAsync` / `FlushAsync` return `IsCompleted`
+(the `PipeWriter` idiom for "the reading side is gone") without throwing; the `AsStream()` stream's write throws `IOException`.
+The library used to complete this writer while tearing down: the next write got a BCL `InvalidOperationException` — not an `SshException`, with no disconnect reason —
+and teardown often runs on the receive loop, while the caller may be writing on another thread, which means touching someone else's `PipeWriter` across threads. Now the stdin pump's side does the teardown (it completes the reader).
+Once CLOSE has been queued, the frame in the pump's hands is no longer sent and is not counted as "sent" — otherwise the channel stream's `FlushAsync` would report success for data that was dropped.
 
 Rationale: completing the writer is the idiomatic way for a `PipeWriter` to say "I'm done writing". If it were not treated as EOF, the caller would write, complete the writer,
 and a remote program waiting to read all of its input (`cat`, `sort`, `tar x`) would wait forever —— with no visible error on the caller's side.
@@ -292,6 +334,9 @@ A terminal also relies on this to tell "the user typed `exit`" from "the link br
 
 Data already received but not yet read when the link breaks is discarded along with it — the result is incomplete anyway.
 Disposing the connection yields `ObjectDisposedException` rather than a connection failure, so the caller can tell "I tore it down" from "the link broke".
+Disposal first sends `DISCONNECT(BY_APPLICATION)` within a time limit (`08-failures.md` §6), then stops the send and receive loops; 〔Decision〕**waiting for those loops to finish is time-limited too** (2 seconds):
+when the limit is reached the transport is disposed first, closing the underlying stream so that stuck reads and writes end, and then it waits once more. Reads and writes on the underlying stream do not necessarily respond to cancellation — on Windows, `ProxyCommand`'s anonymous pipes
+complete by blocking on the thread pool (`09-dialing.md` §6) — and since disposal used to wait for the loops first and dispose the transport afterwards, with no time limit, it hung in that case.
 
 **`SshChannel.Closed`** (a `CancellationToken`) is cancelled when the channel is **entirely** finished: both `CLOSE`s done, this side disposed the channel,
 the peer refused the open, or the connection went away. It differs from EOF — EOF only means the peer will send no more, and writing to it still makes sense; at `Closed` both directions are gone.
@@ -318,6 +363,13 @@ The reply is `CHANNEL_SUCCESS` (99) / `CHANNEL_FAILURE` (100),
 When multiple `want_reply = true` requests are sent concurrently on the same channel,
 replies come back in sending order. The request ledger (L6) uses a **queue**, not a dictionary, on this channel.
 
+〔Decision〕**On a channel this side has already wound down, a late reply is absorbed, not treated as out of sync.**
+When the caller cancels while waiting for a reply (a probe command with a timeout, the user closing the tab while a shell is opening), the channel winds down on this side:
+CLOSE is sent, the ledger is closed, requests in flight are settled as "did not succeed", and the channel number stays reserved until the peer's CLOSE (§4.3).
+The peer replies to that request first and only then sends CLOSE — that reply is a legitimate in-flight message (RFC 4254 §5.3)
+and must not be taken as the FIFO falling out of sync; otherwise the terminal, SFTP and tunnels on the same connection would all go down with it.
+Likewise, once the ledger is closed no further `want_reply = true` request is sent: its reply would come back with nobody to claim it.
+
 ### 5.2 Requests we send
 
 | Type | `want_reply` | Fields |
@@ -331,12 +383,27 @@ replies come back in sending order. The request ledger (L6) uses a **queue**, no
 | `signal` | **false** (required by RFC) | `string signal_name` (**without the `SIG` prefix**) |
 | `auth-agent-req@openssh.com` | true | None |
 | `x11-req` | true | See `07-forwarding.md` §7.5.3 |
+| `eow@openssh.com` | **false** | None. Sent to OpenSSH only (see below) |
+| `break` (RFC 4335) | 〔Decision〕**true** | `uint32 break-length` (milliseconds; `0` = the device's default length) |
+
+〔Decision〕**Once enough output has been read, tell the server: `eow@openssh.com`** (the channel write close extension in OpenSSH's `PROTOCOL`, `StopStandardOutputAsync`).
+The use case is wanting only the first few lines of output (like `head` or `grep -m 1`): the local end completes standard output and discards whatever arrives afterwards (the window is replenished as usual),
+and an OpenSSH server, on receiving it, closes the output end of the remote process, which gets `SIGPIPE` on its next write and ends early instead of running to completion and wasting bandwidth.
+It is the opposite direction of `CHANNEL_EOF` and likewise does not close the channel: the exit status still arrives and standard input can still be written; standard error is not affected.
+**It is sent to OpenSSH only** (judged by the server's identification string `SSH-2.0-OpenSSH_`): some implementations disconnect on a channel request they do not know (against RFC 4254 §5.4, but they exist).
+For other implementations the output is only discarded locally, and the return value says whether the request was sent. Measured against a real OpenSSH: sent after reading a few KB of `yes`, the process soon ends with signal `PIPE`; without it, `yes` keeps running.
+
+〔Decision〕**`break` asks for a reply** (`SshShell.SendBreakAsync(length)`, returning whether the server performed it). Reaching a serial console server or a network device's console over SSH,
+this is how one gets into ROMMON / the boot menu; RFC 4335 §3 requires the server to reply `SUCCESS` if it performed any kind of BREAK and `FAILURE` if not,
+and when the user presses "Send Break" the UI must be able to say it was not performed. The length defaults to `0` (the device's default length); the RFC suggests servers clamp it to 500 ms–3 s.
+A real OpenSSH performs it on a session with a pseudo-terminal and replies `SUCCESS`.
 
 〔Decision〕**The order of requests on a session channel is fixed**:
 
 | Usage | Order |
 | --- | --- |
 | Interactive shell | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `shell` |
+| Command in a pseudo-terminal (`ssh -t`, §7.2) | `pty-req` → `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `exec` |
 | One-shot command | `x11-req` → `auth-agent-req@openssh.com` → `env` → (caller hook) → `exec` |
 
 `x11-req` and `auth-agent-req` are sent only when the caller **explicitly requests** them; when one cannot be set up (a preparation failure on the local side, or the server refuses), it is handled per the options'
@@ -399,7 +466,9 @@ end:      byte 0 (TTY_OP_END)
 - Opcodes 1–159 carry a `uint32` argument; 160–255 are reserved (stop parsing upon an unknown one).
 - 〔Decision〕The opcode table lives in `Channels/SshTerminalModeOpcode.cs`;
   common ones (`VINTR`=1, `VERASE`=3, `ECHO`=53, `ICRNL`=36, `ONLCR`=72,
-  `IUTF8`=42, `ISPEED`=128, `OSPEED`=129) get named members, the rest may be passed as raw values.
+  `IUTF8`=42, `ISPEED`=128, `OSPEED`=129) get named members, the rest may be passed as raw values — cast to the enum (`(SshTerminalModeOpcode)n`;
+  the enum's underlying type is `byte`). `SshTerminalModes.With` has only this one entry point: there used to be a second overload taking a raw `byte` that did the same thing,
+  and since the literal `0` converts implicitly to both, `With(0, …)` did not even compile. 0 (the end marker) and 160–255 throw when set.
 - It **must** end with `TTY_OP_END` (0). If this byte is missing, OpenSSH rejects the entire `pty-req`.
 
 ### 5.4 Requests we receive (server → client)
@@ -409,7 +478,13 @@ end:      byte 0 (TTY_OP_END)
 | `exit-status` | false | `uint32` exit code → `SshChannelEvent.ExitStatus` |
 | `exit-signal` | false | See below |
 | `keepalive@openssh.com` | true | Reply `CHANNEL_FAILURE` (allowed by RFC; the peer only needs a reply) |
+| `xon-xoff` (RFC 4254 §6.8) | false | `boolean client can do` → `SshChannelEvent.FlowControl`; the latest value is in `SshChannel.ClientMayDoFlowControl` (`null` if never received) |
 | Others | Per `want_reply` | Unknown type: reply `CHANNEL_FAILURE` when `want_reply` is true, otherwise ignore |
+
+〔Decision〕**`xon-xoff` is typed into an event**, subject to the event backlog cap together with unknown requests (the peer can flip it back and forth endlessly); the latest value is also kept in a property, unaffected by the cap.
+〔History〕Early versions surfaced it only as a generic `PeerRequest`, and callers had to decode the payload themselves.
+The host does not act on it: the RFC lets the client ignore this message, and a real OpenSSH (10.x) does not send it even while `stty ixon` / `-ixon` is toggled —
+^S / ^Q are sent as keystrokes as usual and handled by the remote pty.
 
 `exit-signal`:
 
@@ -432,6 +507,11 @@ end:      byte 0 (TTY_OP_END)
 the RFC requires `exit-status` to be sent **before** `CHANNEL_CLOSE`.
 But the case "CLOSE received while there is still no exit status" **must** still be handled (non-conforming peer implementation or a broken connection);
 in that case `ExitCode` is `null`, and the reason is carried in `SshChannelEvent.Closed`.
+
+〔Decision〕**The exit status is cached on the channel**, not kept only in the event stream: the event stream has a single reader, and once read it is gone. Once the channel has closed, `WaitAsync`
+returns the cached value — however many times it is called, whether after `RunAsync` has read the output or after the caller has read the events itself, the answer is the same. It used to be `null` on the second ask.
+〔Decision〕**`WaitAsync` does not read the event stream**; it waits on the channel's own close signal, and the event stream belongs to the caller (`ReadEventAsync`). It used to loop reading events until `Closed`,
+competing with the caller's own reader for the same single-reader stream — when both ran concurrently it was anyone's guess who got the exit status, and waiting first then reading found the events already consumed.
 
 ---
 
@@ -472,7 +552,7 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
-| `KeepAliveInterval` | 0 (off) | Interval since **the last receipt of any message**, not a fixed period |
+| `KeepAliveInterval` | 0 (off) | Interval since **the last receipt of any message**, not a fixed period. Capped at `int.MaxValue` milliseconds (about 24.8 days); a larger value throws `ArgumentOutOfRangeException` at construction |
 | `KeepAliveMaxMissed` | 3 | This many consecutive probes without any reply → the connection is declared dead |
 
 **Key points**:
@@ -499,16 +579,76 @@ Replies are `REQUEST_SUCCESS` (81) / `REQUEST_FAILURE` (82).
    and when it arrives it must land on this entry so that subsequent real global requests line up correctly.
 7. After being declared dead the session **actually stops**: it raises `Disconnected`, stops the receive/send pumps, and closes all channels
    (channel readers get the reason the session was declared dead, rather than hanging forever or seeing an EOF-like normal end — see §4.4).
+8. 〔Decision〕**Keepalive measures the round trip on the way**: the time from a probe being queued to its reply arriving is recorded in `SshConnection.LastRoundTrip` (`null` until measured);
+   `MeasureRoundTripAsync()` measures once on demand (the same request; a success or a failure reply both count). It measures the whole path (through proxies and jump hosts alike),
+   including the server's handling of one global request — closer to the "lag" a user feels than an ICMP ping, and unaffected by targets that block ICMP;
+   while channels are moving a lot of data the probe queues behind it and the figure comes out high. Timing goes through the connection's `TimeProvider`.
 
 ### 6.4 Requests we receive
 
 | Type | Handling |
 | --- | --- |
-| `hostkeys-00@openssh.com` | 〔Decision〕Implemented in M5 — the server proactively announces all its host keys, for rotation. Parsed and passed to `IHostKeyPolicy.OnHostKeysAnnouncedAsync` |
+| `hostkeys-00@openssh.com` | After authentication the server announces all its host keys, for rotation (OpenSSH's `UpdateHostKeys`). When the host key policy does rotation it is handled per §6.4.1, otherwise ignored (OpenSSH sends it with `want_reply = false`) |
 | Other unknown | Reply `REQUEST_FAILURE` when `want_reply = true`, otherwise ignore |
 
 〔Important〕**Replying `REQUEST_FAILURE` to unknown global requests is mandatory**; staying silent is not allowed.
 Silence would permanently misalign the peer's FIFO queue — the reply to its next request would be taken as the reply to this one.
+
+### 6.4.1 Host key rotation (`UpdateHostKeys`)
+
+> Basis: the `hostkeys-00@openssh.com` / `hostkeys-prove-00@openssh.com` section of OpenSSH `PROTOCOL`; the session identifier is in RFC 4253 §7.2.
+
+| Direction | Message | Content |
+| --- | --- | --- |
+| S → C | `GLOBAL_REQUEST "hostkeys-00@openssh.com"`, `want_reply = false` | `string` public key blob, repeated (all of the server's host keys) |
+| C → S | `GLOBAL_REQUEST "hostkeys-prove-00@openssh.com"`, `want_reply = true` | `string` public key blob, repeated (the keys to be proven) |
+| S → C | `REQUEST_SUCCESS` | `string` signature, one per key in request order |
+
+Each signature covers: `string "hostkeys-prove-00@openssh.com"` ‖ `string session_id` (the `H` of the initial exchange) ‖ `string public key blob`.
+
+The benefit comes later: when operators replace an RSA host key with Ed25519, or rotate keys regularly, the client already knows the new key —— the user does not see "the host key changed, possibly a man in the middle",
+and does not have to delete lines by hand, so that warning regains its weight.
+
+〔Decision〕**The policy decides, and it is off by default**: rotation happens only when the host key policy implements `IHostKeyRotationPolicy` and `AllowHostKeyUpdates` is true (`KnownHostsPolicy.AllowHostKeyUpdates`, default `false`).
+
+〔Decision〕**Only add keys for "known hosts"**:
+- Hosts presenting a certificate (CA-managed) are skipped —— their trust comes from the CA, not from any key in `known_hosts`;
+- The announcement must include the key this connection used, and that key must be **recorded in `known_hosts` as a plain key** (`GetKnownHostKeyFingerprintsAsync`, which returns fingerprints:
+  trust stores often keep only fingerprints, and a SHA-256 fingerprint covers the whole public key blob, so comparing fingerprints is the same as comparing blobs; they are compared after normalization, with or without padding) —— otherwise it is unclear on whose behalf to record
+  (a key accepted by TOFU in this session but not recorded, or a pinned fingerprint, does not count);
+- Only the keys **not yet recorded** are sent for proof; certificates, types the library does not know, and duplicates are ignored; at most 16 keys are looked at.
+
+〔Decision〕**Strict verification**: RSA only accepts SHA-2 signatures (`ssh-rsa`'s SHA-1 is not accepted); **if one signature fails, none of the keys is recorded** —— with one forgery in the reply, the rest cannot be trusted either.
+
+〔Decision〕**Add new keys and remove old ones** (Q4): proven new keys are appended to `known_hosts` (`RecordHostKeysAsync`); keys that are recorded but missing from this announcement are forgotten (`ForgetHostKeysAsync`;
+`KnownHostsPolicy` uses the rewrite path of [spec/03 §5.4](03-key-exchange.md) and removes only records that belong to this host alone). Preconditions for removal: the announcement is **complete** (no more than the 16 keys looked at, otherwise the unread ones might include it),
+and the new keys that need proof have **all been proven** (with one forgery, nothing is added and nothing is removed); the key used by this connection is always in the announcement and is never removed. The result is in `SshHostKeyUpdate.RemovedFingerprints`.
+Without removal, a retired key stays trusted forever —— if its private key ever leaks, whoever holds it can still impersonate this host.
+The default implementation of `IHostKeyRotationPolicy.ForgetHostKeysAsync` removes nothing (a removed record cannot be brought back, so policies that do not implement it keep adding only). 〔History〕It used to only add, never remove.
+
+〔Decision〕**In the background, best effort**: the receive loop only parses; proving and writing the file happen in the background (they send a global request and wait for its reply); once per connection.
+The result is in `SshConnection.LastHostKeyUpdate` (which keys were added, or why nothing was done); a failure does not affect the connection.
+
+〔Verified〕Against a real sshd (three host keys): the first connection records the negotiated key by TOFU, and rotation adds the other two; with the request name in the signed data altered, the real sshd's proofs no longer verify.
+With a key recorded that sshd does not have, it is removed from `known_hosts` after connecting, and the other lines stay exactly as they were.
+
+### 6.5 Transport-layer PING / PONG (`ping@openssh.com`)
+
+> Basis: the ping section of OpenSSH `PROTOCOL`; RFC 4250 §4.1.2 (192–255 reserved for local extensions); RFC 8308 §2.4 (the second `EXT_INFO` after authentication).
+
+| Message | Number | Content |
+| --- | :-: | --- |
+| `SSH2_MSG_PING` | 192 | `string` data |
+| `SSH2_MSG_PONG` | 193 | `string` data (echoed back) |
+
+The server announces `ping@openssh.com` in `EXT_INFO` (OpenSSH 9.5 and later). Both the `EXT_INFO` during authentication and the one after it are read; once seen, `SshConnection.PeerSupportsPing` is true.
+
+〔Decision〕**No PING is ever sent unless the peer announced it** (messages the peer does not know are not sent); a PING from the peer is answered with PONG carrying the same data.
+
+〔Decision〕**When announced, round-trip time is measured with PING** (`MeasureRoundTripAsync` / `LastRoundTrip`, §6.3): a transport-level echo, without the server processing a global request, so the measurement is more accurate.
+The data is an 8-byte sequence number, and a PONG counts only when it matches; a dropped connection is reported as such. Without the announcement the keep-alive global request is used as before.
+
+〔Verified〕Against a real OpenSSH 10.3: its ping announcement is recognized, several measurements in a row all get a PONG, and the connection works normally afterwards.
 
 ---
 
@@ -555,28 +695,64 @@ There are only three differences from the diagram above, but all of them concern
 Their lifecycles, read/write shapes and exit semantics all differ; cramming them together results in a pile of
 "this property is meaningless when there is a pty" conditional branches, and someone will always trip over such branches.
 
+〔Decision〕**Running one command in a pseudo-terminal (`ssh -t host cmd`) goes through `SshShell`**: when `SshShellOptions.Command` is not `null`,
+`exec` (carrying that command) is sent after `pty-req` instead of `shell`. Commands that need a terminal (`sudo`, `top`, interactive TUIs) run in one go
+without opening a whole login shell; the channel closes when the command finishes, and the exit code is available as usual. The dividing line is "is there a pseudo-terminal",
+not "is it a command or a shell" — with a pseudo-terminal there is only one output stream and the size can change, which is exactly the shape of `SshShell`; so terminal parameters
+are not added to `SshCommandOptions`, which would give `SshCommand` a `StandardError` that is forever empty under a pty. A rejected `exec` is reported as "the server refused to run this command".
+
+### 7.3 Keystroke timing obfuscation (`ObscureKeystrokeTiming`)
+
+> Basis: `ObscureKeystrokeTiming` in ssh_config(5) (behavior description only); the chaff messages are the PINGs of §6.5.
+
+In an interactive terminal each keystroke is one packet, and the intervals between keystrokes are visible on the network —— the rhythm of typing a password or a command reveals its content; it is a well-known side channel.
+With `SshShellOptions.ObscureKeystrokeTiming` (the tick; OpenSSH defaults to 20 milliseconds; off by default in this library):
+
+- The `StandardInput` the user writes to becomes the obfuscator's pipe. The tick loop sends **at most one packet per tick**: the accumulated input (one `CHANNEL_DATA`), or —— when there is no input in this tick ——
+  **a chaff PING of the same length** (5 random bytes of data; the whole payload is 10 bytes, the same as a one-keystroke `CHANNEL_DATA`).
+- Chaff continues for **a random period after the last keystroke** (0.5–1.5 seconds): with a fixed length, "the chaff stopped" would itself reveal when the last key was pressed. When idle, nothing at all is sent.
+- A large write (over 256 bytes: a paste, a file transfer) does not need hiding and goes out immediately —— it is the rhythm of *typing* that is obscured.
+- `CompleteStandardInputAsync` first sends what has accumulated, then `EOF`.
+
+〔Decision〕**Chaff requires the server to support PING**; without it the input is only batched and no chaff is sent —— messages the peer does not know are not sent (§6.5).
+〔Decision〕**Off by default**: the cost is bandwidth (while typing, about 1000 / tick packets per second, with as many PONGs coming back) and each keystroke going out up to one tick later. The host decides whether to turn it on.
+
+`ObscureKeystrokeTiming` in `ssh_config`: `yes` → 20 milliseconds, `interval:N` → N milliseconds, `no` → off (`SshHostConfig.ApplyToShell`).
+
+〔Verified〕Against a real sshd: a command typed into the shell one character at a time runs and returns its output as usual, with chaff sent while typing.
+
 ---
 
 ## 8 Edge cases and errors quick reference
 
 | Situation | Handling |
 | --- | --- |
-| Message received for an unknown channel number | 〔Decision〕**Ignore and log at debug level**; do not disconnect. May be in-flight data for a just-reclaimed channel |
+| Message received for an unknown channel number | 〔Decision〕**Ignore and log at debug level** (there is no logger yet; today it is only ignored); do not disconnect. May be in-flight data for a just-reclaimed channel |
 | Peer sends data exceeding the window we announced | `ProtocolError`, disconnect (this is a clear protocol violation) |
 | Peer sends a single data segment exceeding the max packet we announced | `ProtocolError`, disconnect |
 | Data we want to send exceeds the peer's window | Wait for `WINDOW_ADJUST` (backpressure), **no error** |
 | `WINDOW_ADJUST` causes the window to overflow `uint32` | `ProtocolError`, disconnect |
 | Data for a channel received after its `CHANNEL_CLOSE` | Discard, no error (§1 rule 4) |
-| SUCCESS/FAILURE received while the channel request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync) |
+| `CHANNEL_OPEN_FAILURE` received for a channel that is already open | Ignore (a peer violation). 〔Decision〕Do not wind the channel down and release its number on the spot — without the two-way `CLOSE` the peer still thinks it is open, and reusing the number would cross the streams |
+| `CHANNEL_CLOSE` received for a channel still waiting for confirmation | Wind it down as "not opened": the open call fails with `ChannelOpenFailed`; no `CLOSE` is sent back (the peer's channel number is not known yet). It used to send `CLOSE` back as usual (with a peer number still 0), and a caller waiting for confirmation without a token hung forever |
+| SUCCESS/FAILURE received while the channel request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync); except on a channel this side has already wound down, where it is absorbed (§5.1) |
 | SUCCESS/FAILURE received while the global request reply queue is empty | `ProtocolError`, disconnect (FIFO out of sync) |
 | Message with an unknown number received | Reply `UNIMPLEMENTED`, **carrying the sequence number of the rejected message** (RFC 4253 §11.4); do not disconnect |
-| `UNIMPLEMENTED` / `IGNORE` / `DEBUG` / `EXT_INFO` received | Ignore (replying `UNIMPLEMENTED` to an `UNIMPLEMENTED` would only make both sides echo each other) |
+| `UNIMPLEMENTED` / `IGNORE` / `EXT_INFO` received | Ignore (replying `UNIMPLEMENTED` to an `UNIMPLEMENTED` would only make both sides echo each other) |
+| `DEBUG` received | With `always_display`, sanitized and handed to `SshConnectionOptions.DebugMessageHandler` (RFC 4253 §11.3: "should be displayed"): during authentication in order within the authentication flow, with exceptions from the callback passed back as they are; after connecting on the thread pool without holding up the receive loop, with exceptions from the callback dropped. Without `always_display`, or malformed: ignored. 〔History〕All of them used to be dropped |
 | `DISCONNECT` received | Session declared dead; the exception carries **the reason code and the peer's verbatim text** (`DisconnectReason` / `PeerDescription`) |
 | The peer keeps sending messages that need replies but does not read what we send back | Replies posted by the receive loop queue past `MaxQueuedReplyBytes` (default 16 MiB) → `ProtocolError`, disconnect. The receive loop cannot wait on backpressure, so a hard limit is the only option here; replies also count toward backpressure, so data-plane senders wait |
-| The peer floods channel requests we don't recognize | At most 64 unread unknown requests stay in the event stream; later ones are dropped (still answered with `FAILURE`). Exit status, `EOF` and close are not affected |
+| The peer floods channel requests we don't recognize | At most 64 unread unknown requests stay in the event stream; later ones are dropped (still answered with `FAILURE`). Exit status, `EOF` and close are not subject to this limit |
+| The peer repeats exit status / exit signal / `EOF` | Only the first is taken, later ones are dropped — each happens once per channel (RFC 4254 §6.10) and is not subject to the limit above, so accepting repeats would be memory amplification that bypasses window flow control. A repeated `EOF` does not change the state either |
 | The peer opens a channel type we don't recognize | Reply `CHANNEL_OPEN_FAILURE`; the description is truncated to 256 characters — an overlong type name from the peer is not echoed back verbatim |
-| Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException`, **do not disconnect the session** |
+| Session window total budget exceeded | Refuse to open new channels, throw `SshChannelException` (`LimitExceeded` — a limit on this side, not the peer-refused `ChannelOpenFailed`), **do not disconnect the session** |
 | Channel count exceeds `MaxChannels` (〔Decision〕default 512) | Same as above |
+
+〔Decision〕**Invalid values for these limits throw `ArgumentOutOfRangeException` when they are set**, instead of causing trouble after the connection is up:
+`MaxChannels` must be at least 1; `SessionWindowBudgetBytes`, `MaxQueuedReplyBytes` and the channel's `ReceiveMaxPacketBytes` must be positive;
+`ChannelIdReuseDelay` must not be negative. The upper bound of `ReceiveMaxPacketBytes` (it must fit within the transport's packet limit, see [01 §1.1](01-transport-framing.md)) is checked when the channel is opened.
+〔History〕Early versions did not validate: `MaxQueuedReplyBytes = 0` declared the connection dead on the very first reply; a zero or negative `ReceiveMaxPacketBytes` was cast to `uint` and announced to the peer as is;
+a keepalive interval over about 24.8 days overflowed the millisecond count in the keepalive loop into a negative number and the loop exited silently — keepalive was configured but never ran.
 
 〔Decision〕**When disconnecting with `ProtocolError`, send `DISCONNECT(2)` first, then declare the session dead.**
 In the reverse order, the send path would refuse at its first step because it is "already faulted", and `DISCONNECT` would never reach the peer —
@@ -610,6 +786,11 @@ Every action that wakes someone up from these two places must let the woken part
   exactly what the rule above ("caller code is never executed on the receive loop") exists to prevent.
   Now the receive loop only parses the message and looks up the handlers (with no handler it refuses on the spot with `UNKNOWN_CHANNEL_TYPE`); asking the handler, creating the channel and sending the confirmation all happen in the background.
   This introduces no ordering problem: the peer may not send anything on the channel before it receives our confirmation, and the order in which the confirmations of two opens go out does not matter — each carries the peer's channel number.
+  〔Decision〕**But the peer may send as soon as it receives the confirmation** (port scans, health checks: connect, then EOF + CLOSE), and the receive loop runs concurrently with the background task:
+  the peer's channel number, initial window, packet limit and the channel state must be set **before the confirmation is enqueued**, and the pumps start only after it is enqueued
+  (so data from the pumps queues behind the confirmation). The confirmation used to go out first and the peer's number was set afterwards: when the background task was preempted between the two steps,
+  the receive loop handled that CLOSE first and answered with a CLOSE carrying a channel number that was still 0 — closing the peer's channel 0 (often the user's first shell),
+  while the real channel never received a CLOSE. Setting the state also no longer overwrites a channel that has already wound down.
 - **At most 64** peer channel opens may be deciding in the background at once; any beyond that are refused immediately with `CHANNEL_OPEN_FAILURE` (`RESOURCE_SHORTAGE`, reason code 4).
   Without a limit, a peer flooding channel opens while the handler is slow would leave a pile of hanging tasks.
 - After a handler accepts, this side may still reject the channel because the channel count or window budget is exhausted —

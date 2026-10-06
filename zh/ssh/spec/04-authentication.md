@@ -123,6 +123,11 @@ sequenceDiagram
    换个时机也不会变成对的，再试只是白耗服务端的 `MaxAuthTries`。每次重扫都由一条新凭据的部分成功触发，
    所以扫描次数不会超过凭据条数。代价是同一条凭据可能在尝试记录里留下多条「跳过」，每次扫描一条。
 
+〔决策〕**凭据只有库里的几种：`PasswordCredential`、`PublicKeyCredential`、`KeyboardInteractiveCredential`。**
+`SshCredential` 的构造函数是 `private protected`，库外写不出子类 —— 曾经能写、也能放进凭据列表，认证器不认识，
+把它当成「取不到材料」静默跳过：一条永远不会生效的凭据，没有任何提示。`none` 探测（§2.1）由认证器自己发，
+`NoneCredential` 是内部类型；它曾经公开，放进列表也只会被跳过。
+
 ### 2.3 `USERAUTH_REQUEST` 的通用字段
 
 | # | 类型 | 字段 |
@@ -192,7 +197,8 @@ RFC 4252 §5 允许中途改用户名，但服务端行为未定义 —— 我�
 | `CredentialLabel` | 使用者给凭据起的名字（如私钥路径），**不含任何密钥材料** |
 | `Outcome` | `Success` / `PartialSuccess` / `Failure` / `SkippedNotOffered` / `SkippedNoMaterial` |
 | `ServerOfferedAfter` | 这一步之后服务端给出的方法列表 |
-| `Detail` | 例如「私钥文件读不出来」「服务端不接受这把公钥」 |
+| `Detail` | 例如「私钥文件读不出来」「服务端不接受这把公钥」；证书被拒时的线索见 §4.5 |
+| `SignatureAlgorithm` | `publickey` 这一步用的签名算法（降级重试过的记重试那一个）；别的方法、没签就跳过的为 `null` |
 
 它的存在理由很具体：**要让「这台机器需要动态码」和「密码打错了」在 UI 上能区分开。**
 
@@ -202,9 +208,11 @@ RFC 4252 §5 允许中途改用户名，但服务端行为未定义 —— 我�
 跳过它、接着发下一条凭据的请求不会让应答错位。
 
 **其余一律照实抛出，不许当成跳过**：连接中断（包成 `ClosedByPeer`）、服务端报文格式非法（包成 `ProtocolError`）、
-横幅回调抛出的异常。它们发生时请求往往已经发出、应答还没读 —— 当成「跳过」接着试下一条，
+横幅回调抛出的异常（原样交还，不归成连接断开，见 [08 §2.1](08-failures.md)）。它们发生时请求往往已经发出、应答还没读 —— 当成「跳过」接着试下一条，
 下一条凭据读到的就是上一条的应答；服务端其实已经认证通过，客户端却报「所有方法都失败」。
-取消（`OperationCanceledException`）同样照实抛出。
+取消（`OperationCanceledException`）同样不当成跳过：调用方的令牌触发的照实抛出；调用方的令牌与认证计时器都没触发的，
+是回调自己不连了（用户在口令框、动态码框上点了「取消」）—— 连接以 `Aborted` 结束，并先发 `DISCONNECT(AUTH_CANCELLED_BY_USER)`
+（[08 §2.1](08-failures.md)）。
 
 ---
 
@@ -239,6 +247,13 @@ sequenceDiagram
 去打扰用户或发一次网络请求是不可接受的。
 
 这条区分由 `ISshSigner.IsLocalAndCheap` 表达。
+
+〔决策〕**`PK_OK` 回显的必须是我们问的那一把**（RFC 4252 §7：算法名与公钥 blob 都取自请求）：公钥 blob 对不上是 `ProtocolError` ——
+签下去的会是服务端没认过的那一把；算法名除了请求里的那个，也认这把钥自己的类型名（`rsa-sha2-256` 的请求回显成 `ssh-rsa`），
+说的是同一把钥，签名算法照我们选的。〔历史〕早期回显什么都不看。
+
+〔决策〕**服务端对探测直接回 `SUCCESS`（不合规，个别实现会这样）就算认证完成**，不再签名、也不再试下一条凭据 ——
+RFC 4252 §5.1 说成功之后的认证请求一律忽略。〔历史〕早期记成「不接受这把公钥」、接着发下一条请求，一直等到认证超时。
 
 〔决策〕**钥在 ssh-agent 里时，签名之前先向 agent 声明会话**（`session-bind@openssh.com`，`is_forwarding = false`，
 `07-forwarding.md` §7.4）。agent 靠它执行 `ssh-add -h` 给钥加的目的地约束 —— 不声明的话，真实的 OpenSSH agent
@@ -291,19 +306,25 @@ string    公钥 blob
 | --- | --- |
 | 收到 `server-sig-algs`（§7） | 取其中我们支持的、优先级最高的（`rsa-sha2-512` > `rsa-sha2-256` > `ssh-rsa`） |
 | 收到 `server-sig-algs`，但其中没有我们能用的 | 〔决策〕仍用我们自己的第一偏好（`rsa-sha2-512`）。宣告不完整的服务端确实存在，试错的代价只是一次多余的往返 |
-| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；〔未实现〕若因此失败，**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1）。今天只用第一偏好，失败了不重试 |
+| 未收到 `server-sig-algs` | 〔决策〕先试 `rsa-sha2-512`；若被拒（探测或签名请求回 `FAILURE`），**降级重试一次** `ssh-rsa`（仅当使用者允许 SHA-1；证书同理降到 `ssh-rsa-cert-v01@openssh.com`） |
 
 〔决策〕**降级默认关闭**（`AllowSha1RsaSignatures = false`）。
 理由：无条件降级会把 Terrapin 那类降级攻击的收益还回去。
-需要连老服务器的人显式打开。〔未实现〕在诊断信息里能看到「本次使用了 SHA-1 签名」—— 今天选中的签名算法不进尝试记录。
-由于上表第三行的重试也还没有，今天打开这个开关只在 `server-sig-algs` 列了 `ssh-rsa`、却没列 `rsa-sha2-*` 时
-（或签名器只提供 `ssh-rsa` 时）起作用；不发 `server-sig-algs` 的老服务器照样只收到 `rsa-sha2-512`。
+需要连老服务器的人显式打开 —— 最需要它的恰恰是不发 `server-sig-algs` 的老服务器，所以上表第三行的重试不可少。
+降级重试时，尝试记录（`SshAuthAttempt.Detail`）写明「`rsa-sha2-512` 被拒后降级为 `ssh-rsa`（SHA-1）重试」。
+〔决策〕**每一步 `publickey` 都把用的签名算法记进 `SshAuthAttempt.SignatureAlgorithm`**；没有降级、直接挑中 SHA-1 的
+`ssh-rsa`（`server-sig-algs` 里能用的只有它，或这把钥只给得出它）时，`Detail` 也写一笔「用的是 SHA-1 签名」。
+〔历史〕早期只有降级重试才进记录，直接选中 SHA-1 时记录里看不出来。
 
 〔注意〕**判断「是不是 SHA-1」之前先去掉证书后缀**（`SshPublicKey.StripCertificateSuffix`）。
 RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`、`rsa-sha2-256-cert-v01@openssh.com`
 与 `ssh-rsa-cert-v01@openssh.com`，最后一个同样是 SHA-1 签名，`AllowSha1RsaSignatures = false` 时
 与 `ssh-rsa` 一样被滤掉。只比对 `ssh-rsa` 这个名字的话，拿 RSA 证书登录、服务端的 `server-sig-algs`
 又只列了 `ssh-rsa-cert-v01@openssh.com` 时，SHA-1 照样会被挑出来用 —— 开关形同虚设。
+
+〔决策〕**证书与 `server-sig-algs` 比对时也去掉后缀**（原样列出带后缀的名字也认）：`server-sig-algs` 列的是签名算法（RFC 8308 §3.1），
+证书的签名算法就是不带后缀的那个。〔历史〕早期只按原样比，证书永远比不中、永远取第一偏好 ——
+只认 `rsa-sha2-256` 的服务端照样收到 512，允许 SHA-1 时只认 `ssh-rsa` 的服务端也收不到 SHA-1。
 
 〔注意〕公钥 blob 里的类型串**永远是 `"ssh-rsa"`**，与签名算法名无关（§03 5.1）。
 
@@ -321,11 +342,17 @@ RSA 证书（§4.5）的三个算法名是 `rsa-sha2-512-cert-v01@openssh.com`�
 `Create` 当场核对证书与私钥是不是一对，配错了立刻报 —— 否则表现只是服务端一句 `Permission denied`，
 与「CA 不被信任」「主体不匹配」分不开。库**不会**去私钥旁边找同名的 `id_*-cert.pub`，
 与 §2.2 第 1 条一致：不读使用者没点名的文件。
+私钥签名器默认交进来就归合成的签名器，释放它时一并释放（清零）；同一把私钥还要单独用、或者配别的证书时传 `ownsSigner: false`。
+`InMemorySshSigner.FromRsa` / `FromEcdsa` 对交进来的 `RSA` / `ECDsa` 同理（`ownsKey`），`SshAgentClient.FromStream` 对流同理（`ownsStream`）。
 
 〔决策〕**客户端不校验自己证书的有效期。** 那是服务端的职责；
-本地校验只会在时钟不同步时制造假阴性。〔未实现〕设计是**把过期事实放进
-`SshAuthAttempt.Detail`** —— 认证失败时这是头号线索。今天认证器不看证书的有效期，`Detail` 里没有这一条；
-有效期由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者，要在界面上说「证书过期了」得自己判断。
+本地校验只会在时钟不同步时制造假阴性。〔决策〕**证书被拒时，把本地看得出的事实放进 `SshAuthAttempt.Detail`**
+—— 认证失败时这是头号线索：按本机时钟已过期 / 还没生效（带 Key ID 与时刻，话里带着「按本机时钟」）、是主机证书、
+登录用户不在 principals 里（列出证书签给了谁；principals 为空表示对所有用户有效，不算）。只在被拒之后写，不在本地拦着不发。
+agent 里的证书身份（签名器只交得出 blob）同样从 blob 解出证书来看。
+〔历史〕早期认证器不看证书，`Detail` 里没有这些；要在界面上说「证书过期了」得使用者自己拿 `IsTimeValid` 判断。
+有效期仍由 `OpenSshCertificate.ValidBeforeTime` / `IsTimeValid` 交给使用者。
+换算成时刻的那两个属性不会因为 9999 年以后的值抛异常（规则同 [03 §5.5](03-key-exchange.md)）。
 
 **agent 里的证书。** `ssh-add` 加 `id_*` 时会顺手把同名的 `id_*-cert.pub` 一起加进去，
 所以 agent 的身份列表里常有 `*-cert-v01@openssh.com` 类型的条目。
@@ -339,13 +366,17 @@ agent 认证、agent 转发、自动加钥三条路一起断。
 
 〔决策〕**解析不了的身份只跳过那一条。** 格式坏掉的证书、本库不支持的证书类型
 （证书里的钥只认 Ed25519、ECDSA P-256/384/521 与 RSA；FIDO 的 `sk-*`、`ssh-dss` 都不认），
-与不认识的普通钥（`sk-*`、`ssh-dss`、厂商私有类型）一样，跳过即可 —— 为其中一条报错等于让整个 agent 用不了。
+与不认识的普通钥（`ssh-dss`、厂商私有类型）一样，跳过即可（FIDO 的 `sk-*` 普通钥认得，见 §4.7） —— 为其中一条报错等于让整个 agent 用不了。
 
 〔注意〕**RSA 证书的签名请求要按去掉证书后缀的算法名设标志位**（`SshAgentClient.SignAsync`）。
 agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RSA_SHA2_512` 标志位表达，
 不带标志位就是 SHA-1。证书的算法名是 `rsa-sha2-512-cert-v01@openssh.com`，直接拿它去比 `rsa-sha2-512`
 对不上，标志位就空着，agent 签出来的是 SHA-1 的 `ssh-rsa` —— 与请求里声明的算法不符，
 而且正是 §4.4 默认要禁掉的那一种。
+
+〔决策〕**agent 签回来的签名要核对算法名**：与请求的（去掉证书后缀）不一致就不交出去，报 `SshAgentException`（`Unsupported`），
+这条凭据按「材料有问题」跳过（§3.4）。不认 SHA-2 标志位的老 agent 会照旧回一个 `ssh-rsa` 签名：曾经原样交出去，
+认证器当 `rsa-sha2-512` 发给服务端，用户只看到 Permission denied，`AllowSha1RsaSignatures = false` 的意图也被悄悄绕过。
 
 〔决策〕**证书的指纹就是证书里那把钥的指纹**（`SshPublicKey.Sha256Fingerprint` / `Md5Fingerprint`），
 与 `ssh-keygen -l` 对证书显示的一致。按整张证书的 blob 算的话，每次重签指纹都会变，
@@ -354,13 +385,15 @@ agent 协议里 RSA 用哪种 SHA-2 靠 `SSH_AGENT_RSA_SHA2_256` / `SSH_AGENT_RS
 ### 4.6 私钥文件
 
 本地私钥由 `SshPrivateKeyFile.LoadAsync` / `Parse` 读入，按文件头认格式。密钥类型支持 Ed25519、RSA、
-ECDSA P-256/384/521。
+ECDSA P-256/384/521。〔决策〕ECDSA 的曲线**按曲线本身（OID）认**，不按位数：PKCS#8 / SEC1 能装任意曲线，
+secp256k1、brainpoolP256r1 也是 256 位 —— 曾经被标成 `nistp256` 交给服务端，签名验不过，症状只是「不接受这把公钥」。
+三条 NIST 曲线以外的报 `Unsupported`。
 
 | 格式 | 文件头 | 加密 | 谁来解 |
 | --- | --- | --- | --- |
 | OpenSSH（`openssh-key-v1`，OpenSSH 7.8 起 `ssh-keygen` 的默认） | `BEGIN OPENSSH PRIVATE KEY` | 不加密；或 `bcrypt` KDF + `aes{128,192,256}-ctr`、`aes{128,192,256}-cbc`、`aes{128,256}-gcm@openssh.com`、`chacha20-poly1305@openssh.com` | 本库 |
 | PuTTY `.ppk` v2 / v3 | `PuTTY-User-Key-File-2` / `-3` | 不加密；或 `aes256-cbc`（v2 用 SHA-1 派生，v3 用 Argon2id） | 本库 |
-| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | BCL（PKCS#8 里的 Ed25519 读不了） |
+| PKCS#8 | `BEGIN PRIVATE KEY` / `BEGIN ENCRYPTED PRIVATE KEY` | 不加密；或 PKCS#8 自带的口令加密 | 解密用 BouncyCastle；RSA / ECDSA 导入用 BCL，Ed25519（RFC 8410）由本库取出种子 |
 | PKCS#1 RSA / SEC1 EC，不加密 | `BEGIN RSA PRIVATE KEY` / `BEGIN EC PRIVATE KEY` | 无 | BCL |
 | 传统加密 PEM | 上一行的文件头 + `Proc-Type: 4,ENCRYPTED` | 口令经一次 MD5 派生 + 3DES / AES-CBC | **拒绝**（见下） |
 
@@ -374,6 +407,102 @@ ECDSA P-256/384/521。
 「缺口令或口令不对，再问一次有用」，界面靠它决定要不要再弹输入框；格式不受支持时问多少次都没用。
 曾经这种文件被交给 BCL，BCL 不认，结论却报成「口令多半不对」且 `NeedsPassphrase = true` ——
 用户一遍遍重输正确的口令，界面一遍遍再弹输入框。
+
+〔决策〕**`.ppk` 的两条完整性检查**：
+① v2 / v3 的 `Private-MAC` 是必填的，缺了报 `KeyFormatInvalid` —— 曾经缺了就跳过整段校验，删掉这一行就能改公钥段
+（RSA 的 n、e，ECDSA 的曲线与点都取自那里）而不被发现，口令错了也查不出来；
+② 私钥半派生出的公钥必须与 `Public-Lines` 是同一把，不是就报 `KeyFormatInvalid` —— 未加密 `.ppk` 的 MAC 键是公开的，
+改了公钥段再重算 MAC，MAC 照样对得上；不核对的话拿到的是「不是你以为的那把」钥，症状只是服务端一句「不接受这把公钥」。
+
+〔决策〕**`.ppk` 里的 Ed25519 私钥是定长 32 字节的种子（RFC 8032 的私钥，原样的字节），不是 mpint**：首字节 ≥ 0x80 时也不补前导零。
+依据是真 `puttygen`（0.83）的产物 —— 80 把里每一把都是 32 字节，其中 47 把首字节 ≥ 0x80；样本与 `ssh-keygen -y` 导出的公钥一起存在测试里。
+照 mpint 规矩写的（带一个前导零、或去掉前导零而短于 32 字节）也照收，归一到 32 字节；读错了的话上面第 ② 条会当场拦住。
+〔历史〕早期按 mpint 读：首字节 ≥ 0x80 的文件（约一半）被判「mpint 为负」、根本读不进来。那时的用例全是按同一个理解现拼的 `.ppk`，一起错也测不出来。
+
+〔决策〕**`openssh-key-v1` 同样核对内部一致性**，对不上一律 `KeyFormatInvalid`：
+① 文件头部明文的公钥段必须与私钥导出的是同一把（曾经直接丢掉不看 —— 而 `ssh-keygen -y`、agent 列出来的都是公钥段那一把）；
+② Ed25519 私钥区里公钥出现两次（单独一份、种子后面一份），种子还能导出第三份，三份必须相同；
+③ ECDSA 的密钥类型与曲线名要对得上（`ecdsa-sha2-nistp256` 配 `nistp256`）；
+④ RSA 的 `n` 必须正好是 `p·q`（p、q 都大于 1）。坏文件的症状本来只是一句「服务端不接受这把公钥」。
+
+〔决策〕**不用口令读公钥：`SshPrivateKeyFile.TryReadPublicKey(pem, out key)`。** `openssh-key-v1` 的公钥段与 `.ppk` 的
+`Public-Lines` 本来就是明文，私钥加了密也读得出；未加密的 PKCS#1 / SEC1 / PKCS#8 由私钥导出。加密的 PKCS#8 与传统加密 PEM
+不带明文公钥，返回 `false`；认不出的格式、内容不完整的文件同样只返回 `false`，不抛。明文的那一份**没有**与私钥核对过（核对要先解密），
+只拿来显示指纹、写 `.pub`；认证用的是 `Parse` / `LoadAsync` 解出的那一把，上面几条核对都在那里。
+用处是导入只有私钥、没有 `.pub` 的文件 —— PuTTY 用户手里通常只有一个 `.ppk`。
+
+〔决策〕**加密 PKCS#8 的 KDF 迭代数上限一千万次**（PBES2 的 PBKDF2，以及 PBES1 / PKCS#12 PBE），交给 BCL 之前先从 DER 里读出来核对，
+超了报 `KeyFormatInvalid`。迭代数来自文件，而 **.NET 导入加密 PKCS#8 不设上限**（实测 300 万次照常导入）：被改成 `int.MaxValue` 的文件
+按每秒约七百万次要跑五分钟，同步、停不下来。常见取值是 OpenSSL 的 2048、OWASP 建议的 60 万。
+〔决策〕**加密 PKCS#8 只解密一次**（BouncyCastle 解出里面的明文 PrivateKeyInfo）：填充校验失败就是口令不对（`KeyPassphraseIncorrect`）；
+解开之后**按 PrivateKeyInfo 里的算法标识分派** —— RSA 与 NIST 曲线上的 ECDSA 交给 BCL 导入，Ed25519 见下一条，Ed448 / DSA / 别的曲线报 `Unsupported`
+（`NeedsPassphrase = false`，说出是什么钥）。明文 PKCS#8 同样按算法分派。
+〔决策〕**PKCS#8 里的 Ed25519 按 RFC 8410 §7 读**（BCL 导入不了这种钥）：`privateKey` 里再包一层 `CurvePrivateKey`（OCTET STRING），
+里面是 32 字节种子；按 BER 读（RFC 5958 要求，RFC 8410 附录 A 有一个不定长编码的例子），属性 `[0]` 与以后扩展的字段跳过。
+v2 带着公钥 `[1]` 时**核对它是不是种子导出的那一把**，对不上报 `KeyFormatInvalid`（与上面 `openssh-key-v1`、`.ppk` 同一口径）——
+RFC 8410 附录 A 的两个错例（公钥少一个字节）真 `ssh-keygen` 照样读得出，交出来的是文件里写的那个公钥。种子不是 32 字节同样是 `KeyFormatInvalid`。
+〔历史〕曾经一律报 `Unsupported`，加密的在更早时还被报成「口令不对」（见下）。
+〔历史〕早期加密 PKCS#8 看不出钥的类型，逐个按 RSA、ECDSA 交给 BCL 去试、每试一次 KDF 都整个跑一遍，都失败就报「口令多半不对」——
+装的是 Ed25519 / DSA 时口令明明是对的，界面一遍遍弹口令框。BouncyCastle 不认的加密方案仍走那条老路：
+密文不超过 320 字节的先按 ECDSA 试（椭圆曲线钥连 P-521 带公钥也不到 260 字节，最小的 512 位 RSA 钥也有三百四十多字节）。
+
+〔决策〕**私钥文件是外来输入，读不懂一律是 `SshPrivateKeyException`（`KeyFormatInvalid`）**，不论哪种格式、错在哪一层：
+截断（复制粘贴丢了尾行，base64 恰好在 4 字符边界断开）、字段畸形（`.ppk` 的 `Public-Lines: abc`、RSA 的 p 或 q 为 1）。
+原来的异常挂在内层。同理，**agent 回的应答格式不对**（身份列表、签名被截断）是 `SshAgentException`（`ProtocolError`）。
+曾经让解析层 internal 的异常或 BCL 的 `FormatException` / `DivideByZeroException` 原样漏出去 —— 调用方只接这两种异常，那就一路漏到了界面上。
+
+〔决策〕**写私钥文件：`SshPrivateKeyFile.Format(key, passphrase, comment, kdfRounds)`，只写 `openssh-key-v1` 一种**
+（今天 `ssh-keygen` 的默认，拷到别处照样能用）。有口令时 `bcrypt` KDF（16 字节随机盐，默认 16 轮，与 `ssh-keygen` 一致）+ `aes256-ctr`；
+没有口令时 cipher 与 KDF 都是 `none`。私钥区以两个相同的随机校验字开头，字段顺序与读取一侧同一份（Ed25519 是公钥 ‖ (种子 ‖ 公钥)；
+RSA 是 n、e、d、iqmp、p、q；ECDSA 是曲线名、公钥点、d），然后是注释，末尾按分组（加密时 16、否则 8）填充 1、2、3……；
+正文按 70 列折行、`\n` 换行。明文私钥区、派生出的密钥材料、导出的 RSA / ECDSA 私钥参数都用完清零。文件权限（Unix 上 0600）是调用方的事。
+新钥由 `InMemorySshSigner.GenerateEd25519()` / `GenerateEcdsa(256 | 384 | 521)` / `GenerateRsa(bits)`（2048–16384、8 的倍数，默认 3072）生成。
+对不对只认真工具：用例拿真 `ssh-keygen -y` 读本库写的文件（带口令与不带），导出的公钥要与本库的逐字节一致 ——
+填充起点写错时本库自己读自己照样读得回来。
+〔历史〕曾经库只能读、不能写，宿主手写了一份只能写**未加密**私钥的容器，中间导出的私钥参数也不清零。
+
+### 4.7 FIDO / U2F 安全密钥（经 agent）
+
+> 依据：OpenSSH `PROTOCOL.u2f`。
+
+`ssh-keygen -t ed25519-sk` / `ecdsa-sk` 在 YubiKey 之类的硬件上生成的钥：私钥永远不离开硬件，每次签名要按一下键 —— 电脑中毒也偷不走钥。
+
+| 类型 | 公钥 blob |
+| --- | --- |
+| `sk-ssh-ed25519@openssh.com` | `string` 类型 ‖ `string` 公钥（32 字节）‖ `string` application |
+| `sk-ecdsa-sha2-nistp256@openssh.com` | `string` 类型 ‖ `string` 曲线名（`nistp256`）‖ `string` 公钥点（65 字节未压缩点，须在曲线上）‖ `string` application |
+
+`SshPublicKey` 认得这两种（`IsSecurityKey`、`SecurityKeyApplication`，签名算法名就是类型名），于是 **agent 里的安全密钥列得出来、
+能当凭据出示**：签名请求交给 agent（标志位为空），agent 找硬件签、要用户按键；签回来的名原样交给服务端。转发出去照常。
+
+〔决策〕**第一阶段只经 agent**：直连硬件（Windows `webauthn.dll`、libfido2）的 PIN 与触摸交互是另一回事，不在这一步。
+
+〔决策〕**本库不验安全密钥的签名**（`VerifySignature` 对它们恒为假）：客户端用不上 —— 签名由服务端验；手头也没有能对照的硬件实现，
+写了只能自己证明自己。安全密钥做主机密钥、安全密钥的证书（`sk-*-cert-v01@openssh.com`）都不认。
+
+〔已核对〕本库造的两种公钥，真 `ssh-keygen -lf` 读得出、认成 `ED25519-SK` / `ECDSA-SK`、指纹一致。
+
+### 4.8 系统密钥库里的钥（Windows CNG）
+
+企业发的智能卡、合规要求「私钥不落盘」的环境里，钥放在密钥库里、导不出来。`CngSshSigner.Open(名字, 密钥库, 选项)` 打开 Windows CNG 密钥库里
+一把有名字的钥做签名器：**私钥不导出，签名交给密钥库做**。
+
+| 密钥库 | `CngProvider` |
+| --- | --- |
+| 软件密钥库（默认） | `MicrosoftSoftwareKeyStorageProvider` |
+| TPM | `MicrosoftPlatformCryptoProvider` |
+| 智能卡 | `MicrosoftSmartCardKeyStorageProvider`（或卡厂商的 KSP） |
+
+支持 RSA（`rsa-sha2-512` / `-256`）与 ECDSA P-256 / P-384 / P-521；CNG 没有 Ed25519。
+
+〔决策〕**`IsLocalAndCheap` 为假**：TPM 签一次要上百毫秒，智能卡可能还要输 PIN、弹确认 —— 认证器因此先问服务端认不认这把钥（§4.1 阶段一）再签；
+签名放到线程池上做，不堵调用方的线程。私钥导不出来，这把钥也就加不进 agent。
+
+〔决策〕**打不开就当场报**：找不到、没有权限是 `KeyFileUnreadable`；不能签名的钥（ECDH）、不认识的算法是 `Unsupported`。
+
+PKCS#11 令牌与 macOS Secure Enclave 不在这一步（`ISshSigner` 扩展点照样留着，使用者可以自己实现）。
+
+〔已核对〕在当前用户的软件密钥库里现建**不可导出**的 RSA 与 ECDSA 钥，签出来的名公钥验得过；对真 sshd：公钥临时加进 `authorized_keys`，只用这把钥登录。
 
 ---
 
@@ -395,12 +524,31 @@ ECDSA P-256/384/521。
 | 2 | `string` | 提示文本（UTF-8） |
 | 3 | `string` | 语言标记（忽略） |
 
-〔决策〕**认得它，但不实现改密码流程** —— 收到它一律记为这条口令凭据的一次失败，
-`Detail` 写明原因（「服务端要求先修改密码（本库尚未实现改密码流程）」），而不是当成一个无法理解的报文。
-没有改密码的回调可配，请求里的「改密码」标志永远发 `FALSE`。
+〔决策〕**配了取新密码的回调就改，没配就把原因说清楚。** `PasswordCredential.NewPasswordProvider`
+（`Func<SshPasswordChangeRequest, CancellationToken, ValueTask<string?>>`，默认 `null`）收到这个报文时被调用，
+`SshPasswordChangeRequest` 带着服务端的提示（原样，摆上界面前由使用者清洗）与这是第几次要新密码（`Attempt`，从 1 起）。
+回调给出新密码后，库发改密码请求：
 
-理由：密码过期在企业环境里很常见，而「客户端直接断开且不说为什么」
-是用户最难自救的一种失败。
+| # | 类型 | 字段 |
+| :-: | --- | --- |
+| 1–4 | | 通用，方法名 `"password"` |
+| 5 | `boolean` | `TRUE` |
+| 6 | `string` | 旧密码（这条凭据的密码） |
+| 7 | `string` | 新密码 |
+
+服务端的应答（RFC 4252 §8）：放行 = 改成了，并且登录成功；`FAILURE` 带 partial = 改成了，还要后续认证；
+`FAILURE` 不带 partial = **没改成**（不支持改密码，或旧密码不对）；再回 `PASSWD_CHANGEREQ` = 新密码不被接受（太简单之类），
+再问一次回调，`Attempt` 递增，**最多 `PasswordCredential.MaxNewPasswordAttempts`（3）次**。
+没配回调、回调返回 `null`（这次不改）、没改成、问够了次数，都记为这条口令凭据的一次失败，`Detail` 写明是哪一种；
+方法用尽时报 `PasswordExpired`（而不是笼统的「方法用尽」）。回调抛 `OperationCanceledException` 与键盘交互的回调同一个口径（`Aborted`）。
+
+〔决策〕**协议里没有「再输一次」这一步**：输错了的新密码会直接成为账户的密码。所以让用户输两遍、自己比对是界面的事，
+库只发它拿到的那一个。改成之后，使用者保存着的旧密码就过时了，更不更新由使用者决定。
+
+理由：密码过期在企业环境里很常见，而「客户端直接断开且不说为什么」是用户最难自救的一种失败；
+能当场改掉，就不必再去找管理员或换别的客户端。
+〔历史〕早期只认得这个报文、不实现改密码流程，请求里的「改密码」标志永远发 `FALSE`。
+OpenSSH 的 `sshd` 不发这个报文（过期密码走 PAM 的键盘交互），用例由测试服务端按 RFC 4252 §8 的四种应答来演。
 
 ### 5.2 安全要求
 
@@ -409,6 +557,12 @@ ECDSA P-256/384/521。
 - 密码在内存里的生命周期要尽量短，用完 `ZeroMemory`。
   〔决策〕凭据接口收 `Func<CancellationToken, ValueTask<...>>` 而不是 `string`，
   让使用者可以在真正需要时才解密取出。
+- 〔决策〕**私钥的口令同理**：`SshPrivateKeyFile.Parse` / `LoadAsync` 除了收 `string` 的重载，还有收 `ReadOnlySpan<char>` /
+  `ReadOnlyMemory<char>` 的 —— 口令放在调用方自己的 `char[]` 里，用完自己清零（`string` 不可变，清不掉）。
+  库里由口令派生出的中间副本（UTF-8 字节、派生出的密钥与 IV、解出的明文私钥区）一律清零。
+  **取消令牌交给口令派生**：`bcrypt_pbkdf` 逐轮检查，Argon2 与 PBKDF2 开算之前检查；取消时抛 `OperationCanceledException`，
+  不被包成「私钥格式不对」。〔历史〕早期 `LoadAsync` 的令牌只管读文件，高轮数的私钥一旦开算就停不下来。
+  〔未实现〕私钥文本本身仍以 `string` 进来（各格式的解析基于 `string`）—— 未加密私钥文件的内容清不掉，这是现在的边界。
 - **禁止**把密码写进任何日志或 `IPacketTap`（总则 §5.5）。
 
 ---
@@ -489,13 +643,18 @@ sequenceDiagram
 很多服务器同时开放 `password` 与 `keyboard-interactive`，
 且后者的唯一提示就是「Password:」。
 
-〔决策〕**提供 `PasswordCredential.AlsoAnswerKeyboardInteractive`（默认 `true`）**：
+〔决策〕**提供 `PasswordCredential.CanAnswerKeyboardInteractive`（默认 `true`）**：
 当 `keyboard-interactive` 的提示只有一条、且 `echo == false` 时，
 自动用密码作答，不打扰使用者。
 
 理由：这是 OpenSSH 客户端的实际行为，用户期望的也是这个。
 但**必须**能关掉 —— 在真正的 2FA 场景里，第一条提示可能就是动态码，
 自动填密码只会白白消耗一次尝试。
+
+〔决策〕**同一次键盘交互里密码至多作答一次**；之后的轮次（哪怕形状同样是单条不回显）回空串，让服务端干脆地拒绝，再换下一条凭据。
+理由：PAM 两步验证常见的流程是「Password:」一轮、「Verification code:」再一轮，两轮都是单条不回显。
+只看形状不看轮次的话，第二轮也把密码发出去 —— 白耗一次失败计数，而且 pam_radius、Duo 一类模块
+会把这一轮的应答转发到 RADIUS 或第三方服务，密码就这样离开了目标主机。
 
 ---
 

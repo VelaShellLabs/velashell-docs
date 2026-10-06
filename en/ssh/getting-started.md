@@ -58,11 +58,22 @@ Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 // Nesting: reach the SOCKS5 proxy via the HTTP proxy, then let it connect to the target (via = how to reach the proxy itself)
 Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
+// HTTPS proxy: TLS on the leg to the proxy (certificates are validated strictly by the system's rules by default)
+Dialer = DialerChain.HttpConnect("proxy.corp", 443, credentials, via: DialerChain.Tls()),
+
+// SSH wrapped in TLS on port 443 (sslh / stunnel on the server); pin a self-signed certificate's fingerprint
+Dialer = DialerChain.Tls(new SshTlsOptions { RemoteCertificateValidation = (_, cert, _, _) => IsPinned(cert) }),
+
 // Jump host (ssh -J): the jump host is itself a full connection, with its own credentials and host key policy
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
 
 // Multi-level jump (ProxyJump a,b): a is nearest, b connects directly to the target
 Dialer = DialerChain.Jumps(bastionOptions, innerOptions),
+
+// Jump connection prepared per hop (connecting to ssh-agent first, say): prepare the options in the callback and connect through context —
+// it carries the outer timer in, so the outer timer pauses while a fingerprint is checked or a one-time code typed on the jump host
+Dialer = DialerChain.Jump(new SshEndPoint("bastion.example.com", 22),
+    async (context, ct) => await context.ConnectAsync(await PrepareBastionAsync(ct), ct)),
 
 // ProxyCommand: the external program's standard input and output are the stream (%h %p %r %n %%)
 Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
@@ -70,7 +81,8 @@ Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 
 On failure, `SshConnectException.Hops` lists the result of **every hop** (nearest to farthest) —
 "cannot reach the proxy", "the proxy refused to forward" and "jump host authentication failed" are three different problems, and this table keeps them apart.
-Reason codes: a proxy refusal is `ProxyRefused`; authentication required with no credentials (or credentials rejected) is `ProxyAuthRequired`.
+Reason codes: a proxy refusal is `ProxyRefused`; authentication required with no credentials is `ProxyAuthRequired`, and rejected credentials are `ProxyAuthFailed`;
+a host name or credentials that cannot even be put into the proxy protocol locally are `InvalidConfiguration`.
 
 > [!NOTE]
 > On Windows, `ProxyCommand` goes through anonymous pipes, and anonymous pipes do not support overlapped IO —
@@ -103,11 +115,16 @@ HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
   To accept the new key, first manually delete the old line from `known_hosts` —
   that manual step is exactly the point that makes people stop and think. The exception message tells you which line it is.
 
+If `known_hosts` cannot be written on "trust and remember" (no permission, disk full), the connection does **not** fail — the trust has been granted, it just was not recorded.
+The reason is in `connection.HostKeyPersistFailure`; tell the user that they will be asked again next time.
+
 For automation, pin the fingerprint so that not even the first connection is trusted blindly:
 
 ```csharp
 HostKeyPolicy = new PinnedFingerprintHostKeyPolicy(["SHA256:abc..."])
 ```
+
+Fingerprints are read leniently: the `SHA256:` prefix is optional and case-insensitive, and base64 `=` padding and surrounding whitespace are dropped; the body after the prefix is compared exactly (base64 is case-sensitive).
 
 ---
 
@@ -135,7 +152,8 @@ Credentials =
 ];
 ```
 
-`LoadAsync` returns an `InMemorySshSigner`: it holds the private key in memory and **zeroes it on dispose**, so take it with `using`.
+`LoadAsync` returns an `InMemorySshSigner`: it holds the private key in memory and **destroys it on dispose**, so take it with `using` —
+it zeroes the Ed25519 seed itself, and RSA / ECDSA private keys are released together with the BCL key objects.
 The connection only needs it during authentication; once connected it can be disposed.
 
 The order is the order of attempts. Methods the server does not accept are skipped and faithfully recorded in the attempt record —
@@ -216,6 +234,33 @@ using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passp
 > so it could always be read; nobody provides OpenSSH's `bcrypt_pbkdf`, so we wrote that one ourselves
 > — the only instance in the whole library, see the note above.
 
+When you only need the public key (to show a fingerprint, or to write a missing `.pub`), no passphrase is needed: the public section of an OpenSSH private key and the `Public-Lines` of a `.ppk` are plaintext.
+
+```csharp
+if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPublicKey? publicKey))
+{
+    File.WriteAllText("key.ppk.pub", publicKey.ToOpenSshFormat("key") + "\n");
+}
+```
+
+> This is the plaintext copy from the file, not checked against the private key; encrypted PKCS#8 does not carry its public key in the clear and returns `false`. See [spec 04 §4.6](spec/04-authentication.md).
+
+### Generating a key and writing it to a file
+
+```csharp
+using InMemorySshSigner key = InMemorySshSigner.GenerateEd25519();   // or GenerateEcdsa(256), GenerateRsa(3072)
+
+File.WriteAllText("id_ed25519", SshPrivateKeyFile.Format(key, passphrase: "passphrase", comment: "me@laptop"));
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode("id_ed25519", UnixFileMode.UserRead | UnixFileMode.UserWrite);   // OpenSSH refuses keys others can read
+}
+File.WriteAllText("id_ed25519.pub", key.PublicKey.ToOpenSshFormat("me@laptop") + "\n");
+```
+
+> This writes `openssh-key-v1` (the `ssh-keygen` default format): with a passphrase, `bcrypt` + `aes256-ctr` with 16 rounds by default; without one, the file is not encrypted.
+> See [spec 04 §4.6](spec/04-authentication.md).
+
 ### Adding a private key to the agent (`ssh-add`)
 
 Decrypt an encrypted private key once and hand it to the agent; authentication and forwarding are then signed through the agent:
@@ -228,7 +273,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 
 // ssh-add -t 3600 -c: deleted automatically after an hour, every signature must be confirmed
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
-    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
 ```
 
 - Only in-process private keys (`InMemorySshSigner`) are accepted; adding certificates is not supported yet.
@@ -271,6 +316,9 @@ When you are done writing to `cmd.StandardInput`, **completing it is EOF**: `awa
 `await cmd.CompleteStandardInputAsync(ct)` do the same thing — both flush what was written and then send `CHANNEL_EOF`,
 so remote programs waiting for end of input (`cat`, `sort`) can finish. EOF does not close the channel; output keeps arriving.
 
+The other direction: when you only want the first few lines of output, call `await cmd.StopStandardOutputAsync(ct)` once you have read enough —
+later output is discarded, and with an OpenSSH server the remote process gets `SIGPIPE` on its next write and ends early (the exit status is signal `PIPE`) instead of running to completion.
+
 ---
 
 ## 5. Interactive shell
@@ -287,12 +335,21 @@ await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight)
 ```
 
 `SshTerminalModes` is immutable: `With` returns a new copy, so `SshTerminalModes.Empty` is safe to share everywhere.
+Calling `With` again with the same opcode **replaces** its value (keeping its position); the table never holds two entries for one opcode.
 
 **Pixel dimensions are first-class citizens**, not always 0 — things like sixel and the kitty graphics protocol rely on them for layout.
 If you don't know, pass 0; that is also a meaningful answer.
 
 `SshShell` **does not expose `StandardError`**: with a pty, stderr is merged into stdout by the pseudo-terminal,
 and exposing a stream that is always empty would only leave people waiting on it forever.
+
+To run just one command in a terminal (`ssh -t host top`: things like `sudo` and `top` that need one) without a login shell, set `Command`:
+
+```csharp
+await using SshShell top = await conn.OpenShellAsync(new SshShellOptions { Command = "top", Size = size }, ct);
+// read output from top.StandardOutput, write keystrokes to top.StandardInput; the channel closes when it finishes
+SshExitStatus exit = await top.WaitAsync(ct);
+```
 
 To enable X11 / agent forwarding on a shell, specify it directly in the options (the request order
 `pty-req → x11-req → auth-agent-req → env → shell` is handled by the library):
@@ -401,7 +458,14 @@ Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.
 `Algorithms` exposes all algorithms actually negotiated for this session (key exchange, host key,
 encryption and integrity for both directions, compression for both directions, whether strict KEX was enabled).
 Showing "what we connected with" on a status bar, or answering "what exactly did this connection negotiate" when troubleshooting,
-both come from here — no need to probe again yourself.
+both come from here — no need to probe again yourself. Other read-only information of the same kind:
+
+```csharp
+Console.WriteLine(conn.PeerVersion);                 // SSH-2.0-OpenSSH_10.3 (sanitized)
+Console.WriteLine(conn.AuthenticationMethod);        // publickey / password / keyboard-interactive / none
+Console.WriteLine(string.Join(",", conn.ServerSignatureAlgorithms));   // server-sig-algs
+Console.WriteLine(conn.ConnectTimings);              // time spent dialing, exchanging versions, exchanging keys (incl. waiting for the decision), authenticating
+```
 
 ---
 
@@ -410,7 +474,7 @@ both come from here — no need to probe again yourself.
 ```csharp
 using VelaShell.Ssh.Forwarding;
 
-// -L: local 127.0.0.1:8080 → remote 10.0.0.9:80
+// -L: local 127.0.0.1:8080 and [::1]:8080 → remote 10.0.0.9:80
 await using LocalPortForwarder local = LocalPortForwarder.Start(
     conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
@@ -432,6 +496,8 @@ The local forwarder's `Start` is synchronous — it only binds a port on this ma
 
 **Binds to loopback by default.** To open it to the outside you must explicitly write `BindAddress = IPAddress.Any` —
 the other end of a tunnel is often an internal database, and binding to `0.0.0.0` by default would expose it to everyone on the same network segment.
+By default it listens on **both loopbacks** (`127.0.0.1` and `::1`, same port): clients that resolve `localhost` to `::1` first can connect too,
+and no other process on the machine can grab that port on `[::1]` (see [spec/07 §2.3](spec/07-forwarding.md)).
 
 ### Unix sockets in the reverse direction (`ssh -R /remote:/local`)
 
@@ -453,18 +519,21 @@ whereas a `-R 2375:...` port can be connected to by everyone on that machine.
 
 ### X11 forwarding (`ssh -X` / `-Y`)
 
-```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
+Like agent forwarding, it goes on the options for opening a shell or running a command (`x11-req` has to be sent between `pty-req` and `env`, and the library takes care of that ordering,
+so `X11Forwarder` has no public way to create one):
 
-await using X11Forwarder x11 = await X11Forwarder.RequestAsync(conn, session,
-    new X11ForwardOptions
+```csharp
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // reads DISPLAY by default
-        Trusted = false,                        // default: corresponds to ssh -X
-        Timeout = TimeSpan.FromMinutes(20),     // Zero = never expires
+        IsTrusted = false,                      // default: corresponds to ssh -X
+        Timeout = TimeSpan.FromMinutes(20),     // Timeout.InfiniteTimeSpan = never expires
     },
-    ct);
+}, ct);
 
+X11Forwarder x11 = shell.X11!;                  // disposed together with the shell
 Console.WriteLine($"{x11.AcceptedChannels} accepted · {x11.RejectedChannels} rejected");
 ```
 
@@ -480,10 +549,10 @@ Three things worth knowing:
    The remote X client connects with the fake cookie; we check it (constant-time comparison), replace it with the real cookie,
    and only then forward to the local X server. If it does not match, it is rejected, and the X server **is not even touched**.
 2. **Untrusted mode (the default) requires `xauth` locally**, and an X server that supports the SECURITY extension.
-   Windows usually has neither — there you can only use `Trusted = true`,
+   Windows usually has neither — there you can only use `IsTrusted = true`,
    but be clear that this amounts to handing the local display entirely to the remote.
 3. **`Timeout` applies in both modes** (OpenSSH only applies it to untrusted).
-   Trusted mode is precisely the more dangerous one, so having no time limit there makes no sense. For long sessions, set `TimeSpan.Zero` explicitly.
+   Trusted mode is precisely the more dangerous one, so having no time limit there makes no sense. For long sessions, set `Timeout.InfiniteTimeSpan` explicitly (0 or a negative value throws immediately).
 
 On the server side, `X11Forwarding yes` in `sshd_config` and an installed `xauth` are required;
 without them the request is rejected, and the exception message states these two conditions directly.
@@ -519,7 +588,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // forward only this one; the rest are invisible to the remote
-        ConfirmEachSignature = AskUserAsync,    // ask a human for every signature
+        ApproveSignature = AskUserAsync,        // ask a human for every signature
         MaxConnections = 4,
     },
 }, ct);
@@ -538,7 +607,7 @@ instead **the agent protocol is parsed and then forwarded** — only by parsing 
 
 - When `AllowedKeys` is non-empty, the remote **cannot see** keys outside the list when listing keys (`fwd.KeysHidden` counts them),
   and a request to sign with a key outside the list gets `FAILURE` directly;
-- `ConfirmEachSignature` receives "which key, and what its comment is", so it can show a dialog to ask a human; if declined, `FAILURE` is returned;
+- `ApproveSignature` receives "which key, and what its comment is", so it can show a dialog to ask a human; if declined, `FAILURE` is returned;
 - Messages that **would change the local agent's state**, such as `ADD_IDENTITY` / `LOCK` / `UNLOCK`, are always rejected
   and not forwarded — a remote server has no reason whatsoever to change our local keyring.
 
@@ -590,19 +659,33 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
 each jump host in `ProxyJump` is **resolved against the same configuration**, and the jump chain has a depth limit and cycle detection.
 Item-by-item rules are in [`spec/09-dialing.md`](spec/09-dialing.md) §7.
 
-Two security constraints worth knowing:
+Three security constraints worth knowing:
 
 1. **`Match exec` executes no commands by default.** It means *parsing a configuration file can run arbitrary programs on the local machine*,
    and configuration files are often copied from elsewhere, synced in, or given by someone else. Without an evaluator,
    blocks with `exec` **never match**. If you really need it, pass one yourself:
 
    ```csharp
-   new SshConfigMatchContext { Host = h, ExecEvaluator = cmd => RunAndCheck(cmd) }
+   SshHostConfig config = await SshConfigFile.ResolveAsync(blocks, new SshConfigMatchContext
+   {
+       Host = h,
+       ExecEvaluator = (req, ct) => RunAndCheckAsync(req.ExpandedCommand, ct),
+   }, ct);
    ```
 
    This way the decision "whether to run external commands" clearly rests with you, rather than hiding in the library's default behavior.
+   The `ExpandedCommand` the evaluator receives already has `%h %n %r %u %%` expanded by the library (the substituted values pass the same allow-list as `ProxyCommand`) —
+   run that, do not substitute tokens yourself; a condition whose values cannot be substituted safely is never handed over. A context with an evaluator must be resolved with `ResolveAsync`.
 2. **`Include` has a depth limit (16) and cycle detection.** `a` including `b` and `b` including `a` again
    is easy to write, and without cycle detection the symptom is *the whole process freezes while reading the configuration*.
+   One load reads at most 256 files, and only regular files of at most 1 MiB — anything beyond that is skipped without an error.
+3. **A `ProxyCommand` from the configuration runs only if you approve it**, for the same reason as item 1. The callback gets the expanded command line that will run:
+
+   ```csharp
+   new SshConfigConnectOptions { ApproveProxyCommand = (req, ct) => AskUserAsync(req.Host, req.Command, ct) }
+   ```
+
+   Without a callback, or if it does not approve, `CreateConnectionOptionsAsync` fails with `InvalidConfiguration`; it does not silently connect directly.
 
 Other details: `Match` supports `all` / `host` / `originalhost` / `user` / `localuser`;
 conditions are ANDed, and `!` negation is supported; `canonical` / `final` never match (we do no host name canonicalization).
@@ -618,7 +701,7 @@ conditions are ANDed, and `!` negation is supported; `canonical` / `final` never
 ```csharp
 var options = new SshConnectionOptions("root@example.com")
 {
-    // default: 1 GiB / 1 hour / 2³¹ packets, rekey when any one is reached
+    // default: 1 GiB / 2³¹ packets, rekey when either is reached; not time-based (pass maxInterval explicitly for that)
     Rekey = SshRekeyPolicy.Default,
 };
 
@@ -626,14 +709,16 @@ var options = new SshConnectionOptions("root@example.com")
 await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // how many times it has rekeyed
-Console.WriteLine(conn.LastRekeyReason);   // which threshold triggered the last one
+Console.WriteLine(conn.LastRekey);         // how the last one came about: SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
+Console.WriteLine(conn.LastRekeyDuration); // how long the last one took (channel data is held back meanwhile)
+conn.Rekeyed += (_, e) => log.Info($"rekey #{e.Count} ({e.Cause.Trigger}) took {e.Duration.TotalMilliseconds} ms");   // runs on the receive loop: do not block
 ```
 
 Three things worth knowing:
 
 1. **Handling peer-initiated rekeying is always on and cannot be turned off.** `SshRekeyPolicy.Disabled`
-   only turns off "rekeying initiated by us". This is not an omission — OpenSSH's `RekeyLimit` defaults to
-   1 GiB / 1 hour, and when the limit is reached it sends `KEXINIT` itself; the symptom of not responding is
+   only turns off "rekeying initiated by us". This is not an omission — when an OpenSSH server reaches its `RekeyLimit`
+   (by default the cipher's data volume; administrators can add a time limit) it sends `KEXINIT` itself; the symptom of not responding is
    **a shell that has been open all afternoon suddenly drops**, **a large file transfer drops halfway through**.
 2. **Do not lower the packet-count threshold.** SSH sequence numbers are 32-bit, and the AES-GCM nonce
    advances once per packet — nonce reuse is catastrophic for GCM (the authentication key can be recovered).

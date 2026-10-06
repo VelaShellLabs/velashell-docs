@@ -277,6 +277,8 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 - **Alt+left-drag = rectangular block selection** (#128, aligned with Windows Terminal behavior): whether Alt is held at mouse-down determines whether the operation is block selection or a normal linear selection. Changing Alt during the drag does not switch modes. Copy takes the same column range from each line, always inserting line breaks between lines. When the application enables mouse tracking (htop/vim/tmux), mouse events are given to the application; use Shift+Alt+drag to force block selection.
 - **Shift+left-click = extend the selection** (#266, aligned with Windows Terminal / xterm): when a selection already exists, Shift+click keeps the anchor in place and moves only the far end to the clicked cell (before or after the anchor — the selection flips direction accordingly); keep the button held to keep dragging and fine-tune it. To grab a long log spanning more than one screen, select the start, scroll back, then Shift+click the end. The extension reuses the linear/block mode fixed at the original mouse-down. With no selection yet, Shift+click still starts a new one, preserving the existing "hold Shift to bypass application mouse reporting and select text" semantics.
 - **Ctrl+Shift+left-drag = append a discontiguous region**: commits the in-progress region and starts another one, repeatable. Copy concatenates the regions in **document order, top to bottom**, with a line break between them — so "select line 1, Ctrl+Shift-select line 3, copy once and get both lines" holds regardless of the order they were picked. Each region remembers its own mode, so Ctrl+Shift+Alt+drag appends a rectangular region that coexists with linear ones, and Ctrl+Shift+double-click appends another word. A plain drag without Ctrl+Shift starts over (dropping every appended region); so does a search-hit highlight. Ctrl+**Shift**+click on a URL does not open the browser (opening links is Ctrl+click without Shift). Terminals have no precedent for this (Windows Terminal / iTerm2 / xterm all have single-region selection only), so the binding is ours.
+- **Banners the server sends during authentication** (`SSH_MSG_USERAUTH_BANNER`: legal notices, PAM's "your password will expire in 3 days") are written at the top of the terminal as grey `●` notice lines when the first shell opens. Banners from every hop of a jump chain are collected, in arrival order. They are shown once; further shells on the same connection do not repeat them. Banners come from an **unauthenticated** peer, so in each line control and bidi control characters are replaced with `?` before it reaches the terminal (which defuses escape sequences; the rule is the SSH librarys public `PeerText.Sanitize`, which the keyboard-interactive prompt dialog uses too), with at most 64 lines (the rest fold into a single `…` line) and 512 characters per line. The host used to leave this callback unset, and banners were silently dropped.
+  **Lines sent before the identification string** (some bastion hosts and network devices print a legal notice or a maintenance announcement before the SSH identification string, SSH library spec 02 §3) are handled the same way: as one banner, placed before that hop's authentication banners (since 2026-10-05; before that the SSH library collected them but the host did not take them).
 - See §7 “Disconnected State” for the idle/disconnected overlay, and §7 “Connecting State” for the connecting one.
 
 ### 5.3 In-Terminal Search Bar
@@ -287,7 +289,8 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 
 ## 6. File Browser / SFTP (Lower Right Area, Default 220px, Collapsible/Resizable)
 
-- **Header (36px)**: left = clickable current-path breadcrumb for level-by-level navigation, then a pencil button (or Ctrl+L) that switches to manual path entry (Enter navigates, Esc cancels), then a `copy` button that **copies the full remote path of the current directory in one click** (the same command as “Copy Current Folder Path” in the empty-area context menu — previously you had to enter edit mode before you could select and copy it), and finally refresh; right = icons for view switching, upload, new folder, hidden-file toggle, and so on.
+- **Header (36px)**: left = clickable current-path breadcrumb for level-by-level navigation, then a pencil button (or Ctrl+L) that switches to manual path entry (Enter navigates, Esc cancels; `~` and `~/…` expand to the login home directory, while `~user` and `~user/…` are expanded by the server (SFTP's `expand-path` / `home-directory`, since 2026-10-05), and anything that cannot be expanded is passed to the server as is so it reports the real error), then a `copy` button that **copies the full remote path of the current directory in one click** (the same command as “Copy Current Folder Path” in the empty-area context menu — previously you had to enter edit mode before you could select and copy it), and finally refresh; right = icons for view switching, upload, new folder, hidden-file toggle, and so on. To the left of the upload button is the free space of the file system holding the current directory, “12 GB free of 50 GB” (since 2026-10-05, `VelaTextMuted`, monospace 10px; from SFTP's `statvfs@openssh.com`, refreshed on entering a directory and on refresh; not shown when it cannot be queried: servers without the extension, FTP, plugin protocols).
+- **Space precheck before uploading** (since 2026-10-05): when the files of a batch uploaded from this machine (minus resume offsets) add up to more than a normal user can still write on the target file system, a yellow confirmation “Not enough space?” comes first (“The target file system has X free, but these files take Y. They may not fit — running out of space midway leaves an incomplete file on the server. Upload anyway?”, buttons “Upload anyway” / Cancel); Cancel uploads nothing. When usage cannot be queried, nothing is held back.
 - **Column header (26px, `bg-surface`)**: `Name(280) | Size(100) | Permissions(120) | Modified`. Columns can be sorted by clicking.
 - **File list (`fill_container`, scrollable)**: 28px per row. Icon (folder/file type) + name + size + permissions (`drwxr-xr-x`) + time. The first row may be `..` to return to the parent directory.
 - Interaction:
@@ -297,12 +300,16 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
   - Right-click = file context menu (download, upload, rename, delete, properties, copy path, new). “New” includes **New Symbolic Link**: first ask for the link target path (prefilled with the row’s path when right-clicking a row), then ask for the link name (prefilled with the last segment of the target). The target is written verbatim; relative paths resolve against the link’s directory (`ln -s` semantics). On FTP, only servers that support `SITE SYMLINK` can create links; plugin protocols report that the operation is not supported.
   - **Properties dialog**: basic information (type, path, link target, size, modified time) + owner / group + the rwx permission matrix and octal input (kept in sync both ways, with a `chmod 640` echo beside them).
     - On SFTP sessions, Owner and Group are **editable drop-downs**: the suggestions are the user and group names from the remote passwd / group databases (the same lookup that turns ids into names in the list), and a numeric UID / GID can be typed directly. Input is read in `chown`’s order: as a name first, and as a number only if no such name exists. On SFTP-only accounts where the lookup is unavailable, the suggestions are empty and only numbers work.
+    - Owner / group names in the list: sessions with exec read the whole table once (`getent`); ids missing from it (on SFTP-only accounts the whole table is missing) are filled in through SFTP's `users-groups-by-id@openssh.com` (since 2026-10-06, each id asked once per session), and only ids still unknown show as numbers.
     - Clearing a field means “leave unchanged”; a name the remote host doesn’t know is reported in the error bar on the spot and nothing is sent.
     - OK applies only what changed, **chown before chmod**: the owner change is the one most likely to be refused (a non-root user can only switch the group to one they belong to), so when it is refused nothing has changed yet; if chown succeeds and chmod is refused, the list is still refreshed.
     - FTP and plugin protocols cannot change ownership, so both rows are read-only there. No recursion or batch operation; for a symbolic link, the change applies to the target.
   - **Symbolic links**: the icon is `folder-symlink` (points to a directory, amber, double-click to enter) or `file-symlink` (points to a file, or the link is broken); hovering the name shows “→ target”; the Type column reads “Symbolic Link”; the permission string starts with `l`; the properties dialog adds a “Link Target” row.
-    - **Delete** removes only the link itself and never touches the target; recursive deletes also remove nested links as links.
+    - **Delete** removes only the link itself and never touches the target; recursive deletes also remove nested links as links. Before descending into a subdirectory, a non-following stat confirms it is a real directory —
+      the SFTP draft does not say whether listing attributes come from lstat or stat, and when a server reports followed attributes, a link to a directory looks like a real directory in the listing.
     - **Copy** (remote → remote) produces a link (`cp -P`).
+  - **Copies on the same server** (since 2026-10-06): when the server supports `copy-data` (OpenSSH's sftp-server does), the copy happens inside the server and the data never leaves it —
+    it used to always download to a local temporary file and upload again, minutes for a file of several GB. Progress works as usual; with preserve timestamps on, the destination gets the source's modification time. Servers without it still download then upload.
     - **Downloading a folder** does not descend into nested directory links (`rsync -r` semantics, avoiding links to `/` or back to an ancestor); an explicitly selected link is still followed, and links to files download the file content.
   - **Directory comparison and synchronization** (dual-pane SFTP / FTP / FTPS documents only; the terminal sidebar's file browser has no local pane and does not offer it): a 32px toolbar at the top of the document holds two icon-plus-text buttons, "Compare Directories" (`git-compare`) and "Synchronize…" (`folder-sync`), with the verdict of the last comparison on the right.
     - **Compare Directories**: compares the current level of both panes and selects the differing items in each pane (newer or unique items; different-size items and conflicts are selected in both). The verdict is cleared as soon as either pane changes directory.
@@ -347,6 +354,8 @@ Opened from the Ctrl pair selection in §3: one file tab with each pane connecte
 ## 7. Status Bar (Full-width 24px, `bg-sidebar`)
 
 - **Left**: `wifi` icon (connection color) + `SSH • web-prod-01:22` + `｜` + `Latency: 12ms` (accent) + `｜` + `↑ 2h 34m` (online duration).
+  Latency is measured every third sample: SSH sessions use the SSH-level round trip (a keepalive request, accurate through proxies and jump hosts, since 2026-10-06); other sessions fall back to an ICMP ping of the host;
+  nothing is shown when it cannot be measured (ICMP blocked, the SSH measurement taking over 2 seconds). It used to be ICMP for everything: for machines reached through a jump host or proxy it measured the direct path from this machine to the target, and servers that block ICMP never showed a latency.
 - **Right**: `xterm-256color` ｜ `120×36` (terminal size) ｜ `cpu 23%` ｜ `memory 1.2G` ｜ `net 4.2 MB/s` ｜ `UTF-8`.
 - CPU, memory, and network are lightweight real-time metrics for the current session. They share a source with the resource panel in §11; here they are a compact persistent version.
 - Each field is clickable. For example, clicking the size triggers one resize synchronization, and clicking the encoding opens the encoding menu.
@@ -439,6 +448,9 @@ for work the host cannot see.
    - `Open SFTP File Manager` … `Ctrl+Shift+F`
    - `Open Settings` … `Ctrl+,`
    - (Extensions) `Open Tunnel Manager`, `Split Pane`, `Switch Theme`, `Record Session`, `Connection Diagnostics`, `Operations Orchestration`…
+   - `Send Break` (session category, since 2026-10-05): available when the active tab is a connected SSH session (local and plugin terminals cannot use it); it sends a BREAK (RFC 4335),
+     which is how serial console servers and network device consoles get into ROMMON / the boot menu. Whether the server performed it is reported in a toast: an ordinary toast when it did,
+     a yellow one, “The server did not perform the Break (it may not support it, or the session has no terminal)”, when it did not.
 5. **Footer (32px, `bg-input`)**: left = key hints `↑↓ Navigate` / `↵ Confirm` / `Esc Close`; right = result count `6 results`.
 
 **Interaction logic**:
@@ -719,10 +731,21 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     - **Agent signature dialog** (`AgentSignPromptView`, same shell as the host key dialog): the warning banner says "A
       remote session wants to sign with a key in your local ssh-agent", and the advice names the legitimate cause (you
       are running ssh / git on that server) and when to deny (you did nothing of the sort). The info block lists the
-      **session** (`user@host:port`), key type, fingerprint and the agent comment (usually the private key path); a
-      footer line reads "If you do not answer within 60 seconds, the request is denied."
-      - Three buttons: **Deny** (outline) / **Allow for this session** (outline; this key is not asked about again until
-        the session closes) / **Allow once** (accent pill).
+      **session** (`user@host:port`), **purpose**, **destination** (sign-ins only), key type, fingerprint and the agent
+      comment (usually the private key path); a footer line reads "If you do not answer within 60 seconds, the request is
+      denied."
+      - **Purpose** and **destination** are what lets the user tell "the `git pull` I just ran" from "someone using this key
+        to sign in elsewhere". They come from the context the SSH library recognizes in the data to be signed
+        ([spec/07 §7.2.1](../ssh/spec/07-forwarding.md#721-signature-confirmation-must-say-what-the-signature-is-for)): the
+        purpose reads 'Sign in to an SSH server as "git"', "Data signature (namespace git)" or "Unrecognized data — not an
+        SSH sign-in"; the destination shows the matching known-host names (with the port when it is not 22), "Not in your
+        known hosts (fingerprint)" when it does not match, or "Cannot be verified — the remote side did not prove which
+        host it is signing in to", **the last two in the warning color**. If the known hosts cannot be read, the names are
+        simply missing and the dialog still opens.
+      - Three buttons: **Deny** (outline) / **Allow for this session** (outline; until the session closes, this key is
+        not asked about again **for the same purpose** — the same user signing in to the same destination, or a data
+        signature in the same namespace; approving a `git pull` to github does not approve using the key to sign in
+        elsewhere) / **Allow once** (accent pill).
       - **Deny is both the default and the cancel button, and has focus when the dialog opens**: the dialog can pop up
         while the user is typing in the terminal, so a stray Enter or Esc can only land on Deny; no "allow" button is
         ever the default.
@@ -773,7 +796,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
       line copied from `~/.ssh/config` works as is. Hovering an input shows the current default list and what else can
       be added (it refreshes with the legacy toggle).
       - Which names are accepted follows what the SSH library actually implements. An unknown name is reported as
-        unknown; a name OpenSSH knows but this version does not implement (CBC, 3des, group1, group-exchange, ssh-dss,
+        unknown; a name OpenSSH knows but this version does not implement (CBC, 3des, group1, group-exchange-sha1, ssh-dss,
         hmac-md5, umac…) is reported as “not implemented in this version” — CBC is the most common thing in a copied
         config, and the user needs to hear “enabling it will not help”, not “you misspelled it”. Removal entries must be
         known names too (a misspelled removal removes nothing while the user believes it is off); removing everything, or
@@ -847,6 +870,17 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     removed; on a reconnect it counts as a user disconnect (otherwise auto-reconnect would bring the same dialog back a
     few seconds later); an SFTP document connection removes its placeholder. Closing the connecting tab or an
     authentication timeout closes the dialog on the spot and is handled as the usual cancel / timeout.
+  - **"Change password" dialog (since 2026-10-05)**: when the server requires a password change during password
+    authentication (an expired password, `PASSWD_CHANGEREQ`), the same dialog asks for it: the title is “Change
+    password”, the instructions are “The server requires the password to be changed before you sign in. A saved password
+    is not updated automatically.” plus the server's own words (sanitized), and there are two masked inputs, “New
+    password” and “Confirm new password”. Entries that differ or are empty are not handed over; the dialog asks again
+    with “The two entries do not match, or are empty” — the protocol has no confirmation step, so a mistyped one would
+    become the account's password as is. When the server rejects the previous new password the instructions change to
+    “Choose a different one” (at most 3 attempts). Cancel works as above and reports “Password change was cancelled”.
+    Once changed, the password saved with the connection is stale: the next rejection goes through the credential dialog
+    to re-enter and save it. Private-key / certificate / agent authentication never shows this dialog; without a dialog
+    service the password is not changed and the error says the server requires a change and it was not changed.
 - **Connections that use a shared credential (#550, since 2026-10-03)**: they **never prompt up front** — the username and
   authentication material come from the credential. Only when the credential cannot be resolved (deleted, no password on
   this device) or the server rejects it does the flow fall back to the credential dialog, with a notice under the
@@ -872,6 +906,14 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   - A jump host whose credential cannot be resolved does **not** prompt (the dialog asks for the target's credentials); the
     connection ends with a “Jump host X: reason” error.
 - **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
+  **Each key type of a host is recorded separately** (servers often have RSA, ECDSA and Ed25519 keys at once): a key matching any recorded one is accepted; accepting a key of a new type **adds a record** instead of overwriting the existing one,
+  so whichever type is negotiated later is recognised; only a different key of the same type replaces it. The change dialog shows the recorded fingerprint of the same type, or the most recently seen one when that type was never recorded.
+  When connecting, the recorded types go to the front of the host key algorithm list, so a normal server negotiates the type already recorded.
+  **Host key rotation is on** (OpenSSH's `UpdateHostKeys` is on by default too): after connecting to a host that is already permanently trusted, the other host keys the server proves it holds are recorded as trusted, per type,
+  and a security alert is raised ("now trusted") —— after an administrator adds an Ed25519 key or rotates out an old RSA key, the user no longer sees "fingerprint changed". Old keys the server no longer presents are removed from the trust store by type, with a security alert as well ("removed from the trusted records") —— a type is removed only when every record of that type matches a fingerprint to be forgotten; nothing is done for "trust once". The “Trusted hosts” list has one row per key type, and removing a row removes that type.
+  〔History〕Only one key per host:port used to be recorded: a server with an additional key of another type, or a changed host key algorithm for the connection, raised “fingerprint changed”; accepting it overwrote the old key, and switching back raised it again.
+  If “Accept and Save” is chosen but the trust store cannot be written, **this connection goes ahead**, the fingerprint is not asked about again for the rest of this run, and a security alert is raised (the audit log records “Host fingerprint could not be saved”) —
+  without it, the user would be asked again after a restart and would not know why.
 
 **Connection state machine**: `Idle → Connecting (yellow) → Authenticating → Connected (green)` / any failure `→ Disconnected (red)` with reason and retry.
 
@@ -886,7 +928,7 @@ The left side contains navigation sections and the right side shows the correspo
 | General | `2BIRD` | Startup/tray/language/connection defaults/session logs/import/export/behavior and automatic reconnect; the unimplemented “Updates” and “Master Password” groups are hidden |
 | Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated; any other color comes from the color picker, see 14.3), UI font/size, opacity, terminal colors (color picker, offering the scheme's 16 ANSI colors as swatches) and color schemes (defaults to the active theme's paired scheme, see below) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection |
-| Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates RSA, imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
+| Key Management | `UBP59` | Enumerates `~/.ssh` (type + SHA256 fingerprint), generates Ed25519 / ECDSA / RSA keys (OpenSSH format, generated and written by the SSH library), imports/deletes/copies public keys, default authentication key; an “Add keys to the agent automatically” toggle in the “SSH Agent” section (off by default): after a successful private-key-file authentication the key is added to the local ssh-agent in the background, skipped if the agent already holds it; an absent or refusing agent is only logged and never affects the connection; certificate authentication does not trigger it |
 | Shared Credentials | — (new, 2026-10-03, #550) | One set of username + password / private key / certificate / Agent shared by many connections; change it here once and every connection referencing it uses the new value on its next connect. Toolbar: search (name, username, notes) + “New Credential”; table columns: name (with a warning icon when this device has no password or key for it) / username (“From connection” when it carries none) / method / in use (N connections) / actions (edit, delete). **Editor** (`SharedCredentialEditorView`): a “Copy from a connection” dropdown, name, username (optional), the method segmented control and its fields, notes; below, a checklist “Connections using this credential” (filterable; connections the current method cannot serve are greyed out — FTP and plugin protocols only take passwords) and “Select matching connections” (ticks the connections that still store exactly the same username and material on their own, for moving existing connections over). Saving takes effect at once, without the settings window's Save: newly ticked connections switch to it (a username equal to the credential's is cleared so it follows the credential), unticked ones get the credential copied back onto themselves. **Delete** asks first; every connection using the credential keeps its own copy of it and still connects afterwards. Footer note: passwords and key passphrases are stored AES-256-encrypted on this device; cloud sync carries names and usernames, and passwords and passphrases only with an end-to-end passphrase |
 | Keyboard Shortcuts | `YQvri` | Every key binding; the global and tab bindings can be changed, unbound or reset (2026-10, joesdu/VelaShell#551; rules under “Customizing shortcuts” in [Keyboard Shortcuts](keyboard-shortcuts.md)). Entries are checked one by one against actual bindings |
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |

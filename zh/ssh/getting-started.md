@@ -56,11 +56,22 @@ Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 // 嵌套：经 HTTP 代理到达 SOCKS5 代理，再由它连目标（via = 怎么到达代理本身）
 Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
+// HTTPS 代理：到代理的那一段套 TLS（证书默认按系统规则严格校验）
+Dialer = DialerChain.HttpConnect("proxy.corp", 443, credentials, via: DialerChain.Tls()),
+
+// SSH 套在 TLS 里走 443（服务端 sslh / stunnel）；自签证书钉指纹
+Dialer = DialerChain.Tls(new SshTlsOptions { RemoteCertificateValidation = (_, cert, _, _) => IsPinned(cert) }),
+
 // 跳板（ssh -J）：跳板本身是一条完整连接，有自己的凭据与主机密钥策略
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
 
 // 多级跳板（ProxyJump a,b）：a 最近，b 直接连目标
 Dialer = DialerChain.Jumps(bastionOptions, innerOptions),
+
+// 跳板连接要按跳现准备（先连 ssh-agent 之类）：回调里准备好参数，用 context 去连 ——
+// 它把外层的计时器带进去，跳板上看指纹、输动态码时外层停表
+Dialer = DialerChain.Jump(new SshEndPoint("bastion.example.com", 22),
+    async (context, ct) => await context.ConnectAsync(await PrepareBastionAsync(ct), ct)),
 
 // ProxyCommand：外部程序的标准输入输出就是那条流（%h %p %r %n %%）
 Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
@@ -68,7 +79,8 @@ Dialer = DialerChain.Command("cloudflared access ssh --hostname %h"),
 
 失败时 `SshConnectException.Hops` 列出**每一跳**的结果（从近到远）——
 「连不上代理」「代理拒绝转发」「跳板认证失败」是三个不同的问题，这张表让它们分得开。
-原因码：代理拒绝是 `ProxyRefused`，要认证而没凭据（或凭据被拒）是 `ProxyAuthRequired`。
+原因码：代理拒绝是 `ProxyRefused`，要认证而没凭据是 `ProxyAuthRequired`，凭据被拒是 `ProxyAuthFailed`；
+主机名、凭据在本地就放不进代理协议是 `InvalidConfiguration`。
 
 > [!NOTE]
 > `ProxyCommand` 在 Windows 上走匿名管道，而匿名管道不支持重叠 IO ——
@@ -101,11 +113,16 @@ HostKeyPolicy = new KnownHostsPolicy(askUnknownHost: async (ctx, ct) =>
   要接受新密钥，得先手动把 `known_hosts` 里旧的那一行删掉 ——
   那一下手动操作正是让人停下来想一想的地方。异常消息里会指出是第几行。
 
+「信任并记住」时 `known_hosts` 写不进去（没有权限、磁盘满）**不会**让连接失败 —— 信任已经给了，只是没记下来。
+原因在 `connection.HostKeyPersistFailure` 里，提醒用户一声：下次连接还会再问。
+
 自动化场景用指纹钉死，连第一次都不盲信：
 
 ```csharp
 HostKeyPolicy = new PinnedFingerprintHostKeyPolicy(["SHA256:abc..."])
 ```
+
+指纹的写法宽松：`SHA256:` 前缀可有可无、大小写不论，base64 的 `=` 填充与前后空白都会去掉；前缀之后的主体逐字比对（base64 区分大小写）。
 
 ---
 
@@ -133,7 +150,8 @@ Credentials =
 ];
 ```
 
-`LoadAsync` 交回的是 `InMemorySshSigner`：它在内存里持有私钥，**释放时清零**，所以用 `using` 接住。
+`LoadAsync` 交回的是 `InMemorySshSigner`：它在内存里持有私钥，**释放时销毁**，所以用 `using` 接住 ——
+Ed25519 的种子由它自己清零，RSA / ECDSA 的私钥随 BCL 的密钥对象一起释放。
 连接只在认证期间用它，连上之后就可以释放。
 
 顺序就是尝试顺序。服务端不接受的方法会被跳过并如实记进尝试记录 ——
@@ -214,6 +232,33 @@ using InMemorySshSigner key = await SshPrivateKeyFile.LoadAsync("key.ppk", passp
 > 所以它一直就能读；OpenSSH 的 `bcrypt_pbkdf` 谁都不给，所以那一条是自己写的
 > —— 全库唯一的一处，见上面那个注。
 
+只要公钥（显示指纹、补一份 `.pub`）时不必问口令：OpenSSH 私钥的公钥段与 `.ppk` 的 `Public-Lines` 是明文。
+
+```csharp
+if (SshPrivateKeyFile.TryReadPublicKey(File.ReadAllText("key.ppk"), out SshPublicKey? publicKey))
+{
+    File.WriteAllText("key.ppk.pub", publicKey.ToOpenSshFormat("key") + "\n");
+}
+```
+
+> 读出的是文件里明文的那一份，没有与私钥核对；加密的 PKCS#8 不带明文公钥，返回 `false`。见 [spec 04 §4.6](spec/04-authentication.md)。
+
+### 生成密钥、写成文件
+
+```csharp
+using InMemorySshSigner key = InMemorySshSigner.GenerateEd25519();   // 或 GenerateEcdsa(256)、GenerateRsa(3072)
+
+File.WriteAllText("id_ed25519", SshPrivateKeyFile.Format(key, passphrase: "口令", comment: "me@laptop"));
+if (!OperatingSystem.IsWindows())
+{
+    File.SetUnixFileMode("id_ed25519", UnixFileMode.UserRead | UnixFileMode.UserWrite);   // OpenSSH 不用别人读得到的私钥
+}
+File.WriteAllText("id_ed25519.pub", key.PublicKey.ToOpenSshFormat("me@laptop") + "\n");
+```
+
+> 写的是 `openssh-key-v1`（`ssh-keygen` 的默认格式）：有口令时 `bcrypt` + `aes256-ctr`、默认 16 轮，不传口令就不加密。
+> 见 [spec 04 §4.6](spec/04-authentication.md)。
+
 ### 把私钥加进 agent（`ssh-add`）
 
 加密私钥解开一次、交给 agent 保管，之后认证与转发都经 agent 签名：
@@ -226,7 +271,7 @@ await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519", cancellationToken: ct);
 
 // ssh-add -t 3600 -c：一小时后自动删除、每次签名都要确认
 await agent.AddIdentityAsync(key, "~/.ssh/id_ed25519",
-    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), ConfirmEachUse = true }, ct);
+    new SshAgentKeyConstraints { Lifetime = TimeSpan.FromHours(1), IsConfirmationRequired = true }, ct);
 ```
 
 - 只接受进程内私钥（`InMemorySshSigner`）；证书加钥暂不支持。
@@ -269,6 +314,9 @@ SshExitStatus status = await cmd.WaitAsync(ct);
 `await cmd.CompleteStandardInputAsync(ct)` 效果一样 —— 都会先把已写的内容冲干净，再发 `CHANNEL_EOF`，
 远端等着读完的程序（`cat`、`sort`）才会结束。EOF 不是关通道，之后照样收得到输出。
 
+反方向：只要输出的前几行，读够了就 `await cmd.StopStandardOutputAsync(ct)` —— 之后的输出丢弃，
+服务端是 OpenSSH 时远端进程再写就收到 `SIGPIPE` 提前结束（退出状态是信号 `PIPE`），不再白跑完。
+
 ---
 
 ## 五 交互式 shell
@@ -285,12 +333,21 @@ await shell.ResizeAsync(new SshTerminalSize(cols, rows, pixelWidth, pixelHeight)
 ```
 
 `SshTerminalModes` 是不可变的：`With` 交回一份新的，`SshTerminalModes.Empty` 可以放心地到处共用。
+同一个操作码再 `With` 一次是**替换**它的值（留在原来的位置），不会在表里出现两条。
 
 **像素尺寸是一等公民**，不恒为 0 —— sixel、kitty 图形协议这类东西要靠它排版。
 不知道就给 0，那也是一个有意义的回答。
 
 `SshShell` **不暴露 `StandardError`**：有 pty 时 stderr 由伪终端合并进 stdout，
 暴露一条永远空的流只会让人对着它干等。
+
+只想在终端里跑一条命令（`ssh -t host top`：`sudo`、`top` 这类要终端的）而不开登录 shell，给 `Command`：
+
+```csharp
+await using SshShell top = await conn.OpenShellAsync(new SshShellOptions { Command = "top", Size = size }, ct);
+// 输出从 top.StandardOutput 读，按键写进 top.StandardInput；跑完通道就关
+SshExitStatus exit = await top.WaitAsync(ct);
+```
 
 要在 shell 上开 X11 / agent 转发，直接写在选项里（请求顺序
 `pty-req → x11-req → auth-agent-req → env → shell` 由库负责）：
@@ -399,7 +456,14 @@ Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.
 `Algorithms` 交出的是这条会话实际协商出来的全部算法（密钥交换、主机密钥、
 两个方向的加密与完整性、两个方向的压缩、是否启用了严格 KEX）。
 状态栏上要显示「连上了什么」、排障时要回答「这条连接到底谈成了什么」，
-都从这里取，不用再自己探一次。
+都从这里取，不用再自己探一次。同一类只读信息还有：
+
+```csharp
+Console.WriteLine(conn.PeerVersion);                 // SSH-2.0-OpenSSH_10.3（已清洗）
+Console.WriteLine(conn.AuthenticationMethod);        // publickey / password / keyboard-interactive / none
+Console.WriteLine(string.Join(",", conn.ServerSignatureAlgorithms));   // server-sig-algs
+Console.WriteLine(conn.ConnectTimings);              // 拨号、版本交换、密钥交换（含等裁决）、认证各用了多久
+```
 
 ---
 
@@ -408,7 +472,7 @@ Console.WriteLine(conn.Algorithms.CompressionServerToClient);   // zlib@openssh.
 ```csharp
 using VelaShell.Ssh.Forwarding;
 
-// -L：本机 127.0.0.1:8080 → 远端 10.0.0.9:80
+// -L：本机 127.0.0.1:8080 与 [::1]:8080 → 远端 10.0.0.9:80
 await using LocalPortForwarder local = LocalPortForwarder.Start(
     conn, "10.0.0.9", 80, new LocalPortForwardOptions { BindPort = 8080 });
 
@@ -430,6 +494,8 @@ local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesSent + 
 
 **默认绑环回。**要对外开放必须显式写 `BindAddress = IPAddress.Any` ——
 一条隧道的另一端往往是内网数据库，默认绑 `0.0.0.0` 等于把它暴露给同网段所有人。
+默认听的是**两个环回**（`127.0.0.1` 与 `::1`，同一个端口）：把 `localhost` 先解析成 `::1` 的客户端也连得上，
+`[::1]` 那个端口也不会被同机别的进程抢去（见 [spec/07 §2.3](spec/07-forwarding.md)）。
 
 ### 反方向的 Unix 套接字（`ssh -R /远端:/本机`）
 
@@ -451,18 +517,21 @@ Console.WriteLine(sock.RemoteEndpointName);   // 两种形态统一的说法
 
 ### X11 转发（`ssh -X` / `-Y`）
 
-```csharp
-await using SshChannel session = await conn.OpenSessionChannelAsync(null, ct);
+与 agent 转发一样写在开 shell / 跑命令的选项上（`x11-req` 要夹在 `pty-req` 与 `env` 之间发，时序由库负责，
+所以 `X11Forwarder` 没有公开的构造入口）：
 
-await using X11Forwarder x11 = await X11Forwarder.RequestAsync(conn, session,
-    new X11ForwardOptions
+```csharp
+await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
+{
+    X11Forwarding = new X11ForwardOptions
     {
         // Display = X11Display.Parse(":0"),   // 默认读 DISPLAY
-        Trusted = false,                        // 默认：对应 ssh -X
-        Timeout = TimeSpan.FromMinutes(20),     // Zero = 不过期
+        IsTrusted = false,                      // 默认：对应 ssh -X
+        Timeout = TimeSpan.FromMinutes(20),     // Timeout.InfiniteTimeSpan = 不过期
     },
-    ct);
+}, ct);
 
+X11Forwarder x11 = shell.X11!;                  // 随 shell 一起释放
 Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} 条拒绝");
 ```
 
@@ -478,10 +547,10 @@ Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} �
    远端 X 客户端拿假 cookie 连过来，我们核对（常数时间比较）、换成真 cookie，
    才转给本机 X server。对不上就拒绝，而且**连碰都不碰** X server。
 2. **非受信模式（默认）要本机有 `xauth`**，且 X server 支持 SECURITY 扩展。
-   Windows 上通常两者都没有 —— 那里只能用 `Trusted = true`，
+   Windows 上通常两者都没有 —— 那里只能用 `IsTrusted = true`，
    但要清楚那等于把本机显示完全交给远端。
 3. **`Timeout` 两种模式都生效**（OpenSSH 只管非受信）。
-   受信模式恰恰更危险，却反而没期限，说不通。长会话显式设 `TimeSpan.Zero`。
+   受信模式恰恰更危险，却反而没期限，说不通。长会话显式设 `Timeout.InfiniteTimeSpan`（设 0 或负数当场抛）。
 
 服务端那边需要 `sshd_config` 里 `X11Forwarding yes` 且装了 `xauth`；
 没有的话请求会被拒，异常消息里直接写着这两条。
@@ -517,7 +586,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     AgentForwarding = new AgentForwardOptions
     {
         AllowedKeys = [deployKey],              // 只转发这一把，其余的对远端不可见
-        ConfirmEachSignature = AskUserAsync,    // 每次签名都问一下人
+        ApproveSignature = AskUserAsync,        // 每次签名都问一下人
         MaxConnections = 4,
     },
 }, ct);
@@ -536,7 +605,7 @@ AgentForwarder fwd = shell.Agent!;              // 随 shell 一起释放
 
 - `AllowedKeys` 非空时，远端列钥时**看不到**名单外的钥（`fwd.KeysHidden` 会计数），
   要名单外的钥签名直接回 `FAILURE`；
-- `ConfirmEachSignature` 拿到的是「哪把钥、注释是什么」，可以弹窗问人，拒了就回 `FAILURE`；
+- `ApproveSignature` 拿到的是「哪把钥、注释是什么」，可以弹窗问人，拒了就回 `FAILURE`；
 - `ADD_IDENTITY` / `LOCK` / `UNLOCK` 这类**会改本机 agent 状态**的消息一律拒绝，
   不转发 —— 远端服务器没有任何理由改我们本机的钥圈。
 
@@ -588,19 +657,33 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
 `ProxyJump` 上的每个跳板**按同一份配置解析**，跳板链有深度上限并检测环。
 逐项规则见 [`spec/09-dialing.md`](spec/09-dialing.md) §7。
 
-两条安全约束值得知道：
+三条安全约束值得知道：
 
 1. **`Match exec` 默认不执行任何命令。** 它意味着*解析一份配置文件就能在本机跑任意程序*，
    而配置文件常常是从别处拷来的、同步过来的、别人给的。没有求值器时，
    带 `exec` 的块**一律不匹配**。真要用就自己传：
 
    ```csharp
-   new SshConfigMatchContext { Host = h, ExecEvaluator = cmd => RunAndCheck(cmd) }
+   SshHostConfig config = await SshConfigFile.ResolveAsync(blocks, new SshConfigMatchContext
+   {
+       Host = h,
+       ExecEvaluator = (req, ct) => RunAndCheckAsync(req.ExpandedCommand, ct),
+   }, ct);
    ```
 
    这样「要不要跑外部命令」这个决定明确地落在你身上，而不是藏在库的默认行为里。
+   求值器拿到的 `ExpandedCommand` 已经由库展开好 `%h %n %r %u %%`（代入的值过了与 `ProxyCommand` 同一套白名单）——
+   执行它，不要自己去代入记号；值不能安全代入时那一条根本不会交过来。带求值器的上下文要用 `ResolveAsync`。
 2. **`Include` 有深度上限（16）与环检测。** `a` include `b`、`b` 又 include `a`
    很容易写出来，而没有环检测的表现是*读配置的时候整个进程不动了*。
+   一次最多读 256 个文件，只读普通文件、单个最大 1 MiB —— 超出的部分跳过，不报错。
+3. **配置里的 `ProxyCommand` 要你批准才执行**，理由同第 1 条。回调拿到的是展开之后将要执行的那一行：
+
+   ```csharp
+   new SshConfigConnectOptions { ApproveProxyCommand = (req, ct) => AskUserAsync(req.Host, req.Command, ct) }
+   ```
+
+   没给回调或不批准时，`CreateConnectionOptionsAsync` 以 `InvalidConfiguration` 失败，不会悄悄改成直连。
 
 其余细节：`Match` 支持 `all` / `host` / `originalhost` / `user` / `localuser`，
 条件之间是与，支持 `!` 取反；`canonical` / `final` 永远不匹配（我们不做主机名规范化）。
@@ -616,7 +699,7 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
 ```csharp
 var options = new SshConnectionOptions("root@example.com")
 {
-    // 默认：1 GiB / 1 小时 / 2³¹ 个报文，任一条到了就换
+    // 默认：1 GiB / 2³¹ 个报文，任一条到了就换；不按时长（要按时长换，显式给 maxInterval）
     Rekey = SshRekeyPolicy.Default,
 };
 
@@ -624,14 +707,16 @@ var options = new SshConnectionOptions("root@example.com")
 await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // 换过几次
-Console.WriteLine(conn.LastRekeyReason);   // 上次是哪条阈值触发的
+Console.WriteLine(conn.LastRekey);         // 上次是怎么来的：SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
+Console.WriteLine(conn.LastRekeyDuration); // 上次用了多久（这段时间通道数据暂存）
+conn.Rekeyed += (_, e) => log.Info($"第 {e.Count} 次重协商（{e.Cause.Trigger}）用了 {e.Duration.TotalMilliseconds} ms");   // 在接收循环上调，别阻塞
 ```
 
 三件事值得知道：
 
 1. **接住对端发起的重协商永远开着，关不掉。** `SshRekeyPolicy.Disabled`
-   只关「我们主动发起」。这不是遗漏 —— OpenSSH 的 `RekeyLimit` 默认
-   1 GiB / 1 小时，到点它自己发 `KEXINIT`，不应答的表现是
+   只关「我们主动发起」。这不是遗漏 —— OpenSSH 服务端到了它的 `RekeyLimit`
+   （默认按加密算法的数据量，管理员还可以加时长）就自己发 `KEXINIT`，不应答的表现是
    **挂了一下午的 shell 忽然断了**、**传到一半的大文件断了**。
 2. **报文数那条阈值别调低。** SSH 的序号是 32 位的，AES-GCM 的 nonce
    每个报文推进一次 —— nonce 重用对 GCM 是灾难性的（可恢复认证密钥）。

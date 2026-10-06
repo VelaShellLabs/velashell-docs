@@ -429,7 +429,7 @@ interface ISshSigner
 }
 ```
 
-Built in: file private keys, ssh-agent, PKCS#11, Azure Key Vault — **the private key never has to enter the process**.
+Built in: file private keys, ssh-agent, Windows CNG key stores (software, TPM, smart card; spec/04 §4.8); PKCS#11 and Azure Key Vault plug in through `ISshSigner` from the user side — **the private key never has to enter the process**.
 This is also where VelaShell's "credential manager integration" track lands.
 
 Private key formats supported: OpenSSH v1 (including bcrypt_pbkdf encryption), PKCS#1, PKCS#8 (including encrypted), PuTTY `.ppk` v2/v3.
@@ -510,9 +510,9 @@ class SshNegotiationException : SshException
 ```
 enum SshFailureReason {
     Unknown,
-    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired,
-    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
-    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
+    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired, ProxyAuthFailed,
+    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged, HostKeyStoreFailed,
+    AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
     AgentUnavailable, AgentNotRunning, AgentRefused,
     Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
@@ -551,7 +551,7 @@ Used for: the connection diagnostics panel, protocol-level troubleshooting, reco
 | --- | --- | --- |
 | `SshClient` | **`SshConnection`** | A different metaphor: a "client" is an object; a "connection" is a thing with a lifecycle, and the latter is what VelaShell actually has to manage. It can only be obtained through the static `SshConnection.ConnectAsync(options, ct)`, and by the time it is handed back the handshake and authentication are done — there is no public constructor, and no "new it first, then Open" intermediate state |
 | `SshClientSettings` | `SshConnectionOptions` | The .NET `*Options` convention |
-| `Credential` | `SshCredential` | The concrete credentials are `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `Credential` | `SshCredential` | The concrete credentials are `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential`; it cannot be subclassed outside the library (its constructor is `private protected`). The authenticator sends the `none` probe itself, and `NoneCredential` is an internal type |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **Split in two.** A one-shot command and an interactive shell differ in lifecycle, read/write shape and exit semantics; crammed into one class, properties like `HasTerminal` are what that cramming squeezes out. Running to completion and getting all the output is `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | It is not a "client"; it is a view of a file system |
 | `SftpFile` | `SftpFileStream` | It is a subclass of `Stream`, and the name should say so |
@@ -656,13 +656,13 @@ while handing timing constraints over to callers (the rules are in §4.1 of `src
 | 2 | `ISshCipherSuite` | New ciphers. **Including Chinese national standards SM4-GCM / SM3** (a real requirement for Chinese government and enterprise customers) | 🔒 Seam inside the library: adding one = implement the interface + register a name in the algorithm list |
 | 3 | `ISshKeyExchange` | New KEX. Post-quantum (ML-KEM, sntrup761) built in; future hybrid schemes get added the same way | 🔒 Seam inside the library: `SshKeyExchangeFactory` is a fixed table, and adding one means adding a row; **no runtime registration** (the design-stage `KexRegistry` has been removed, §11.2.24) |
 | 4 | Host key types | New host key types, including **CA-signed host certificates** (`*-cert-v01@openssh.com`) | 🔒 Added in `SshPublicKey`; host certificates are already supported (§11.2.22). `IHostKeyTypePreference` is public, and only governs "which types to negotiate first when connecting" |
-| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain | ✅ Public. Built in: `InMemorySshSigner` (private key files), agent identities, `SshCertificateSigner` (certificates) |
+| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain | ✅ Public. Built in: `InMemorySshSigner` (private key files), agent identities (including FIDO `sk-*`), `SshCertificateSigner` (certificates), `CngSshSigner` (Windows key stores) |
 | 6 | Authentication methods | New authentication methods, including bastion hosts' private extensions | 🔒 Credentials are the public `SshCredential` family; a new method means adding a credential type and an authenticator branch inside the library. The design-stage `IAuthMethod` was not built |
 | 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist | ✅ Public. Built in: `KnownHostsPolicy`, `PinnedFingerprintHostKeyPolicy`, `DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` | 🔒 Seam inside the library. All three are built in (`AgentForwarder`, `X11Forwarder`, `RemotePortForwarder`, which implement this interface explicitly) |
-| 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ❌ Not built. Sending global requests is an internal method of the library |
-| 10 | SFTP extensions | Vendor SFTP extensions | 🔒 Inside the library: `posix-rename`, `limits`, `statvfs` and others are used directly by `SftpFileSystem` according to the capability query |
-| 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Forwarding metrics go through `System.Diagnostics.Metrics` (`ForwardMetrics.MeterName`); `ActivitySource` and the packet tap (`IPacketTap`) are not built yet |
+| 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ✅ Host key rotation is turned on by the host key policy (`IHostKeyRotationPolicy`, spec/05 §6.4.1); sending global requests is still an internal method of the library |
+| 10 | SFTP extensions | Vendor SFTP extensions | ✅ Wrapped in the library: `posix-rename`, `hardlink`, `fsync`, `limits`, `statvfs`, `copy-data`, `expand-path`, `lsetstat`, `users-groups-by-id` (spec/06 §7.1); vendor-private ones go through `SftpFileSystem.SendExtendedAsync` (spec/06 §7.3) |
+| 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Metrics go through `System.Diagnostics.Metrics`: the connection and channel set (`SshMetrics.MeterName`) and the forwarding set (`ForwardMetrics.MeterName`), see spec/08 §7; the packet tap `IPacketTap` is built (spec/08 §9); `ActivitySource` is not built yet |
 | 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`, with no separate interface |
 
 > This table was originally the whole answer to "extensibility later on", and the test was:
@@ -838,6 +838,7 @@ a contentless "authentication failed", and that explanation is exactly the sente
   For now there is only `InMemorySshSigner` (holds the private key in-process).
 - `known_hosts` and `ssh_config` → M5. For now there is only the `IHostKeyPolicy` abstraction.
 - Password change flow (`PASSWD_CHANGEREQ`) — **explicitly not doing it**, but a readable failure reason is given.
+  **→ Done later (2026-10-05): `PasswordCredential.NewPasswordProvider`, see [spec 04 §5.1](../spec/04-authentication.md).**
 - Interop matrix against real OpenSSH — needs a CI runner, can't run locally.
   **→ Done since, see §11.2.9.**
 
@@ -918,7 +919,7 @@ The three SFTP tiers landed, **287 cases all green** (23 of them are byte-for-by
   — their capability bits can already be queried, but no convenience methods yet. None of them are in VelaShell's existing usage.
 - The public `ISftpExtension` extension point (architecture §8 item 10) —
   for now, adding a vendor extension means using `SftpRequestPipeline.SendAsync` + `SftpWire.WriteExtended` directly,
-  which works but isn't elegant.
+  which works but isn't elegant. **→ Done: `SftpFileSystem.SendExtendedAsync` (spec/06 §7.3); no interface.**
 - BDP adaptation at the SFTP layer (in-flight request count tuned by RTT) — the same to-do as M2's adaptive window;
   both have to wait for link characteristics simulation. **→ Done since, see §11.2.9.**
 
@@ -1269,7 +1270,7 @@ So `AgentForwarder` **parses the agent protocol, then forwards**:
 - When `AllowedKeys` is non-empty, keys not on the list are **filtered out** of the
   `REQUEST_IDENTITIES` reply (`KeysHidden` counts them), and a `SIGN_REQUEST` for a key not on
   the list gets `FAILURE` straight away.
-- `ConfirmEachSignature` gives the host an async callback, which can pop a dialog to ask a human.
+- `ApproveSignature` gives the host an async callback, which can pop a dialog to ask a human.
   If refused, reply `FAILURE`.
 - Messages such as `ADD_IDENTITY` / `LOCK` / `UNLOCK` that would **change local agent state**
   **always get `FAILURE`** and are not forwarded. A remote server has no reason whatsoever to
@@ -1405,7 +1406,7 @@ not forgotten):
 - Encrypted OpenSSH private keys — `bcrypt_pbkdf` isn't available. **→ Done, see §11.2.18.**
 - `streamlocal-forward@openssh.com` **→ Done, see §11.2.12.**
 - `Include` and `Match` in `ssh_config` **→ Done, see §11.2.12.**
-- A public `ISftpExtension` extension point; convenience wrappers for extensions such as `statvfs@openssh.com`.
+- A public `ISftpExtension` extension point; convenience wrappers for extensions such as `statvfs@openssh.com`. **→ Done (spec/06 §7.1, §7.3).**
 - The grace period after cancelling a remote forward is hard-coded to 2 seconds, not configurable.
 
 ### 11.2.10 Compression switched to native zlib (2026-09-21)
@@ -1506,8 +1507,8 @@ The code itself was rewritten against our own interfaces (`ISshCompressor` +
 
 This item isn't "filling in a protocol detail"; it's **fixing a hole that drops long-lived connections**.
 
-OpenSSH's `RekeyLimit` defaults to 1 GiB or 1 hour, and when it's reached it sends
-`SSH_MSG_KEXINIT` on its own. A client that doesn't respond doesn't just "lack a feature"; instead:
+When an OpenSSH server reaches its `RekeyLimit` (by default the cipher's data volume; administrators can add a time limit), it sends
+`SSH_MSG_KEXINIT` on its own. 〔Correction 2026-10-06〕This used to say "defaults to 1 GiB or 1 hour"; checked black-box: `sshd_config` defaults to `RekeyLimit default none`, with no time limit. A client that doesn't respond doesn't just "lack a feature"; instead:
 
 - A shell that's been open all afternoon suddenly drops;
 - A large file transfer drops halfway through.
@@ -1613,7 +1614,7 @@ compression and decompression interleave.
 
 #### Initiating it ourselves (completed the same day)
 
-The thresholds live in `SshRekeyPolicy` (default **1 GiB / 1 hour / 2³¹ messages**, **on** by default).
+The thresholds live in `SshRekeyPolicy` (default **1 GiB / 2³¹ messages**, **on** by default; 〔2026-10-06, Q1〕the time threshold is off by default, it used to be 1 hour, see spec/03 §8.1).
 `SshConnection.StartRekeyAsync()` is also public, so the host can pick its own moment.
 
 **The message-count one is the hard line.** SSH sequence numbers are 32-bit, and the AES-GCM nonce
@@ -1640,9 +1641,10 @@ So the "both sides initiate simultaneously" case, which looks like it needs spec
 finish: the key exchange has to read the peer's messages, and the only reader of this transport
 is the receive loop. Calling it again while negotiation is in progress is a no-op.
 
-Diagnostics: `LastRekeyReason` says which threshold triggered it ("单向报文数达到 1024（阈值 1024）" —
-"messages in one direction reached 1024 (threshold 1024)"), and `RekeyCount` is the number of
-completed rekeys. When troubleshooting you need to be able to answer "why did this connection just change keys".
+Diagnostics: `LastRekey` says how the latest rekey came about (`SshRekeyCause`: the trigger `SshRekeyTrigger` — initiated by the peer, explicitly requested,
+bytes / packets / time reaching a threshold, or the packet hard limit — plus the observed value and the threshold), and `RekeyCount` is the number of
+completed rekeys. When troubleshooting you need to be able to answer "why did this connection just change keys". 〔History〕It used to be `LastRekeyReason`, a free-form
+Chinese sentence ("单向报文数达到 1024（阈值 1024）"): programs could not branch on it, the UI could not translate it, and rekeys initiated by the peer or explicitly requested were not recorded.
 
 ##### An API trap of our own making
 
@@ -1737,6 +1739,9 @@ Both are now done, each with a constraint:
   OpenSSH) and cycle detection** — `a` including `b` and `b` including `a` is easy to write, and
   without cycle detection the symptom is **the whole process freezing while reading config**.
   One test case pins exactly this.
+  A **total budget** (at most 256 files per load) stops the "wide" explosion — a set of files that
+  `Include dir/*` each other, where every chain without a cycle is walked; **only regular files of at
+  most 1 MiB are read**, so `Include /dev/zero` or a FIFO cannot hang config loading (`spec/09` §7.1).
   Glob results are **sorted**: directory enumeration order differs across file systems,
   and `ssh_config` is "first value wins" — nondeterministic order means nondeterministic results.
 - **`Match exec` doesn't execute by default.** Without an evaluator, blocks with an `exec`
@@ -1926,7 +1931,7 @@ OpenSSH's `ForwardX11Timeout` only applies to untrusted mode. **Ours applies to 
 
 Reason: "an expiry that only takes effect in one of the modes" is an API that trips people up —
 and trusted mode is precisely the far more dangerous one, yet it would have no expiry at all, which makes no sense.
-For long sessions that need it indefinitely, set `Timeout = TimeSpan.Zero` explicitly.
+For long sessions that need it indefinitely, set `Timeout = Timeout.InfiniteTimeSpan` explicitly ("no time limit" has only this one spelling across the library; this used to be `TimeSpan.Zero`).
 
 This came up while writing the cases: `过期之后不再接受新的x11通道` ("no new x11 channels accepted after expiry") failed in trusted mode,
 and only on looking into it did I realize that "copying OpenSSH" had copied a counterintuitive behavior here.
@@ -1991,7 +1996,10 @@ the local display lives in the same process, connecting to a local port is only 
 lets the caller supply a connector: it is called once per `x11` channel for a duplex stream, and the setup message is written
 into it with the cookie replaced by `LocalCookie` (empty if none was given) (`spec/07` §7.5.9). **The fake-cookie check is
 unchanged** — that layer guards against the remote side. Trusted mode only: untrusted mode needs `xauth` to reach the local
-display and sign a restricted cookie, so setting both makes the request fail instead of silently falling back to trusted.
+display and sign a restricted cookie, so setting both is a configuration contradiction — the session entry points (`ExecuteAsync` / `OpenShellAsync`)
+throw `ArgumentException` before opening the channel, `ForwardFailureMode.Continue` does not swallow it, and nothing silently falls back to trusted
+(it used to be reported only when sending `x11-req`, as "forwarding did not come up"). Likewise, `AgentForwardOptions` takes only one of `AgentEndpoint`
+and `LocalConnector`; setting both throws (the endpoint used to be silently ignored).
 An unavailable connector side is treated as "local display unreachable". Three tests (relaying with cookie replacement,
 unavailable connector, combined with untrusted mode).
 
@@ -2448,6 +2456,7 @@ and a half-transferred file or half-run command output is handed out as a comple
 | Problem | Decision |
 | --- | --- |
 | During a heavy upload, another channel's `WINDOW_ADJUST` queued behind the outbound backlog (and first waited on backpressure for room): the peer kept waiting for window, and downloads were dragged almost to a stop by the upload | Our window top-ups go through a priority lane that the send pump checks before every item, exempt from backpressure; the lane only moves a top-up earlier, never past `CLOSE` or the rekey gate (`spec/05` §3.2) |
+| With a pile of tunnel connections and SFTP sending at once, the normal queue holds one frame per channel, and a terminal keystroke queued behind them: with a 2 MiB backlog on a 5 Mbit/s uplink a keystroke waited over 3 seconds | Interactive channels (those opened by `OpenShellAsync`) use an interactive lane, and after window top-ups the send pump takes turns between it and the normal queue: a keystroke waits for at most one frame, and a large paste does not starve the normal queue; all of a channel's frames use the same lane, so its own order is unchanged (`spec/05` §3.2, Q7) |
 | Keep-alive probes waited on backpressure, or started their clock only once on the wire: a dead link typically looks exactly like the send pump stuck on one write, so the probe got stuck too, and the connection could not be declared dead precisely when it mattered most | Probes bypass backpressure, and their deadline starts when they are enqueued; at most one frame per interval, so this is not unbounded (`spec/05` §6.3) |
 | The adaptive window looked only at "ran low": a slow consumer pushed the window all the way to the maximum, piling up tens of MiB of unread data locally | Grow only when it ran low **and** the reader was recently starved; shrink after 3 rounds without running low (`spec/05` §3.3, §5.5 here) |
 | On a peer channel open, the receive loop awaited the user's handler in place (it may show a prompt or look up configuration): a slow handler stalled receiving for every channel on the connection | Parsing and handler lookup finish on the receive loop; "ask the handler, create the channel, confirm" runs in the background; at most 64 are being decided at once, and the excess is refused with `RESOURCE_SHORTAGE` (`spec/05` §8.1) |

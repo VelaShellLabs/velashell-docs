@@ -131,7 +131,7 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ not implemented yet | 〔Interop〕old devices often offer only this. Specified in 03 §3.5; until it is implemented, putting it in the list is rejected before connecting (03 §2.2) |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔Interop〕old devices and hardened servers often offer only this. Placed after the elliptic curves and before the DH standard groups; the group is supplied by the server and must be checked (03 §3.5) |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ off by default | 〔Interop〕Cisco IOS / old VRP have only this. **MUST be explicitly enabled by the user** (§6.6) |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | Not real algorithms but **indicators**; see 03 |
 
@@ -203,6 +203,18 @@ It does **not** include CBC (§6.3).
 Callers may also build their own lists, but no category may be empty, and every name in the key exchange, encryption, MAC and compression categories
 must be one this library implements. This is checked **when connecting starts, before dialing**; a bad list throws `ArgumentException` right away,
 without dialing. The rule and its rationale are in 03 §2.2.
+
+〔Decision〕**The algorithm catalog is public** (`SshAlgorithmCatalog`): for each category (`SshAlgorithmCategory`), which names are implemented (`Implemented`,
+in preference order: the default list first, legacy algorithms after) and which common names are not (`KnownUnimplemented`, e.g. CBC, `umac-*`, `ssh-dss`).
+Consumers that let users write their own lists use it to say on the spot "not implemented" versus "not recognized". It shares one source of truth with the validation above and with the factory tables, checked name by name in the tests.
+〔History〕Without this catalog the host inferred what was implemented from `Default.WithLegacyInterop()` and maintained its own hand-written "known but unimplemented" list.
+
+〔Decision〕**A list of FIPS-approved algorithms only**: `SshAlgorithmSet.FipsApprovedOnly`, matching what RHEL's FIPS crypto policy allows for SSH —
+key exchange only ECDH on the NIST curves and the standard DH groups, host keys only ECDSA and SHA-2 RSA (with their certificates), encryption only AES-GCM / AES-CTR,
+MACs only HMAC-SHA2; no X25519, Ed25519, ChaCha20-Poly1305 or post-quantum hybrids. **It only restricts the algorithms; it does not make this library FIPS 140 validated**:
+AES, SHA-2, ECDH, ECDSA and RSA go through the BCL (the validated CNG on Windows; elsewhere it depends on the system's OpenSSL), and the modular exponentiation of the DH groups goes through BouncyCastle.
+The FIPS-oriented post-quantum hybrids (`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`) are not implemented for now: there is no server to check the wire format against yet,
+so an implementation could only vouch for itself (03 §3.6).
 
 ## 7 How algorithm priority is ordered
 

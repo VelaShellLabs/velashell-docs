@@ -17,6 +17,7 @@
 | **Local forwarding** | `-L` | Us (local machine) | A `direct-tcpip` channel |
 | **Dynamic forwarding** | `-D` | Us (local machine, running SOCKS5) | A `direct-tcpip` channel, target given by the SOCKS handshake |
 | **Remote forwarding** | `-R` | The server | The server opens a `forwarded-tcpip` channel; we connect to the local target |
+| **Remote dynamic forwarding** | `-R [bind:]port` (no target) | The server | The server opens a `forwarded-tcpip` channel carrying SOCKS5; we connect to the target it asks for, subject to an allowlist (§4.6) |
 | **Direct tunnel** | None (`-W` is close) | Nobody listens | `direct-tcpip` / `direct-streamlocal`; the stream is handed straight to the caller |
 
 **The fourth is the easiest to overlook, yet it is often the one you should be using.**
@@ -48,13 +49,14 @@ sequenceDiagram
         end
     else Rejected (AllowTcpForwarding no / target unreachable)
         S->>F: CHANNEL_OPEN_FAILURE(reason)
-        F->>App: TCP reset 〔Not implemented yet: closed normally today〕
+        F->>App: TCP reset
     end
 ```
 
-〔Not implemented yet〕When the server refuses to open the tunnel, the design is to **reset** that local connection (RST): a refusal is an error too, the same rule as §2.2's "an error is not an EOF".
-Today the implementation raises `Error` and closes that connection **normally** (FIN), so the local application reads an end with no data at all.
-(Dynamic forwarding also sends a SOCKS failure reply that tells the client why, §3.2.)
+〔Decision〕When the server refuses to open the tunnel (or has not answered within the channel-open time limit of §3.2), that local connection is **reset** (RST) and `Error` (`ChannelOpen`) is raised:
+a refusal is an error too, the same rule as §2.2's "an error is not an EOF". 〔History〕The connection used to be closed **normally** (FIN), so the local application read an end with no data at all
+and could not tell "the server refused" from "the target sent nothing". Local forwarding to a remote Unix socket is handled the same way; when listening on a local Unix socket, which may not support linger 0, the socket is simply closed.
+(Dynamic forwarding also sends a SOCKS failure reply that tells the client why, then closes normally, §3.2.)
 
 ### 2.1 Extra fields of `direct-tcpip`
 
@@ -102,7 +104,8 @@ The direction reading from the channel is unaffected; data already received is d
 
 | `BindAddress` | Behavior |
 | --- | --- |
-| `127.0.0.1` (〔Decision〕**default**) | Only the local machine can connect |
+| Not given (〔Decision〕**default**) / `localhost` | **Both loopbacks**: `127.0.0.1` and `::1`, on the same port; only the local machine can connect |
+| `127.0.0.1` | IPv4 loopback only |
 | `0.0.0.0` / `::` | Reachable from the LAN. **Must be specified explicitly by the user** |
 | A specific interface address | Listens only on that interface |
 
@@ -110,7 +113,12 @@ The direction reading from the channel is unaffected; data already received is d
 binding to `0.0.0.0` by default would expose it to everyone on the same network segment.
 OpenSSH defaults to this as well (`GatewayPorts no`).
 
-〔Decision〕**Port 0 means the OS assigns one**; the assigned endpoint is reported back via `PortForwarder.BoundEndPoint`.
+〔Decision〕**Listen on both loopbacks** (Q5): many runtimes resolve `localhost` to `::1` first (Node 17 onward does), so with only `127.0.0.1` they fail to connect or try `::1` first;
+and with `[::1]:same port` left empty, any process on the machine can grab it, and a client trying `::1` first hands it things like the database password —— exactly the same-machine exposure that "bind to loopback by default" is meant to prevent.
+Without an IPv6 loopback only `127.0.0.1` is used; when that port on `[::1]` is already taken by another process **the forward is not started** (`ForwardBindFailed`, with the reason in the message),
+and with port 0 another port is tried. 〔History〕Only `127.0.0.1` used to be the default.
+
+〔Decision〕**Port 0 means the OS assigns one**; the assigned endpoint is reported back via `LocalPortForwarder.BoundEndPoint` (the IPv4 one) and `BoundEndPoints` (all of them).
 
 ### 2.4 Listener resilience and teardown
 
@@ -129,6 +137,34 @@ The forwarder object must still be disposed by the caller.
 〔Decision〕**Disposal returns only after every connection has finished its teardown.** The forwarder tracks each connection in progress; disposal stops the listener,
 cancels all connections (aborted as errors), waits for them to finish their teardown, and only then releases the concurrency slots and other resources.
 It used to release them right away: a connection still tearing down would then return a slot to an already-disposed limiter, with the exception landing in a task nobody observed; and the connections were still open when disposal returned.
+
+### 2.5 Unix domain sockets
+
+> Basis: `direct-streamlocal@openssh.com` in OpenSSH `PROTOCOL`; ssh_config(5) `StreamLocalBindMask` / `StreamLocalBindUnlink`.
+
+Two directions, which can be combined:
+
+| Form | API | Local listener | Outbound |
+| --- | --- | --- | --- |
+| `-L 8080:/var/run/docker.sock` | `LocalPortForwarder.StartToUnixSocket(connection, remote path)` | TCP | `direct-streamlocal@openssh.com` (only `socket_path ‖ reserved`) |
+| `-L /path/local.sock:host:port` | any start method + `LocalPortForwardOptions.ListenSocketPath` | a local socket file | unchanged (a TCP target, a remote socket, or SOCKS) |
+
+Use: local Docker clients and database tools work directly against the remote `docker.sock` / database socket, and the remote side opens no TCP port at all;
+when the local end listens on a socket file, **file permissions isolate it** —— on a multi-user machine other users cannot borrow your tunnel (a loopback port is open to every user).
+
+〔Decision〕**Permissions of the local socket file**: on non-Windows systems it is set to `0600` after the listener starts (the same as OpenSSH's default `StreamLocalBindMask 0177`).
+There is a short window between creation and the permission change; putting the socket in a directory only you can enter (such as `$XDG_RUNTIME_DIR`) removes it ——
+the process-wide umask cannot be changed safely in a multithreaded process, so it is not used to close the gap. On Windows the socket file inherits the directory's ACL (keep it under the user profile).
+
+〔Decision〕**If a file already exists at the path, fail by default and leave it alone** (`ForwardBindFailed`): it is most likely left over from last time, but it may be someone else's socket.
+Only `AllowSocketReplacement = true` (like `StreamLocalBindUnlink yes`) deletes it before listening.
+
+〔Decision〕**A path that is too long fails immediately** (108 bytes on Linux / Windows, 104 on macOS, both including the terminating 0).
+
+〔Decision〕**On teardown, delete the socket file we created**: on disposal and when the SSH connection drops; not when binding itself failed —— that file is not ours.
+
+Whether a tunnel to a remote socket can be opened (the server needs `AllowStreamLocalForwarding`) is only known when the first connection arrives, just as with TCP targets;
+failure raises `Error` (`ChannelOpen`). 〔Verified〕Against a real OpenSSH: a socket file on Windows → the server's `ssh-agent` socket; a key added through it shows up in `ssh-add -l`.
 
 ---
 
@@ -156,9 +192,13 @@ If you really need to restrict access, use OS mechanisms (firewall, namespaces).
 This is the single most important semantic of dynamic forwarding — `curl --socks5-hostname` depends on it.
 Local resolution would cause a "DNS goes local, connection goes through the tunnel" split,
 which simply fails for internal domain names and also leaks the destination.
+〔Decision〕The domain name is decoded as UTF-8, and a non-ASCII name is converted to Punycode before it is passed on (as the SOCKS5 dialer does); invalid UTF-8, or a name that cannot be converted, gets `0x08`.
+〔History〕Early versions decoded it as ASCII, turning every non-ASCII character into `?` and connecting to a host that does not exist.
 
 〔Decision〕**A zero-length domain name gets `0x08` (address type not supported), and that connection is closed.** An empty name is not a target:
 let through, opening the tunnel fails on an invalid argument and the client gets no SOCKS reply at all, with no way to tell what went wrong.
+〔Decision〕**A target port of 0 gets `0x01` (general failure), and that connection is likewise closed during the handshake**, recorded as a SOCKS handshake error.
+〔History〕Early versions let it through: opening the tunnel threw on the invalid argument, the client got no reply at all, and the error was recorded as a relay error.
 
 ### 3.2 Reply code mapping
 
@@ -168,13 +208,17 @@ let through, opening the tunnel fails on an invalid argument and the client gets
 | 2 `CONNECT_FAILED` | 0x05 connection refused |
 | 3 `UNKNOWN_CHANNEL_TYPE` | 0x01 general failure |
 | 4 `RESOURCE_SHORTAGE` | 0x01 general failure |
-| Channel open timed out 〔Not implemented yet〕 | 0x06 TTL expired |
+| Channel open timed out (`ChannelOpenTimeout`) | 0x06 TTL expired |
 
 Getting the mapping right has real consequences: `curl` and browsers decide from the REP code whether to retry
 and which message to show the user. Replying `0x01` for everything throws that information away.
 
-〔Not implemented yet〕Opening a channel has no time limit of its own yet, so the last row never applies: today the forwarder waits for the server's answer;
-if the forwarder is disposed or the SSH connection drops first, that connection is closed without any reply.
+〔Decision〕**Opening a channel has a time limit of its own** (`LocalPortForwardOptions.ChannelOpenTimeout`, 30 seconds by default, `Timeout.InfiniteTimeSpan` for none),
+shared by local and dynamic forwarding: the server confirms only after it has connected to the target, and for an unreachable target it answers only when its own TCP connect times out (commonly around two minutes) —
+browsers and curl cannot wait that long, and would not see why. When the time is up this connection is given up: dynamic forwarding replies `0x06`, local forwarding resets the local connection (§2), and both raise `Error` (`ChannelOpen`).
+A late confirmation is cleaned up by the connection and closed at once (the `CHANNEL_OPEN` has already gone out, so its answer runs its course instead of being dropped from the ledger), so it does not hold one of the server's session slots.
+〔History〕There used to be no such limit, so the last row never applied: the forwarder waited for the server's answer.
+If the forwarder is disposed or the SSH connection drops while one is still waiting, that connection is closed without any reply.
 A failure without a reason code (for example our own channel count or window budget being exhausted) gets `0x01`.
 
 ### 3.3 Handshake time limit
@@ -209,13 +253,28 @@ sequenceDiagram
     R->>S: Connects to the server's bind_port
     S->>F: CHANNEL_OPEN "forwarded-tcpip"<br/>bind_addr ‖ bind_port ‖ orig_addr ‖ orig_port
     F->>F: Find the matching forwarder by bind address + port
-    alt Found
-        F->>S: CHANNEL_OPEN_CONFIRMATION
-        Note over F: Connect to the local target, copy both ways
-    else Not found
+    alt Not found
         F->>S: CHANNEL_OPEN_FAILURE(1)
+    else Found: connect to the local target first
+        alt Connected
+            F->>S: CHANNEL_OPEN_CONFIRMATION
+            Note over F: Copy both ways
+        else Cannot connect
+            F->>S: CHANNEL_OPEN_FAILURE(2) "cannot connect to the forwarded local target"
+            Note over F: Record a TargetConnect error locally
+        end
     end
 ```
+
+〔Decision〕**The local target is connected before the channel is confirmed**, the same order as agent forwarding (§7.1): if it cannot be reached, reply `CHANNEL_OPEN_FAILURE(2)` (connect failed),
+with a description that only says it cannot connect to the forwarded local target — local addresses are not sent out. 〔History〕Early versions confirmed first and connected afterwards: when the target was unreachable the remote side saw "accepted, then closed at once",
+and the server log had no connect failed.
+
+〔Decision〕**A handler's refusal is answered with the matching reason code**: failing to reach what must be connected (the local target, the local agent) gets 2, a full connection limit gets 4 (resource shortage),
+anything else gets 1. 〔History〕Early versions always replied 1.
+
+〔Decision〕**The `Source` of the connection events is the originator in `forwarded-tcpip`** (who connected to the port exposed on the server): an `IPEndPoint` when it parses as an IP address,
+otherwise a `DnsEndPoint` with the host name (not resolved); Unix socket forwarding has no such field, so it is `null`. 〔History〕Early versions discarded it, so `Source` was always `null`.
 
 ### 4.2 Three musts
 
@@ -247,8 +306,18 @@ otherwise connections that are being established get rejected for no apparent re
 
 If the SSH connection is already gone (the cancel request cannot be sent, or the connection drops during the grace period), there is no waiting — no more forwarded channels will arrive.
 
+〔Decision〕**Waiting for the cancel request's reply has a time limit (5 seconds).** On a half-dead link (keepalive off, or a long interval) the reply may never come;
+without a limit, disposal would hang until TCP retransmission gives up (about 15 minutes by default on Linux), and the caller's "stop tunnel" would hang with it.
+When the time is up the link is treated as unusable: the handler is removed and connections are ended as usual, without waiting out the grace period — the same idea as the time limit on channel disposal (`05-connection.md`).
+
 〔History〕The early implementation marked itself "disposed" as soon as disposal began, and the handler rejected everything once that flag was set —
 the grace period did nothing, and in-flight forwarded channels were rejected anyway.
+
+〔Decision〕**If setup is abandoned, a listener the server grants afterwards is withdrawn.** When `tcpip-forward` (or the streamlocal variant) is already on the wire,
+the caller cancels while waiting for the reply (or waiting fails), and the server then replies `REQUEST_SUCCESS`,
+a cancel request with `want_reply = false` is sent (no reply is registered, so nothing hangs on a reply nobody waits for).
+Which arrives first — the reply or "the caller gave up" — is settled by an atomic state, and whichever comes second sends the cancel, so even simultaneous arrival is covered.
+It used to only remove the local handler: the server's listener stayed open until the connection dropped and every incoming connection was refused; an immediate retry on a fixed port always failed with "port already in use".
 
 ### 4.4 Unix socket variant
 
@@ -270,6 +339,36 @@ Routing forwarded channels by `(bind_addr, 0)` would match none of them, and the
 Tied only to the connection, a forwarder's connections would keep relaying after the forwarder was disposed, until the whole SSH connection dropped.
 
 Once the SSH connection drops, the server's listener disappears with it, and there is no local port to release; the forwarder object must still be disposed (disposal sees that the connection is gone and skips the grace period).
+
+### 4.6 Remote dynamic forwarding and the allowlist (`PermitRemoteOpen`)
+
+> Basis: RFC 1928 (SOCKS5); the target-less form of ssh(1) `-R` (OpenSSH 7.6 and later) and ssh_config(5) `PermitRemoteOpen`.
+
+Use: the remote server needs to reach places only this machine can reach (an internal package mirror, an internal API) and there is no VPN —— programs on the remote side use the server's port as a SOCKS5 proxy,
+and this machine connects on their behalf. On the server side it is an ordinary `tcpip-forward` (§4.1); nothing extra is required of the server.
+
+`RemotePortForwarder.StartDynamicAsync(connection, permitRemoteOpen, options)`:
+
+1. Ask the server to listen, as in §4.1 (with port 0 the actual port comes in the reply). The forwarder's kind is `ForwardKind.RemoteDynamic` (the `kind` tag of metrics and events follows it).
+2. A forwarded channel is **confirmed first** (the target is only known after the handshake, so it cannot be connected beforehand as in §4.1); it takes a concurrency slot as usual.
+3. Run the server side of SOCKS5 on the channel: the same subset as §3.1 (`CONNECT` only, no authentication), with the same handshake time limit
+   (`RemotePortForwardOptions.SocksHandshakeTimeout`, 30 seconds by default).
+4. A target not on the allowlist: reply `0x02` (not allowed) and raise `Error` (`ForwardErrorReason.TargetNotPermitted`).
+5. On the allowlist: resolve and connect **on this machine** (names resolve locally —— reaching what this machine can reach is the whole point). A failed connect replies by cause: refused `0x05`,
+   network unreachable `0x03`, host unreachable or not resolvable `0x04`, timed out `0x06`, anything else `0x01`, and raises `Error` (`TargetConnect`).
+6. Once connected, reply `0x00`, then the same relay loop as every other forward (§6).
+
+〔Decision〕**The allowlist must be given; there is no default.** This turns this machine into the remote side's SOCKS proxy: whatever internal network this machine reaches, the remote side reaches too.
+What to let out must be stated by the caller; to allow everything, pass `RemoteOpenPolicy.Any` explicitly (OpenSSH's `PermitRemoteOpen any`); to allow nothing, `None`.
+
+〔Decision〕**How rules are written and matched**: each rule is `host:port`; the host may use `*` / `?` wildcards and is case-insensitive, IPv6 goes in brackets (`[::1]:22`), the port is a number or `*`.
+**Matching uses the name the remote side gave in the handshake, without resolving it first**: a rule with an IP does not match a request with a name, and vice versa —— better a wrong refusal
+than letting a name that resolves to an internal address bypass the list.
+
+〔Decision〕**A failure reply must actually go out**: after the reply, drain stdin and send `EOF` before closing the channel; **record the event before replying** ——
+the remote side may come back with another request as soon as it sees the reply, and the event must not trail it.
+
+〔Verified〕Against a real OpenSSH: OpenBSD `nc -X 5 -x 127.0.0.1:port` on the remote side reaches a service on this machine through it, in both directions; a target not on the list is refused.
 
 ---
 
@@ -295,16 +394,24 @@ event EventHandler<ForwardErrorEventArgs>      Error;              // a single c
 ```
 
 `ForwardErrorEventArgs.Reason` is the enum `ForwardErrorReason` (`Accept` / `ConnectionLimit` / `SocksHandshake` / `ChannelOpen` /
-`TargetConnect` / `Relay`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
+`TargetConnect` / `Relay` / `SetupSkipped` / `TargetNotPermitted`; the zero value is `Unknown`), not a string —— callers branch on it instead of having to recognize an agreed-upon piece of text.
 
 Also published through `System.Diagnostics.Metrics`:
 
 | Instrument | Type | Tags |
 | --- | --- | --- |
-| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind`, `bind` |
-| `velashell.ssh.forward.connections.total` | Counter | `kind`, `bind` |
-| `velashell.ssh.forward.bytes` | Counter | `kind`, `bind`, `direction` |
-| `velashell.ssh.forward.errors` | Counter | `kind`, `bind`, `reason` |
+| `velashell.ssh.forward.connections.active` | UpDownCounter | `kind` |
+| `velashell.ssh.forward.connections.total` | Counter | `kind` |
+| `velashell.ssh.forward.bytes` | Counter | `kind`, `direction` |
+| `velashell.ssh.forward.errors` | Counter | `kind`, `reason` |
+
+〔Decision〕**The tags are only the low-cardinality `kind`, `direction` and `reason`; the listen address is not a tag.** The listen address is high-cardinality: one value per forward, and a random one when port 0 is given;
+as a tag, the number of series in a time-series database would grow with every forward ever opened and never be reclaimed. For the traffic and connections of one particular forward, use the forwarder's own
+`Throughput` / `Connections` (§5.1). 〔History〕This table used to list a `bind` tag that the code never emitted.
+
+〔Decision〕**A forwarder reports why it stopped** (`PortForwarder.Completion`): when the connection ended, the connection's end reason (the same one as `SshConnection.Completion`);
+on local disposal, `Aborted` — whichever comes first; it completes successfully with the reason as its result. A forwarder stops only for these two things — a failure of a single connection raises `Error` and the forwarder keeps running.
+〔History〕There used to be none, so the host's tunnel panel had to watch the connection's end itself to turn "running" into a status with a reason.
 
 〔Decision〕**Provide both paths**: events for the desktop UI (which refreshes a panel in real time),
 Metrics for server scenarios (feeding OpenTelemetry). Picking only one would force users to rewrite the data plane themselves —
@@ -319,6 +426,24 @@ a throwing `ConnectionOpened` subscriber used to stop that connection from relay
 〔Implementation note〕Counters use `Interlocked`; reads use `Volatile.Read`.
 Byte counts are accumulated **in the copy loop**, not at the channel layer — channel-layer byte counts include protocol overhead,
 whereas the panel should show application data volume.
+
+### 5.1 Live throughput, connection snapshots and rate limits
+
+| Member | Content |
+| --- | --- |
+| `PortForwarder.Throughput` | `ForwardThroughput(SentPerSecond, ReceivedPerSecond)`: the average over **the last three whole seconds** (application bytes / second), excluding the second in progress |
+| `PortForwarder.Connections` | A snapshot of the connections being relayed (ordered by id): `Id` (as in the connection events), `Source`, `Target`, `StartedAt`, and `BytesSent` / `BytesReceived` so far; removed when the connection ends |
+| `LocalPortForwardOptions.MaxBytesPerSecond` / `RemotePortForwardOptions.MaxBytesPerSecond` | At most this many application bytes per second in each direction; `null` (default) means unlimited, and a non-positive value throws when set |
+
+〔Decision〕**Throughput is an average over whole-second windows, not an instantaneous value.** An instantaneous value jumps with every chunk and is unreadable on a panel;
+excluding the second in progress costs one to two seconds of lag.
+
+〔Decision〕**Rate limits are per forwarder and per direction**: all connections of a forwarder share one token bucket (one per direction) ——
+"how much bandwidth this tunnel may take" belongs to the forwarder, not to a single connection; otherwise opening ten connections means ten times the rate.
+**A burst of one second's allowance** is allowed; after that the deficit is carried and waited off; after a pause the allowance refills, but never beyond one second's worth.
+
+〔Decision〕**Wait in the copy loop, before writing to the other side**: while waiting nothing more is read, the data stays in the read buffer, and backpressure flows back to the sender through the TCP window / channel window ——
+no extra buffer and no dropped data. Use: with several tunnels open over a slow link, one download cannot crowd out the interactive terminal.
 
 ---
 
@@ -411,6 +536,10 @@ Nothing is consumed until a message is complete, and the window is replenished o
 It used to be 32 KiB, and signing slightly longer data (`ssh-keygen -Y sign`, certificates) stalled right there.
 The window is only a credit, not memory allocated up front; ordinary messages are a few hundred bytes. A message with length 0 or over 256 KiB is treated as malformed and the channel is closed.
 
+〔Decision〕**When an exchange of the local agent client is interrupted halfway (cancellation, a read/write error, an unreasonable length), that agent connection is retired**:
+the agent protocol has no request ids, so the request may be only half written and the reply may still be on its way; every later call fails with `AgentUnavailable` and the caller reconnects
+(a client connected by `ConnectAsync` reopens on its own along the session-declaration path, §7.4). 〔History〕Early versions kept using it, and the next request read the previous request's late reply.
+
 ### 7.2 Security requirements
 
 > **Agent forwarding is a loaded gun.** Root on the remote host can, while forwarding is active,
@@ -421,7 +550,7 @@ The window is only a credit, not memory allocated up front; ordinary messages ar
 1. **Off by default**; must be explicitly enabled per connection.
 2. **Must support "forward only the specified keys"** (`AgentForwardOptions.AllowedKeys`)
    instead of exposing the entire agent.
-3. **An optional signature confirmation callback** (`AgentForwardOptions.ConfirmEachSignature`):
+3. **An optional signature confirmation callback** (`AgentForwardOptions.ApproveSignature`):
    ask the user each time the remote requests a signature. For jump-host scenarios this is the only approach that lets people rest easy.
 
 〔Decision〕**The allow-list compares the key inside a certificate.** A certificate and its key use the same private key: allowing the key allows its certificate,
@@ -445,8 +574,53 @@ otherwise refuse the connection. The OpenSSH agent's pipe name is fixed (`openss
 and then receive our signing requests — and, when adding keys to the agent (§7.3), **plaintext private keys**. Whoever creates the pipe first can only make themselves its owner.
 This is not defended by lowering the impersonation level to Identification: the OpenSSH agent service stores keys as the connecting user, so lowering it would break the legitimate agent too.
 
+〔Decision〕**The local agent's default endpoint** (`SshAgentClient.DefaultEndpoint`, used both for connecting to the agent and for agent forwarding when no endpoint is given): on other platforms it follows
+`SSH_AUTH_SOCK`; on Windows, `SSH_AUTH_SOCK` is adopted when it is a named pipe (`\\.\pipe\…`) — agents such as 1Password and KeePassXC are configured that way —
+and otherwise the OpenSSH agent service's pipe is used. It more often points at a Git Bash / WSL Unix socket, which is a different agent that .NET cannot reach, so anything that is not a pipe is ignored.
+〔History〕Windows used to ignore `SSH_AUTH_SOCK` altogether, and the host had to make the same check itself.
+When the OpenSSH agent service is not running (its pipe is absent) and the current user has **Pageant** open, Pageant is used: since PuTTY 0.75 it speaks the same agent protocol on `\\.\pipe\pageant.<user name>.…`,
+and the tail of the pipe name varies per machine, so the pipe list is searched for the prefix "`pageant.` + current user name + `.`". When both are present the OpenSSH one still wins (as before);
+another user's Pageant is never picked. The owner check applies as usual.
+
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
+#### 7.2.1 Signature confirmation must say what the signature is for
+
+> Basis: RFC 4252 §7 (the `publickey` signature input); OpenSSH `PROTOCOL` (`publickey-hostbound-v00@openssh.com`),
+> `PROTOCOL.agent` (`session-bind@openssh.com`), `PROTOCOL.sshsig`.
+
+If the confirmation callback only gets the key and its comment, the user cannot tell whether this is the `git pull` they just ran on the remote,
+or someone on that machine using the key to sign in somewhere else — and per-signature confirmation is meaningless.
+So when the data to be signed is recognizable, `AgentSignatureRequest` carries a few more fields:
+
+| Property | When it is set | Where it comes from, and why it can be trusted |
+| --- | --- | --- |
+| `UserName` / `Service` | The data is a public-key sign-in | The user name and service in the signature input. The server checks them against the request, so the signature can only be used to sign in as that user |
+| `DestinationHostKey` | A sign-in whose destination can be verified | `publickey-hostbound-v00@openssh.com`: the host key at the end of the signature input, which the server checks is its own. Plain `publickey`: a session binding (§7.4) that the remote hop sent **on the same agent channel**, **whose signature we verify ourselves**, with a session identifier equal to the `session_id` in the signature input |
+| `SignatureNamespace` | The data is an SSHSIG (`ssh-keygen -Y sign`, git's SSH commit signing) | The namespace in the signature input, such as `git` or `file` |
+
+Shapes of the signature input:
+
+| Kind | Fields (in order) |
+| --- | --- |
+| Public-key sign-in (RFC 4252 §7) | string `session_id`; byte `50`; string user name; string service; string `publickey`; boolean TRUE; string signature algorithm; string public key |
+| Host-bound sign-in | As above with method `publickey-hostbound-v00@openssh.com`, followed by string server host key |
+| SSHSIG | 6 bytes `SSHSIG`; string namespace; string reserved; string hash algorithm; string message digest |
+
+〔Decision〕**We verify the remote's session bindings ourselves.** The local agent cannot be relied on to do it: agents that do not know the extension
+(Pageant, older Windows agents) answer `FAILURE` regardless, and from a `SUCCESS` we cannot tell whether it was verified. Without verifying, the remote could
+declare any public key of "a host you trust" and the dialog would say "signing in to github.com". A binding that fails verification is still relayed to the agent (§7.4);
+it is just not used as the destination.
+
+〔Decision〕**The key presented in the sign-in request must be the key being asked to sign**, otherwise the data is not treated as a sign-in: that signature could not
+sign in anywhere, and showing the user name inside it would only mislead.
+
+〔Decision〕**This is for display only.** Anything unrecognized is left empty; it never causes a refusal or changes the request passed to the agent. Text that reaches
+the UI has control and bidirectional-control characters replaced and is cut to 128 characters. Parsing and verification happen only when per-signature confirmation is on;
+each agent channel keeps at most 16 verified bindings, and the oldest is dropped when more arrive.
+
+〔Decision〕**Say when it cannot be verified.** When `DestinationHostKey` is `null` (the remote's ssh is too old to send session bindings, or deliberately does not),
+the UI should say "cannot be verified" rather than nothing — saying nothing lets the user assume it is going where they think.
 
 ### 7.3 Adding keys to the local agent (`ssh-add`)
 
@@ -476,11 +650,24 @@ Purpose: decrypt an encrypted private key once and hand it to the agent; later a
 ⚠️ For RSA it is **n first, then e** — the reverse of the public key blob (e first). Get it backwards and the agent still answers SUCCESS;
 it only shows up on the first signature.
 
+**Adding "certificate + private key" together** (what `ssh-add` does when it finds a matching `-cert.pub`; `AddIdentityAsync(key, certificate, …)`): the key type becomes the certificate's
+(`ssh-ed25519-cert-v01@openssh.com` and so on), followed by string the whole certificate; after that come **only the private parts the certificate does not already carry**:
+
+| Certificate type | Fields after the certificate (in order) |
+| --- | --- |
+| `ssh-ed25519-cert-v01@openssh.com` | string public key (32 bytes); string seed ‖ public key (64 bytes) — same as plain ed25519 |
+| `ssh-rsa-cert-v01@openssh.com` | mpint d; mpint iqmp; mpint p; mpint q (n and e are in the certificate) |
+| `ecdsa-sha2-*-cert-v01@openssh.com` | mpint private scalar d (the curve name and public point are in the certificate) |
+
+Once added, the agent's identity list shows the certificate, and sign requests carry the certificate blob. 〔Decision〕If the certificate certifies a different key (its public key does not match the private key's),
+or what was given is not a certificate at all, it is an immediate `ArgumentException` and nothing is sent to the agent. 〔Verified〕All three certificate types against a real OpenSSH 10.3 `ssh-agent`:
+`ssh-add -l` lists them as `*-CERT`, and signatures made through it verify with the original public key.
+
 **Constraints**:
 
 | Number | Name | Argument | Meaning |
 | :-: | --- | --- | --- |
-| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires |
+| `1` | `SSH_AGENT_CONSTRAIN_LIFETIME` | uint32 seconds | The agent deletes the key itself when it expires. A fraction of a second is rounded up; 〔Decision〕a lifetime of 0, negative, or beyond uint32 throws `ArgumentOutOfRangeException` when set (it used to be silently clamped to 1 second, so the added key vanished a second later) |
 | `2` | `SSH_AGENT_CONSTRAIN_CONFIRM` | none | The agent asks the user to confirm every signature (`ssh-add -c`) |
 
 **Response**: `6` `SSH_AGENT_SUCCESS` means success; `5` `SSH_AGENT_FAILURE` throws `SshAgentException`.
@@ -489,8 +676,8 @@ the agent is locked (`ssh-add -x`), or the agent does not support this key type.
 
 〔Decision〕
 
-1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all;
-   certificate signers (`*-cert-v01@openssh.com`) need the combined "certificate + private key" format and are not done yet. Everything else is an `ArgumentException`.
+1. **Only in-process private keys are accepted** (`InMemorySshSigner`). When a signer is backed by an agent / PKCS#11 / HSM the private key is not in hand at all.
+   Certificates go through a separate overload that takes the certificate and the private key separately (see above).
 2. **No constraints means `17`**; never send a `25` with an empty constraint list — some agents accept `17` but not `25`.
 3. **The request buffer is zeroed right after use.** The buffer is reserved at its upper bound up front, so growth never leaves unzeroed copies on the heap.
 4. **No duplicate check.** What happens when the same key is added twice is the agent's business (OpenSSH updates the comment and constraints);
@@ -498,6 +685,23 @@ the agent is locked (`ssh-add -x`), or the agent does not support this key type.
 5. **The library never adds keys on its own.** When to put something into the user's agent is the user's decision —
    the same principle as "never connect to the agent implicitly" in 04 §2.2. How long an added key lives is up to the agent
    (the Windows OpenSSH agent stores it in the registry, so it survives a reboot).
+
+### 7.3.1 Managing the keys in the agent (remove, remove all, lock)
+
+> Basis: the "Removing keys" and "Locking and unlocking" sections of draft-miller-ssh-agent.
+
+| Request | Message number | Content | Method | Response |
+| --- | :-: | --- | --- | --- |
+| Remove one (`ssh-add -d`) | `18` `SSH_AGENTC_REMOVE_IDENTITY` | string public key blob (the certificate blob for a certificate) | `RemoveIdentityAsync` | SUCCESS → `true`; FAILURE (no such key, agent locked) → `false` |
+| Remove all (`ssh-add -D`) | `19` `SSH_AGENTC_REMOVE_ALL_IDENTITIES` | none | `RemoveAllIdentitiesAsync` | FAILURE throws `SshAgentException` (`AgentRefused`, the message names "locked") |
+| Lock (`ssh-add -x`) | `22` `SSH_AGENTC_LOCK` | string passphrase | `LockAsync` | SUCCESS → `true`; FAILURE (already locked) → `false` |
+| Unlock (`ssh-add -X`) | `23` `SSH_AGENTC_UNLOCK` | string passphrase | `UnlockAsync` | SUCCESS → `true`; FAILURE (wrong passphrase, or not locked — the agent does not distinguish) → `false` |
+
+〔Decision〕Removing one key and lock / unlock return a `bool` rather than throwing: "the key was not in the agent" and "already locked" are normal outcomes the caller just reflects in the UI.
+Remove-all can only fail because the agent is locked or does not support it, so it throws. The passphrase in the request is zeroed after use.
+
+A locked agent (measured against a real OpenSSH 10.3) answers the identity list with an empty list and refuses signing and remove-all until it is unlocked with the same passphrase —
+a forwarded agent cannot sign during that time either; use it when stepping away from the machine.
 
 ### 7.4 Session binding (`session-bind@openssh.com`)
 
@@ -712,16 +916,16 @@ the user's own local X programs can no longer connect to their own display.
 a remote display as `host:N`, and a macOS launchd one as the full socket path — if only `:N` were left,
 `xauth` would look up (or generate) the entry for a different display.
 〔Decision〕Forwarding has a **validity period** (default 20 minutes, corresponding to `ForwardX11Timeout` in `ssh_config`); after it expires, new `x11` channels are refused,
-while existing ones are unaffected; 0 means valid for the whole connection.
+while existing ones are unaffected; no expiry (`Timeout.InfiniteTimeSpan`, written as 0 in `ssh_config`) means valid for the whole connection, and 0 or a negative value throws when set.
 〔Intentional difference from OpenSSH〕In OpenSSH `ForwardX11Timeout` only governs untrusted mode; we apply it to **both modes** —
 trusted mode is by far the more dangerous one, and it makes no sense for it alone to have no time limit.
 
-〔Decision〕**The `timeout` given to `xauth` is our validity period plus 60 seconds; when the validity period is 0, pass 0.**
+〔Decision〕**The `timeout` given to `xauth` is our validity period plus 60 seconds; with no expiry, pass 0.**
 The X SECURITY extension specifies that a restricted authorization is purged by the X server once it has spent `timeout` seconds in the state of
 "no connection is using it", and that 0 means it never expires (the default when omitted is 60 seconds). The two sides keep separate clocks: the X server counts from
 the moment of generation, we count from the forwarding request — with equal values there is an edge case where we have just accepted an `x11` channel and the X server
 has just purged the authorization, so that connection is refused by the X server. The margin guarantees the X server side always ends later than ours.
-When the validity period is 0, any concrete number of seconds would make the X server purge the authorization after being idle that long while we still accept new connections —
+With no expiry, any concrete number of seconds would make the X server purge the authorization after being idle that long while we still accept new connections —
 so neither side has a time limit.
 
 ### 7.5.8 What to do on failure
@@ -794,10 +998,13 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | SSH session disconnected | Local/dynamic forwards close the listener and release the port; every forwarder's `IsActive` becomes false; in-flight connections are aborted as errors. The forwarder raises no separate `Error` for the disconnect (§2.4, §4.5) |
 | Invalid SOCKS handshake | Close that one, count it in `errors`, the forwarder keeps running |
 | Zero-length domain name in a SOCKS request | Reply `0x08`, close that one (§3.1) |
+| Port 0 in a SOCKS request | Reply `0x01`, close that one (§3.1) |
 | SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`ForwardErrorReason.SocksHandshake`), the forwarder keeps running (§3.3) |
 | No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(1)`; `(3)` when the connection has no remote forward at all |
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
-| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(1)`; 〔Not implemented yet〕raising `Error` — today it only refuses that channel, with no event and no count in `errors` |
+| Invalid forwarding options (`MaxConnections` below 1, a listening port outside 0–65535, a non-positive SOCKS handshake timeout, a null bind address) | 〔Decision〕Throw `ArgumentOutOfRangeException` / `ArgumentNullException` when set; if anything fails after the listener is up, the listener is closed on the spot. 〔History〕They used to go unchecked: with `MaxConnections = 0` the listener was already up when constructing the forwarder threw, and the port stayed taken until GC |
+| Starting a forward on a connection that is already disconnected (or disposed) | Fail outright: `ObjectDisposedException` once disposed, the recorded fault once declared dead — the same for local, dynamic and remote, and no listener is opened. 〔History〕Local / dynamic forwarding used to open the listener anyway and "succeed", returning a forwarder with `IsActive = false` |
+| Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`) — 〔Decision〕the event fires **at most once per second**, carrying how many were rejected in the meantime; the error count in the metrics still records every rejection (〔History〕it used to fire for every rejection, so a burst of connections at the limit made the host push each one to the UI). A connection the peer resets before accept (`ConnectionReset` / `ConnectionAborted`) causes no backoff and no report — it is that connection's own business and the listener is fine (〔History〕it used to be reported as an accept failure, backing the whole listener off from 50 ms). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(4)` (resource shortage, §4.1), and likewise count it in `errors` and raise `Error` (`ConnectionLimit`, also at most once per second); 〔History〕it used to refuse that channel only, with no event and no count |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |
 | The local agent cannot be reached when agent forwarding is requested | Do not send `auth-agent-req`; throw or start normally per `FailureMode` (§7.1, §7.5.8); the reason code is carried over from the agent side (`AgentNotRunning` / `AgentUnavailable`) |
 | The local agent cannot be reached when an `auth-agent@openssh.com` channel arrives | Reply `CHANNEL_OPEN_FAILURE(2)`, with the description saying only "local ssh-agent unavailable"; the session and the forwarder are unaffected (§7.1) |

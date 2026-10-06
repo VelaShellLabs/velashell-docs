@@ -12,7 +12,7 @@
 > **Why v3 and not a higher version**: v3 is draft-02, and OpenSSH implements only it,
 > while OpenSSH is the implementation or behavioral baseline for the vast majority of SFTP servers. v4–v6 are
 > almost never seen in the real world; writing code for them is paying costs for peers that do not exist.
-> 〔Decision〕**Implement v3 only**; when a higher version is negotiated, downgrade to 3.
+> 〔Decision〕**Implement v3 only**; if the server replies with any version other than 3, do not connect (lower: too different; higher: see §9).
 
 ---
 
@@ -42,6 +42,28 @@ sequenceDiagram
 〔Decision〕**do not automatically fall back to `exec sftp-server`**.
 Rationale: falling back amounts to bypassing the server administrator's configuration when they have explicitly disabled the subsystem.
 Report the failure truthfully (`SftpUnavailable`, with the message explaining that the server may have disabled the sftp subsystem).
+
+〔Decision〕**Only a refused `subsystem` request is reported as `SftpUnavailable`.** When the `session` channel itself does not open (`CHANNEL_OPEN_FAILURE`: the server's `MaxSessions` is full or
+the open is administratively prohibited; or the local channel count / window budget is exhausted), the `SshChannelException` (`ChannelOpenFailed`, with its reason code) is thrown as is.
+Everything used to be rewritten as "sshd_config is missing Subsystem": users went to change configuration that was fine, and lost the information that retrying later could work.
+
+〔Decision〕**`SftpOptions` are checked before the channel opens.** Single fields (`MaxInFlight` and `MaxPipelineDepth` at least 1, `BlockSize` not negative) throw `ArgumentOutOfRangeException` when set;
+cross-field rules (`MaxPipelineDepth` not below `MaxInFlight`) are checked in `ConnectAsync` before opening the channel. It used to throw only while building the pipeline after the sftp channel was open, leaving that channel attached to the connection with nobody to close it.
+The channel's receive window (the lower bound of `Channel.WindowPolicy`) **must hold one whole SFTP message** (4 + 256 KiB + 1024 bytes), otherwise `ArgumentException` is likewise thrown before the channel opens:
+the receive loop consumes nothing until a message is complete, and the window is replenished only by consumption — a window smaller than a message means both sides wait forever, with no error.
+The channel's default window (256 KiB) is just too small for a 256 KiB `DATA` reply, which is why `SftpOptions` carries a larger window of its own.
+
+〔Decision〕**The handshake has a time limit** (`SftpOptions.HandshakeTimeout`, 30 seconds by default, covering `INIT` → `VERSION`, the limits query and fetching the working directory); when it expires
+it fails with `SftpUnavailableException` (`Timeout`). sftp-server is started through the login shell, and when a startup file hangs (waiting for input, stuck on an unreachable network drive) it never answers `VERSION`;
+it used to rely on the caller's token alone and hung forever without one.
+
+〔Decision〕**When a message length exceeds the limit and those 4 bytes are all printable text, the message says it is most likely a startup file writing to stdout** (a `.bashrc` printing a greeting),
+and shows those bytes. It used to say only "length over the limit", which hid the real cause.
+
+〔Decision〕**When the connection is fine but the channel closes before `VERSION`, sftp-server failed to start** (the program `Subsystem` points to does not exist, is not executable, is replaced by `ForceCommand`…):
+it fails with `SftpUnavailableException` (`CommandFailed`), carrying the exit status the server reported (`ServerExitStatus`; empty when it was killed by a signal, whose name goes into the message)
+and the last part of what it said on stderr (`ServerErrorOutput`, sanitized as peer text with newlines folded into one line). The SFTP channel still discards stderr, it only keeps the last 1 KiB as a clue;
+the exit status often arrives after EOF, so it waits for it at most 2 more seconds. 〔History〕This used to report "the SFTP channel closed while requests were still in flight", losing both the exit status and that line — the only clue there is.
 
 ---
 
@@ -107,6 +129,11 @@ this is precisely why SFTP can achieve throughput, and why replies must be match
 | 105 | `SSH_FXP_ATTRS` | ATTRS |
 | 201 | `SSH_FXP_EXTENDED_REPLY` | Extension-specific |
 
+〔Decision〕**The reply type must match the request.** Each request states what it expects on success: `OPEN` / `OPENDIR` expect `HANDLE`, `READ` expects `DATA`, the `STAT` family expects `ATTRS`,
+`REALPATH` / `READLINK` / `READDIR` expect `NAME`, `limits@openssh.com` expects `EXTENDED_REPLY`, and everything else accepts only `STATUS = OK`. An error status is still reported as `SftpException`;
+a reply that is neither an error status nor the expected type is an `SshProtocolException` (`ProtocolError`). It used to be "anything but an error status counts as success": a `WRITE` that got any non-`STATUS` reply
+was counted as acknowledged (`DurableLength` became wrong, and the resume point skipped unacknowledged data), and an `OPEN` that got `DATA` took the data as a handle.
+
 ### 3.3 Status codes
 
 | Code | Name | Our mapping (`SftpException.StatusCode`, of type `SftpStatusCode`) |
@@ -120,6 +147,7 @@ this is precisely why SFTP can achieve throughput, and why replies must be match
 | 6 | `NO_CONNECTION` | `NoConnection` |
 | 7 | `CONNECTION_LOST` | `ConnectionLost` |
 | 8 | `OP_UNSUPPORTED` | `OperationUnsupported` |
+| 10 | `NO_SUCH_PATH` (v4 onwards) | `NoSuchPath`, counted as "not found" just like `NoSuchFile` (`IsNotFound`) — servers supporting several versions may send it even in a v3 session |
 
 〔Important〕**Code 4 (`FAILURE`) carries the vast majority of real errors in v3** —
 "directory not empty", "file already exists", "disk full", "quota exceeded" are all 4 in v3.
@@ -153,7 +181,12 @@ pflags:
 
 〔Decision〕**Default permissions when creating files are 0644**, directories 0755, both configurable.
 Not passing ATTRS makes the server use its own default (usually affected by umask),
-with unpredictable results — pass explicit values.
+with unpredictable results — pass explicit values. **This holds for every open with `CREAT`**: when the attributes given to `OpenAsync` carry no permissions, 0644 is added
+(it used to be passed only by `OpenWriteAsync` / `OpenAppendAsync`; direct `OpenAsync` callers sent none).
+
+〔Decision〕**Self-contradictory pflags are rejected locally** (`ArgumentException`, no `OPEN` sent): `TRUNC` / `EXCL` without `CREAT` (draft-02 §6.3 requires them together),
+or neither read nor write. To shorten an existing file only (.NET's `FileMode.Truncate`), open it for writing and then `SetLengthAsync(0)` —
+adding `CREAT` literally would create the file when it does not exist.
 
 **Ask for the length right after opening.** A non-truncating open (read, resume, write without `TRUNC`) sends one `FSTAT` on the handle as soon as it has it;
 the size becomes the starting value of the stream's `Length` — `Seek(SeekOrigin.End)`, the read-ahead bound of §5.5 and the resume prefix of §6.6 all depend on it.
@@ -185,12 +218,28 @@ repeated: string type ‖ string data
 1. **`uid` and `gid` share one flag bit; `atime` and `mtime` share one.**
    To set mtime you must supply atime as well. 〔Decision〕When only mtime should change,
    first `STAT` to retrieve the current atime and write it back together.
-2. **Times are 32-bit Unix seconds** and will overflow in 2038. v3 has no solution; implement as specified.
-   〔Decision〕Interpreting the value read as unsigned would last until 2106 —
-   but servers usually send it as signed, so **read it as signed**, consistent with OpenSSH.
+2. **Times are 32-bit Unix seconds**; v3 has no wider field.
+   〔Decision〕**Read and write them as unsigned** (`uint`): 1970-01-01 to 2106-02-07, consistent with OpenSSH ——
+   verified black-box: for a file dated 2040 on the test server, OpenSSH's sftp-server sends 2208988800 and its own `sftp` client shows 2040.
+   〔History〕They used to be read as signed on the belief that "servers usually send them signed": a file from 2040 read as 1903, and times after 2038 could not be written (Q8).
+   〔Decision〕**When writing, a time that does not fit throws** (`ArgumentOutOfRangeException`, range 1970-01-01 to 2106-02-07) instead of being truncated:
+   truncating to 32 bits turns an out-of-range time into a different year — and "preserve timestamps" would write that to the server.
 3. The high bits of `permissions` are the file type (`S_IFMT`):
    `0o100000` regular file, `0o040000` directory, `0o120000` symbolic link.
    **v3 has no separate type field; the type can only be taken from here.**
+
+〔Decision〕The `data` of an extended attribute is binary and **is handed out as the original bytes** (`SftpExtendedField.Data`), not decoded as UTF-8 — decoding changes invalid bytes, and writing it back no longer gives the original.
+The list handed out is a read-only view that cannot be changed by downcasting.
+
+〔Decision〕At most 1024 extended attribute pairs are kept, and **the rest are read and discarded** — parsing must not simply stop at the limit: in a `NAME` reply, the next entry would start in the middle of the remaining bytes.
+It cannot spin: every pair is at least 8 bytes, so however large the count, the number of iterations is bounded by the message length.
+
+〔Decision〕**Only known flag bits are written** (the five in the layout above). Attributes from a stat may carry bits this library does not know (fields from v4 onwards); writing them back without the matching fields
+means that changing one field of a stat result and sending `SETSTAT` produces a malformed message — the server reads a field that is not there.
+
+〔Decision〕**Reading a flag bit this library does not know is a protocol error** (`SshProtocolException`, affecting only that one call): v3 defines no fields for those bits,
+so where their bytes are and how long they are is unknowable, and reading on means parsing from a misaligned position — in a `NAME` reply every following entry's name and attributes would be wrong.
+v3 servers (OpenSSH's sftp-server) do not send them; those bits used to be silently ignored.
 
 ### 4.3 `SSH_FXP_READ` / `SSH_FXP_WRITE`
 
@@ -211,12 +260,20 @@ and reading must loop until enough is obtained or `EOF` is encountered.
 
 - Each call returns **a batch** of directory entries, not all of them.
 - A return of `STATUS = EOF` means reading is complete.
+  〔Decision〕A batch has at least one entry or is EOF; **16 empty batches in a row** (count = 0) are a protocol error — the listing used to keep reading until the caller cancelled.
+- 〔Performance〕**The next batch is prefetched**: as soon as a batch arrives the next `READDIR` goes out, so it is already in flight while links are resolved and entries are handed to the caller;
+  if the caller stops early (`break`, cancellation), the outcome of that in-flight request is still observed, leaving no unobserved exception.
+- 〔Decision〕**An entry whose attributes lack permission bits gets one `LSTAT`** (if that fails, nothing changes). Without permission bits there is no telling a directory from a link or a file (the type lives only in the high bits of the permissions, §4.2) —
+  such entries used to be treated as files, and the host could not open those directories.
 - `longname` is a line of text in `ls -l` style, **with a non-standardized format**.
   〔Decision〕**Do not parse `longname`**; all information is taken from ATTRS.
   Parsing it is a classic source of bugs in SFTP clients (time format, locale, column alignment all vary by server).
   But **keep the raw text** for callers who need it.
 - `.` and `..` **do** appear in the results. 〔Decision〕The `SftpFileSystem` layer filters them out by default,
   with a switch provided.
+- 〔Decision〕**Entries with an invalid name are dropped**: empty names and names containing `/` or NUL. A directory entry can only be a name; when a server returns `../x`, `a/b`,
+  `/etc/passwd` or an empty string, the combined full path points outside this directory (or at the directory itself) — a recursive copy or delete that follows it acts on something else.
+  Dropped entries are not handed to the caller and are not an error (one odd entry should not make the whole directory unlistable).
 
 ### 4.5 Argument order of `SSH_FXP_SYMLINK`
 
@@ -240,6 +297,10 @@ If one is ever actually encountered, handle it via an extension mechanism along 
 
 This must also be stated clearly in a code comment, otherwise someone will certainly "fix it in passing" in the future.
 
+〔Decision〕**Read it back once after creating it** (a self-check, not a switch): if a link can be read at `linkpath`, it succeeded (the server may have normalized the target text, so it is not compared verbatim);
+if not, and `targetpath` now holds a link pointing back at `linkpath`, the server parsed the draft order —— the misplaced link is removed and an error is raised.
+No check when the server does not support `READLINK`. 〔History〕There used to be no check: with the order opposite to the server's, the link was created in the wrong place without any error.
+
 ### 4.6 `SSH_FXP_REALPATH`
 
 Used to canonicalize relative paths, `~`, `.`, `..` into absolute paths.
@@ -248,6 +309,19 @@ Returns `SSH_FXP_NAME` with `count == 1`.
 〔Decision〕**Immediately after the connection is established, do a `REALPATH` on `"."`**,
 taking the result as the initial value of `SftpFileSystem.WorkingDirectory`.
 This is the only reliable answer to "where is the user's home directory" — far more reliable than assembling `/home/{user}`.
+
+### 4.7 File name encoding
+
+In SFTP v3 a file name is a `string` **with no specified encoding** (only v4 onwards makes it UTF-8). Old servers, NAS boxes and embedded devices using GBK, Shift-JIS or Latin-1 are common:
+the bytes of a name are not valid UTF-8.
+
+〔Decision〕**UTF-8 by default, with undecodable bytes round-tripping losslessly.** Valid UTF-8 decodes as usual; every undecodable byte `b` (which can only be 0x80–0xFF) becomes a lone low surrogate
+`U+DC00 + b` on its own, and encoding turns a lone `U+DC80`–`U+DCFF` back into that byte. Valid UTF-8 never decodes to a lone surrogate, so this mapping cannot collide with a real name.
+A listed name shows replacement characters in the UI, but opening, deleting, renaming or linking with it sends the original bytes back to the server.
+Names used to be decoded leniently: undecodable bytes became U+FFFD, and re-encoding as UTF-8 produced different bytes — such files **could not be opened, deleted or renamed**, and links were reported as broken.
+
+〔Decision〕**The server's encoding can be specified** (`SftpOptions.FileNameEncoding`, e.g. GBK): names are decoded and encoded with it so they display correctly; bytes invalid in that encoding are not guaranteed to round-trip.
+Path arguments, directory entry names and `longname`, and the results of `READLINK` / `REALPATH` all go through the same codec; status messages and extension names are not file names and stay UTF-8.
 
 ---
 
@@ -300,10 +374,20 @@ Hard-coding 64 × 32 KB = 2 MiB likewise caps at 10 MB/s with a 200 ms RTT.
 | Evaluation | Once every 32 requests, count how many requests in that window had to **wait** for an in-flight slot |
 | Grow | More than half waited → the depth is the bottleneck; double it, up to `SftpOptions.MaxPipelineDepth` (default 256) |
 | Shrink | None waited → shrink to three quarters (not below the starting value). Slots are reclaimed **without blocking**: if they are in use, try again next window rather than stalling callers here |
-| Off | `SftpOptions.AdaptivePipelineDepth = false`: the depth stays at the starting value and memory use is deterministic (in-flight count × block size), at the cost of throughput being capped at "depth × block size ÷ RTT" on high-RTT links |
+| Off | `SftpOptions.IsPipelineDepthAdaptive = false`: the depth stays at the starting value and memory use is deterministic (in-flight count × block size), at the cost of throughput being capped at "depth × block size ÷ RTT" on high-RTT links |
 
 Rationale: computing the depth from the bandwidth-delay product requires estimating bandwidth first, and that estimate is very unstable on a link that also carries other traffic;
 "did requests have to wait for a slot" is a more direct signal that is harder to get wrong — the same idea as the channel window growing when it "runs dry" (`05-connection.md` §3.3).
+
+〔Decision〕**A single stream does not carry a cap of its own equal to the starting depth.** With adaptation on, a stream's write slots and read-ahead limit are `MaxPipelineDepth`,
+so the pipeline's in-flight slots are the only throttle — the "did requests have to wait" signal is recorded only when the pipeline's slots run out.
+A stream's cap used to be `MaxInFlight`, equal to the pipeline's starting depth: the stream always hit its cap first, the pipeline's slots were never used up,
+and for a single-file transfer (the most common use) the depth never grew, pinning the window at its starting value. With adaptation off, a stream's cap is `MaxInFlight`.
+
+Resuming: pipelined writes do not complete in offset order, so after a disconnect the remote length is only "the highest confirmed offset".
+`SftpFileSystem.MaxUnconfirmedWriteBytes` gives the most bytes a single write stream can have in flight (with adaptation on it is computed from the depth ceiling —
+how deep the pipeline had grown at the moment of the disconnect cannot be known afterwards); when resuming from the remote length alone, back off by that much and compare.
+When the interrupted stream's `DurableLength` is available, use it and no back-off is needed.
 
 **Choosing the block size**: 〔Decision〕start from the caller's `SftpOptions.BlockSize` (0 = not specified),
 take the minimum of it and the caps below, then clamp to [1, 256 KiB]:
@@ -311,7 +395,7 @@ take the minimum of it and the caps below, then clamp to [1, 256 KiB]:
 | Cap | Why it counts |
 | --- | --- |
 | `max-write-length` | An over-long `WRITE` is rejected — OpenSSH drops the SFTP session outright on an over-long message, along with every other in-flight request |
-| `max-read-length` | An over-long `READ` is truncated, and sequential reads treat a short read as "a hole in between" (§5.5): every block discards the queue and read-ahead never builds up |
+| `max-read-length` | An over-long `READ` is truncated: sequential reads first have to request the gaps and learn the length the server actually returns before they run smoothly (§5.5); when it is announced, requests use it from the start |
 | `max-packet-length` minus 1 KiB | Besides the data, the request header (length, type, id, a handle of up to 256 bytes, offset) must fit; 1 KiB is ample |
 | 256 KiB | The largest message we accept (256 KiB + 1024 in §2): one `DATA` reply plus protocol header must fit |
 
@@ -360,6 +444,17 @@ Callers that have no id yet — those waiting on the in-flight limit or the send
 or, in a race during disposal, `ObjectDisposedException`. In-flight slots are returned only by replies, and no reply comes after the pipeline stops; without the release,
 waiters such as the batch of links resolved concurrently while listing a directory (§8) would wait forever.
 
+〔Decision〕**Stopping is a public signal**: `SftpFileSystem.IsConnected` becomes false, and `Closed` (`Task<Exception>`) completes **successfully** with the reason from the table above —
+it does not complete as faulted, so it never becomes an unobserved task exception when nobody awaits it. The object does not recover by itself: on seeing this, consumers drop it and `ConnectAsync` again on the same connection.
+There used to be no such signal and the host could only check "does the object still exist": after sftp-server exited or the server closed an idle channel under `ChannelTimeout`,
+that session's file panel stayed broken until the whole SSH connection reconnected.
+
+〔Decision〕**Stopping creates no unobserved task exceptions.** A request already abandoned (its waiter cancelled) gets no exception when the pipeline stops; when abandonment and the fault race, the abandoning side observes the fault.
+A request that the stop catches before it was sent (queued on the send lock) is abandoned too: the stop has already set the fault on it, and the "not sent" path used to withdraw it from the ledger without observing it.
+The same goes for the task waiting for `VERSION` during the handshake: the pipeline stops only after the handshake timed out, when its waiter is long gone, so the fault is observed right after it is set.
+When an in-flight write of a file stream fails, the error is recorded on the stream (later writes and `FlushAsync` / closing report an interruption with the resume point) and the write task itself does not end faulted.
+Exceptions nobody looks at raise `UnobservedTaskException` at GC time, which the host writes to its crash log — one disconnect made dozens of writes "crash" at once, filling the crash log with records that were not crashes.
+
 ### 5.5 Read-ahead for sequential reads
 
 **Problem**: if a file stream's sequential read (`ReadAsync`) sends one `READ` at a time and waits for it before sending the next,
@@ -374,8 +469,10 @@ and none of the depth the pipelined write side uses comes into play. Downloads t
   Callers that read only the first few bytes of a file don't trigger a burst of needless requests.
 - **No read-ahead past the known length**: requests are sent ahead only for offsets within the known length; beyond it, at most one request —
   to reach `EOF`, or to notice that the file grew after it was opened. The known length comes from `FSTAT` at open time and is pushed forward by the data read.
-- **Short read** (the server returns fewer bytes than requested, and it is not `EOF`): hand out those bytes and discard the rest of the queue —
-  there is a hole between those requests' offsets and the read position, and restarting from the read position is the simplest and least error-prone option (the read-in-a-loop semantics of §4.3 are unchanged).
+- **Short read** (the server returns fewer bytes than requested, and it is not `EOF`): hand out those bytes; 〔Decision〕**request only the gap, at the front of the queue, keep the requests already sent behind it, and leave the window as it is** (Q11).
+  When a block lying entirely within the known length still comes back short, the server's read limit is smaller than the block (and was not announced): later requests use the length it actually returned (no less than 4 KiB), and gaps are split at that length too.
+  If the gap reaches the end of the file, the request for it returns `EOF`, which counts as the end of reading as usual (the read-in-a-loop semantics of §4.3 are unchanged).
+  〔History〕It used to discard the whole queue, drop the window back to 1, and restart from the read position —— with a server that short-reads every block, throughput collapsed to one block per RTT, and the later blocks already read back were wasted.
 - **Discarded requests must not be abandoned**: their replies still arrive, and are released when they do (the payload is rented from a pool).
 - **Cancellation cancels only that wait**: read-ahead requests belong to the stream, not to a single `ReadAsync`; when the caller cancels one read, the queue stays as it is and the next read continues from it.
 - On `EOF` or an error status: the whole queue is discarded; `EOF` returns 0, errors are thrown as usual.
@@ -429,11 +526,23 @@ and its upper bound is the number of in-flight requests (N ≤ 256) — fully un
 (`SftpTransferInterruptedException.DurableLength`),
 so upper layers need not stat again, much less roll back blindly.
 
+〔Decision〕**When the file is shortened (`SetLengthAsync`), every acknowledgement past the cut is void** and `DurableLength` moves back; in-flight writes land first
+(a write arriving after the truncation would extend the file again, leaving a hole). Extending does not change it — the zeros the server fills in are not data we wrote.
+It used not to move back: after a later disconnect, the reported resume point skipped data that had already been cut off.
+
 ### 6.3 Another route to ordering guarantees
 
 〔Decision〕Also provide `SftpWriteMode.Sequential`:
 the number of in-flight requests is fixed at 1, sacrificing throughput in exchange for "the file length is the trustworthy length".
 Used for scenarios that must guarantee the file is a complete prefix at any moment (e.g. writing configuration files).
+
+〔Decision〕**Pipelined mode sends whole blocks.** Sequential `WriteAsync` calls keep a tail shorter than a block on this side and send it once later writes fill the block;
+before `FlushAsync`, disposal, reads (`ReadAsync` / `ReadAtAsync`), `SetLengthAsync`, `GetAttributesAsync` and positioned `WriteAtAsync` the tail is sent first
+(a read must see what was written, a truncation must not be stretched again by it, and when it overlaps a positioned write the earlier write must arrive first);
+after a `Seek`, a tail that no longer lines up is sent before the next write.
+Rationale: in-flight writes are throttled by **request count**, and every `WRITE` takes one slot regardless of size. Each call used to be split into blocks on its own —
+when the caller writes 256 KiB at a time and the server's block is 255 KiB (OpenSSH's `limits@openssh.com`), every call became a "big + tiny" pair of requests,
+halving the bytes in flight and with it upload throughput on high-RTT links. Sequential mode does not buffer: its promise is that every write returns already confirmed.
 
 ---
 
@@ -446,7 +555,7 @@ on the UI thread that freezes the interface for one RTT, and on the thread pool,
 | Synchronous member | Behavior |
 | --- | --- |
 | `Read` / `Write` / `SetLength` (and single-byte, `Span` overloads) | Throw `NotSupportedException`, with the message naming the async version to use |
-| `Flush` | **Non-blocking no-op** (there is no local buffer); known write failures are still thrown. Use `FlushAsync` to confirm persistence |
+| `Flush` | **Non-blocking no-op**: it neither sends the tail pipelined mode keeps (§6.3) nor waits for confirmation; known write failures are still thrown. Use `FlushAsync` (disposal does it too) to send everything and confirm persistence |
 | `Dispose` | **Non-blocking**: wrap-up (waiting for in-flight write acknowledgements, closing the handle) is handed to the background and it returns immediately; wrap-up errors (write interruption, `CLOSE` failure, §6.5) are not visible — to see them, use `await using` |
 
 `Flush` is kept as a non-throwing no-op because wrapper streams (such as `StreamWriter`) call it synchronously in their own wrap-up;
@@ -456,6 +565,12 @@ The async **array overloads** (the `byte[], int, int, CancellationToken` version
 `BeginRead` / `EndRead` / `BeginWrite` / `EndWrite` **work as usual**, all forwarding to the async implementation.
 〔Decision〕They must be overridden explicitly: `Stream`'s default implementation routes them to the synchronous `Read` / `Write`,
 so without the override a caller who clearly used an asynchronous form would get the "async only" `NotSupportedException`.
+
+〔Decision〕**A cancellation token governs waiting, not requests already queued.** When a pipelined `WriteAsync` returns, its `WRITE` is still in flight: the caller's token is used only to wait for a write slot
+(and, in sequential mode, for this block's acknowledgement); the queued `WRITE` does not carry it and ends only with its reply or when the pipeline stops (§5.4). A cancelled `FlushAsync(ct)` likewise only stops waiting:
+it throws `OperationCanceledException`, the in-flight writes are still acknowledged and accounted for, and a later `FlushAsync` completes as usual.
+A queued `WRITE` used to carry the token of the `WriteAsync` that started it: if that token was cancelled later, the `WRITE` already sent still reached the disk, but the local side stopped accounting for it
+(`DurableLength` too small), the stream was marked as having a write failure, and `FlushAsync` / closing threw "transfer interrupted, resume from N" instead of a cancellation. This is the same idea as §5.5's "read-ahead requests belong to the stream".
 
 ### 6.5 Closing: the `CLOSE` reply matters
 
@@ -470,8 +585,9 @@ The wrap-up order of `DisposeAsync` (`await using`):
 | --- | --- |
 | An in-flight write failed | Throw `SftpTransferInterruptedException` (carrying `DurableLength`). `CLOSE` is still sent, but its status is not examined — what happened first is the root cause |
 | All writes acknowledged, and `CLOSE` on a **writable stream** returns an error status | Throw `SftpException` (code and the server's text as in §3.3) |
-| `CLOSE` on a read-only stream returns an error status | Not reported |
-| `CLOSE` cannot be sent or gets no reply (channel gone, pipeline broken) | Not reported |
+| `CLOSE` on a read-only stream returns an error status | Not reported. 〔Decision〕Since it is not reported, **closing does not wait for the `CLOSE` reply**: `CLOSE` is sent in the background and the handle slot is returned when the reply arrives — a small-file download saves a whole round trip. Later requests on the same channel queue behind it, and the server processes them in order |
+| `CLOSE` cannot be sent or gets no reply (channel gone, pipeline broken, or past `CloseTimeout`) | Not reported |
+| In-flight writes still unacknowledged after `CloseTimeout` (30 seconds by default) | Throw `SftpTransferInterruptedException` (with `DurableLength`); `CLOSE` is still sent and the handle slot returned. There used to be no time limit: when the server stopped answering, closing waited forever, hanging tab closes and upload cancellations |
 | Closing an already closed stream (including after a synchronous `Dispose`) | No-op, does not throw |
 
 〔Decision〕**A writable stream examines the status of `CLOSE`.** Some servers (NFS deferred writes, quotas) report a write failure only at close;
@@ -516,21 +632,27 @@ The stream's `Length` is the real length from `FSTAT` at open time (§4.1), so `
 
 | Extension | Purpose | Behavior when absent |
 | --- | --- | --- |
-| `posix-rename@openssh.com` | **Atomic** rename (overwriting the target) | Degrade to `SSH_FXP_RENAME`, **and report this fact** |
+| `posix-rename@openssh.com` | **Atomic** rename (overwriting the target), `RenameAsync(..., overwrite: true)` | Throw `SftpException` (`OperationUnsupported`), **no degradation** — a plain `SSH_FXP_RENAME` fails when the target exists, so silently degrading would change the semantics; "delete the target, then rename" is not atomic and is left for the caller to decide |
 | `hardlink@openssh.com` | Create hard link | Throw `Unsupported` |
 | `fsync@openssh.com` | Force persistence to disk | Throw `Unsupported` |
-| `statvfs@openssh.com` | File system usage | Throw `Unsupported` |
-| `limits@openssh.com` | §5.2 | Use conservative defaults |
-| `copy-data` | Copy **within the server**, without going over the network | Degrade to "download then upload" |
-| `home-directory` | Get a given user's home directory | Use `REALPATH "."` |
-| `expand-path@openssh.com` | Expand `~` | Use `REALPATH` |
+| `limits@openssh.com` | §5.2; when it announces `max-open-handles`, opens queue on it: each open file or directory takes one slot and returns it on close, and a new `OPEN` / `OPENDIR` waits when the slots run out, instead of hitting the server's limit and getting a random "operation failed" | Use conservative defaults; handles unlimited |
+| `statvfs@openssh.com` | File system usage: `GetFileSystemInfoAsync(path)` returns the 11 fields matching POSIX `statvfs` one to one (their order checked against a real OpenSSH's `stat -f`), plus the total, free, and still-writable-by-a-normal-user sizes (`AvailableBytes`, what an upload precheck looks at) computed from `f_frsize` (or `f_bsize` when that is 0, as `df` does), and whether it is read-only; byte counts saturate on overflow | Throws `Unsupported` (see `HasStatVfs`) |
+| `copy-data` | Copy **within the server**, without going over the network: `CopyFileAsync(source, destination, overwrite, progress)`. The destination is created with the source's permission bits (rwx); `CREAT\|EXCL` without overwrite, `CREAT\|TRUNC` with it. 〔Decision〕**Copied in segments** (one request per 64 MiB by default): OpenSSH's sftp-server is single-threaded, and one request copying several GB would block the whole SFTP channel for minutes; with segments other requests get in between, and there is progress and cancellation between segments. The source length is taken once at the start; when the server gives no length, one request copies to EOF (length 0). On failure or cancellation midway the destination keeps what was copied (as `cp` does). The host's copies on the same server use it | Throws `Unsupported` (see `HasCopyData`); the host falls back to downloading then uploading |
+| `home-directory` | Get a given user's home directory: used by `ExpandPathAsync("~user…")` when `expand-path` is missing | `~user` throws `Unsupported`; `~` and `~/…` do not need it (they use `REALPATH "."`, §4.6) |
+| `expand-path@openssh.com` | Expand `~`: `ExpandPathAsync(path)` hands `~`, `~/…`, `~user` and `~user/…` to the server whole (canonicalized along the way, checked against a real OpenSSH's `$HOME`); a path not starting with `~` behaves like `GetRealPathAsync`. `REALPATH` itself does not expand `~` | `~` and `~/…` are joined onto the login working directory and then `REALPATH`ed; `~user` falls back to `home-directory` |
+| `lsetstat@openssh.com` | Set attributes **without following** a symbolic link (`touch -h` / `chown -h`): `SetLinkAttributesAsync`, for keeping a link's own timestamps when syncing directories | Throws `Unsupported` (see `HasLSetStat`) and **does not fall back** to the link-following `SETSTAT` — that would change the target |
+| `users-groups-by-id@openssh.com` | Turn numeric uids / gids into names: `LookupUserAndGroupNamesAsync(uids, gids)`, one to one with what was asked, `null` for ids the server does not know (an empty string on the wire; checked against a real OpenSSH's `id`). The request is two `string`s, each holding a run of `uint32`; the reply is two `string`s, each holding a run of `string`. A reply with the wrong count is reported as malformed (names never land on the wrong ids); at most 4096 of each per request | Throws `Unsupported` (see `HasUsersGroupsById`); the host keeps showing numbers |
+
+〔Decision〕**Setting times by handle** (v3's `FSETSTAT`, not an extension): `SftpFileStream.SetTimesAsync(accessTime, modifyTime)` sets them on the same handle before closing,
+one round trip; `SetLastWriteTimeAsync(path, …)` has to `STAT` the access time back first and then `SETSTAT` (the two share one flag, and giving only one wipes the other back to 1970), two round trips.
+Pending and in-flight writes land first — a write arriving afterwards would change the modification time back to "now". This is the path the host takes when preserving timestamps on upload.
 
 ### 7.2 Capability query is a public API
 
 ```
 SftpCapabilities Capabilities { get; }
   bool HasPosixRename / HasHardlink / HasFsync / HasStatVfs / HasCopyData ...
-  IReadOnlyDictionary<string,string> RawExtensions { get; }
+  IReadOnlyDictionary<string, ReadOnlyMemory<byte>> RawExtensions { get; }   // frozen, cannot be changed
 ```
 
 〔Decision〕**Capabilities must be queryable, not merely degraded internally.**
@@ -547,8 +669,20 @@ nor can they warn in the UI that "this server does not support atomic overwrite;
 | 4 | `string` | Extension name |
 | 5+ | Extension-specific | |
 
-`ISftpExtension` is a public extension point (architecture §8 item 10),
-letting callers add vendor-private extensions without modifying the library.
+**The public extension point**: `SftpFileSystem.SendExtendedAsync(name, payload)` —— vendor-private extensions the library does not build in (Synology, some NAS boxes, whatever a plugin needs) go through it.
+
+| Reply | Result |
+| --- | --- |
+| `SSH_FXP_EXTENDED_REPLY` | The payload (after the request-id) is returned as-is |
+| `SSH_FXP_STATUS` OK | Returns empty |
+| Any other `SSH_FXP_STATUS` | Throws `SftpException` (`Operation = Extension`, the message names the extension); an unknown extension is `OperationUnsupported` |
+
+〔Decision〕**The extension point stops at "name + payload → reply".** The request goes through the same pipeline: request-ids, the in-flight allowance and late replies after cancellation are all handled by the library,
+and the pipeline's ordering constraints are not handed out (AGENTS 4.1, "the protocol pipeline is never public"). To make it typed, wrap it at the call site ——
+which is why the planned `ISftpExtension` interface is not built: an interface adds nothing on top of "a name and bytes".
+
+〔Decision〕**The announcement is not checked first** (`SftpCapabilities.RawExtensions`): some servers support an extension without announcing it; whether to look first is the caller's call. The reply is the peer's bytes and is parsed as untrusted input.
+〔Verified〕Against a real sftp-server: `limits@openssh.com` sent through it returns a reply matching the library's built-in reading; an unknown name gets `OperationUnsupported`.
 
 ---
 
@@ -577,6 +711,10 @@ For a directory like `/usr/lib` with hundreds of `.so` links, filling them in se
 `LinkTarget` is `null`, and a failed following `STAT` is treated as a broken link — one odd link must not make the whole directory unlistable.
 **A broken pipeline** (channel disconnected, malformed frame received) is not covered by this and is thrown as usual: that is not this entry's problem.
 
+〔Decision〕**Getting a single path's entry (`GetEntryAsync`) uses the same rules as listing**: `LSTAT` first, and only for a link are `READLINK` and the following `STAT` added, concurrently
+(one round trip for a regular file, two for a link); a path that does not exist gives `null`. The name is the part after the last `/` of the path — SFTP's separator is always `/`,
+and the local platform's path functions must not be used (on Windows they treat a legitimate `\` in a remote name as a separator).
+
 ---
 
 ## 9 Edge cases and errors quick reference
@@ -587,7 +725,7 @@ For a directory like `/usr/lib` with hundreds of `.so` links, filling them in se
 | handle exceeds 256 bytes | `ProtocolError` (the limit specified by draft-02) |
 | Reply received for an unknown `request-id` | 〔Decision〕Ignore + debug log (may be a late reply to a cancelled request, §5.3) |
 | Unknown message type received | `ProtocolError` (the SFTP layer has no `UNIMPLEMENTED` mechanism) |
-| Server version > 3 | Downgrade to 3 and continue |
+| Server version > 3 | 〔Decision〕**Refuse**, `SftpUnavailableException` (`ProtocolError`): draft-02 §4 requires the server to reply with the lower of the two versions, and we send 3; a server replying with a higher one is either buggy or will speak its own version (ATTRS differs from v4 on), and parsing it as v3 silently misreads fields. 〔History〕It used to downgrade to 3 and continue |
 | Server version < 3 | 〔Decision〕**Refuse**, throw `SftpUnsupportedVersion`. v0–v2 differ too much to be worth supporting |
 | `READ` returns more data than the requested length | `ProtocolError` |
 | `count` returned by `READDIR` does not match the actual number of entries | `ProtocolError` |

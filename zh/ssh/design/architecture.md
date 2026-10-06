@@ -428,7 +428,7 @@ interface ISshSigner
 }
 ```
 
-内置：文件私钥、ssh-agent、PKCS#11、Azure Key Vault —— **私钥可以从不进程内**。
+内置：文件私钥、ssh-agent、Windows CNG 密钥库（软件、TPM、智能卡；spec/04 §4.8）；PKCS#11、Azure Key Vault 经 `ISshSigner` 由使用者接入 —— **私钥可以从不进程内**。
 这同时是 VelaShell「凭据管理器集成」那条线的落点。
 
 私钥读取支持：OpenSSH v1（含 bcrypt_pbkdf 加密）、PKCS#1、PKCS#8（含加密）、PuTTY `.ppk` v2/v3。
@@ -509,9 +509,9 @@ class SshNegotiationException : SshException
 ```
 enum SshFailureReason {
     Unknown,
-    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired,
-    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged,
-    AuthenticationFailed, AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
+    DnsFailure, TcpRefused, TcpTimeout, TcpUnreachable, ProxyRefused, ProxyAuthRequired, ProxyAuthFailed,
+    NotAnSshServer, VersionMismatch, NegotiationFailed, HostKeyRejected, HostKeyChanged, HostKeyStoreFailed,
+    AuthenticationMethodExhausted, TwoFactorRequired, PasswordExpired,
     KeyFileUnreadable, KeyFormatInvalid, KeyPassphraseRequired, KeyPassphraseIncorrect, KeyMismatch,
     AgentUnavailable, AgentNotRunning, AgentRefused,
     Timeout, KeepAliveTimeout, ClosedByPeer, Disconnected, ProtocolError,
@@ -551,7 +551,7 @@ enum SshFailureReason {
 | --- | --- | --- |
 | `SshClient` | **`SshConnection`** | 换一个隐喻：「客户端」是个物件，「连接」是个有生命周期的东西，后者才是 VelaShell 要管的。只能经静态的 `SshConnection.ConnectAsync(options, ct)` 得到，交回来时已经完成握手与认证 —— 没有公开构造，也没有「先 new 再 Open」的中间态 |
 | `SshClientSettings` | `SshConnectionOptions` | .NET 的 `*Options` 惯例 |
-| `Credential` | `SshCredential` | 具体凭据是 `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential` / `NoneCredential` |
+| `Credential` | `SshCredential` | 具体凭据是 `PasswordCredential` / `PublicKeyCredential` / `KeyboardInteractiveCredential`；库外不能继承（构造函数 `private protected`）。`none` 探测由认证器自己发，`NoneCredential` 是内部类型 |
 | `RemoteProcess` | **`SshCommand` / `SshShell`** | **拆成两个。** 一次性命令与交互式 shell 的生命周期、读写形状、退出语义都不一样，挤在一个类里，`HasTerminal` 这种属性就是挤出来的。一次跑完拿全部输出是 `RunAsync` → `SshCommandResult` |
 | `SftpClient` | `SftpFileSystem` | 它不是一个「客户端」，它是一个文件系统视图 |
 | `SftpFile` | `SftpFileStream` | 它是 `Stream` 的子类，名字就该说这件事 |
@@ -656,13 +656,13 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesRe
 | 2 | `ISshCipherSuite` | 新加密算法。**含国密 SM4-GCM / SM3**（国内政企的现实需求） | 🔒 库内接缝：加一种 = 实现接口 + 在算法清单里登记一个名字 |
 | 3 | `ISshKeyExchange` | 新 KEX。后量子（ML-KEM、sntrup761）内置，将来的混合方案照此加 | 🔒 库内接缝：`SshKeyExchangeFactory` 是一张固定的表，加一种就是加一行；**没有运行期注册**（设计时的 `KexRegistry` 已删，§11.2.24） |
 | 4 | 主机密钥类型 | 新主机密钥类型，含 **CA 签发的主机证书**（`*-cert-v01@openssh.com`） | 🔒 在 `SshPublicKey` 里加；主机证书已支持（§11.2.22）。`IHostKeyTypePreference` 是公开的，只管「连接时先谈哪几种」 |
-| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 | ✅ 公开。内置 `InMemorySshSigner`（私钥文件）、agent 身份、`SshCertificateSigner`（证书） |
+| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 | ✅ 公开。内置 `InMemorySshSigner`（私钥文件）、agent 身份（含 FIDO 的 `sk-*`）、`SshCertificateSigner`（证书）、`CngSshSigner`（Windows 密钥库） |
 | 6 | 认证方法 | 新认证方式，含堡垒机的私有扩展 | 🔒 凭据是公开的 `SshCredential` 家族；新方法在库里加一个凭据类型与认证器分支。设计时的 `IAuthMethod` 没有做 |
 | 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 | ✅ 公开。内置 `KnownHostsPolicy`、`PinnedFingerprintHostKeyPolicy`、`DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` | 🔒 库内接缝。三种都已内置（`AgentForwarder`、`X11Forwarder`、`RemotePortForwarder`，它们对这个接口是显式实现） |
-| 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ❌ 没有做。发全局请求是库内部的一个方法 |
-| 10 | SFTP 扩展 | 厂商 SFTP 扩展 | 🔒 库内：`posix-rename`、`limits`、`statvfs` 等由 `SftpFileSystem` 按能力查询直接用 |
-| 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 转发的度量走 `System.Diagnostics.Metrics`（`ForwardMetrics.MeterName`）；`ActivitySource` 与报文旁路（`IPacketTap`）还没有做 |
+| 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ✅ 主机密钥轮换由主机密钥策略开启（`IHostKeyRotationPolicy`，spec/05 §6.4.1）；发全局请求仍是库内部的方法 |
+| 10 | SFTP 扩展 | 厂商 SFTP 扩展 | ✅ 库内封装：`posix-rename`、`hardlink`、`fsync`、`limits`、`statvfs`、`copy-data`、`expand-path`、`lsetstat`、`users-groups-by-id`（spec/06 §7.1）；厂商私有的经 `SftpFileSystem.SendExtendedAsync`（spec/06 §7.3） |
+| 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 度量走 `System.Diagnostics.Metrics`：连接与通道的一组（`SshMetrics.MeterName`）、转发的一组（`ForwardMetrics.MeterName`），见 spec/08 §7；报文旁路 `IPacketTap` 已做（spec/08 §9）；`ActivitySource` 还没有做 |
 | 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`，没有另设接口 |
 
 > 这张表原本是「后期扩展性」的全部答案，判据是：
@@ -838,6 +838,7 @@ L1–L4 全部落地，**197 个用例全绿**。完整握手与认证在内存�
   目前只有 `InMemorySshSigner`（进程内持有私钥）。
 - `known_hosts` 与 `ssh_config` → M5。目前只有 `IHostKeyPolicy` 抽象。
 - 改密码流程（`PASSWD_CHANGEREQ`）—— **明确不做**，但给出可读的失败原因。
+  **→ 后来做了（2026-10-05）：`PasswordCredential.NewPasswordProvider`，见 [spec 04 §5.1](../spec/04-authentication.md)。**
 - 与真实 OpenSSH 的互操作矩阵 —— 需要 CI runner，本地跑不了。
   **→ 已补，见 §11.2.9。**
 
@@ -918,7 +919,7 @@ SFTP 三层落地，**287 个用例全绿**（其中 23 条是 `SftpWire` 的逐
   的封装 —— 能力位已经能查到，但还没给出便捷方法。它们都不在 VelaShell 的既有用法里。
 - `ISftpExtension` 公开扩展点（架构 §8 第 10 项）——
   目前加厂商扩展要直接用 `SftpRequestPipeline.SendAsync` + `SftpWire.WriteExtended`，
-  可用但不够体面。
+  可用但不够体面。**→ 已补：`SftpFileSystem.SendExtendedAsync`（spec/06 §7.3），接口不做。**
 - SFTP 层的 BDP 自适应（在途请求数按 RTT 调整）—— 与 M2 的自适应窗口是同一条待办，
   都要等链路特征模拟。**→ 已补，见 §11.2.9。**
 
@@ -1266,7 +1267,7 @@ zlib 流**，每个包压完做一次 flush 把字节挤出来，**但不重置�
 
 - `AllowedKeys` 非空时，`REQUEST_IDENTITIES` 的应答里**过滤掉**不在名单里的钥
   （`KeysHidden` 会计数），`SIGN_REQUEST` 要的钥不在名单里直接回 `FAILURE`。
-- `ConfirmEachSignature` 给宿主一个异步回调，可以弹窗问人。拒了回 `FAILURE`。
+- `ApproveSignature` 给宿主一个异步回调，可以弹窗问人。拒了回 `FAILURE`。
 - `ADD_IDENTITY` / `LOCK` / `UNLOCK` 一类会**改本机 agent 状态**的消息
   **一律回 `FAILURE`**，不转发。远端服务器没有任何理由改我们本机的钥圈。
 - `MaxConcurrentChannels` 封住通道数，默认 8。
@@ -1386,7 +1387,7 @@ pwsh scripts/ssh/interop/Stop-TestServer.ps1
 - 加密的 OpenSSH 私钥 —— `bcrypt_pbkdf` 拿不到。**→ 已补，见 §11.2.18。**
 - `streamlocal-forward@openssh.com` **→ 已补，见 §11.2.12。**
 - `ssh_config` 的 `Include` 与 `Match` **→ 已补，见 §11.2.12。**
-- `ISftpExtension` 公开扩展点；`statvfs@openssh.com` 等扩展的便捷封装。
+- `ISftpExtension` 公开扩展点；`statvfs@openssh.com` 等扩展的便捷封装。**→ 已补（spec/06 §7.1、§7.3）。**
 - 取消远程转发后的宽限期写死 2 秒，未做成可配置。
 
 ### 11.2.10 压缩改走原生 zlib（2026-09-21）
@@ -1478,7 +1479,8 @@ dotnet run scripts/ssh/compression/verify-strict-validation.cs
 
 这一条不是「补个协议细节」，是**修一个会让长连接断掉的洞**。
 
-OpenSSH 的 `RekeyLimit` 默认 1 GiB 或 1 小时，到点它自己发 `SSH_MSG_KEXINIT`。
+OpenSSH 服务端到了它的 `RekeyLimit`（默认按加密算法的数据量，管理员还可以加时长）就自己发 `SSH_MSG_KEXINIT`。
+〔更正 2026-10-06〕这里曾经写「默认 1 GiB 或 1 小时」；黑盒核对：`sshd_config` 默认 `RekeyLimit default none`，不按时长。
 客户端不应答的表现不是「少个功能」，而是：
 
 - 挂了一下午的 shell 忽然断了；
@@ -1575,7 +1577,7 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
 
 #### 主动发起（同日补完）
 
-阈值落在 `SshRekeyPolicy`（默认 **1 GiB / 1 小时 / 2³¹ 个报文**，默认**开着**）。
+阈值落在 `SshRekeyPolicy`（默认 **1 GiB / 2³¹ 个报文**，默认**开着**；〔2026-10-06，Q1〕时长阈值默认不看，原来是 1 小时，见 spec/03 §8.1）。
 `SshConnection.StartRekeyAsync()` 也公开出来，宿主可以自己挑时机。
 
 **报文数那一条才是硬线。** SSH 的序号是 32 位的，而 AES-GCM 的 nonce
@@ -1598,8 +1600,10 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
 `StartRekeyAsync` **发完 `KEXINIT` 就返回**，不等谈完：密钥交换要读对端的报文，
 而这条传输唯一的读者是接收循环。正在谈的时候再调是空操作。
 
-诊断面：`LastRekeyReason` 说清是哪条阈值触发的（「单向报文数达到 1024（阈值 1024）」），
-`RekeyCount` 是完成次数。排障时要能回答「这条连接刚才为什么换了密钥」。
+诊断面：`LastRekey` 说清最近一次是怎么来的（`SshRekeyCause`：触发方式 `SshRekeyTrigger` —— 对端发起、显式请求、
+字节数 / 报文数 / 时长到了阈值、报文数的硬线 —— 以及到阈值时的观测值与阈值），`RekeyCount` 是完成次数。
+排障时要能回答「这条连接刚才为什么换了密钥」。〔历史〕曾经是 `LastRekeyReason`，一句自由书写的中文
+（「单向报文数达到 1024（阈值 1024）」）：程序判断不了、界面翻译不了，对端发起的与显式请求的也不记。
 
 ##### 一个自己踩出来的 API 陷阱
 
@@ -1681,6 +1685,8 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
   也不该碰文件系统。展开时有**深度上限（16，与 OpenSSH 一致）与环检测** ——
   `a` include `b`、`b` 又 include `a` 很容易写出来，而没有环检测的表现是
   **读配置的时候整个进程不动了**。有一条用例专门钉这个。
+  另有**总量上限**（一次最多读 256 个文件）挡「宽」的爆炸 —— 一组文件互相 `Include dir/*`，
+  每条不成环的链都要走一遍；**只读普通文件、单个最大 1 MiB**，`Include /dev/zero` 与 FIFO 不会把读配置拖死（`spec/09` §7.1）。
   通配结果**排序**：目录枚举顺序在不同文件系统上不一样，
   而 `ssh_config` 是「先出现的值赢」—— 顺序不定就意味着结果不定。
 - **`Match exec` 默认不执行。** 没有求值器时，带 `exec` 条件的块**一律不匹配**。
@@ -1866,7 +1872,7 @@ OpenSSH 的 `ForwardX11Timeout` 只管非受信模式。**我们两种模式都�
 
 理由：「有效期只在某一种模式下起作用」是一个会让人栽跟头的 API ——
 而受信模式恰恰是危险得多的那个，却反而没有期限，说不通。
-长会话要一直用就显式设 `Timeout = TimeSpan.Zero`。
+长会话要一直用就显式设 `Timeout = Timeout.InfiniteTimeSpan`（「不限时」全库只用这一种写法；曾经这里用 `TimeSpan.Zero`）。
 
 这一条是写用例时发现的：`过期之后不再接受新的x11通道` 在受信模式下挂了，
 一看才意识到「跟着 OpenSSH 抄」在这里抄出了一个反直觉的行为。
@@ -1929,7 +1935,9 @@ OpenSSH 的 `ForwardX11Timeout` 只管非受信模式。**我们两种模式都�
 宿主内置了 X server（`VelaShell.XServer`，与本库同仓、互不引用）。本机显示就在同一个进程里时，再去连一个本机端口只是绕路。
 `X11ForwardOptions.LocalConnector` 让调用方给一个连接器：每条 `x11` 通道调它一次拿一条双工流，建立报文里的 cookie 换成
 `LocalCookie`（没给就是空的）后写进去（`spec/07` §7.5.9）。**假 cookie 的核对不变** —— 那一层防的是远端。
-只支持受信模式：非受信模式要 `xauth` 连本机显示签受限 cookie，与连接器同时设时请求直接失败，不静默退回受信。
+只支持受信模式：非受信模式要 `xauth` 连本机显示签受限 cookie，与连接器同时设是配置矛盾 —— 开会话的入口（`ExecuteAsync` / `OpenShellAsync`）
+在开通道之前就抛 `ArgumentException`，`ForwardFailureMode.Continue` 也不吞它，不静默退回受信（曾经要到发 `x11-req` 时才报成「转发没开成」）。
+同理，`AgentForwardOptions` 的 `AgentEndpoint` 与 `LocalConnector` 只能给一个，两个都给时设值就抛（曾经静默忽略端点）。
 连接器那一端不可用时按「本机显示连不上」处理。用例 3 条（对搬与 cookie 替换、连接器不可用、与非受信同设）。
 
 ### 11.2.15 那个偶发挂死：通道登记得太晚（2026-09-22）
@@ -2385,6 +2393,7 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 | 问题 | 决定 |
 | --- | --- |
 | 大量上传时，另一条通道的 `WINDOW_ADJUST` 排在出站积压后面（还要先在背压上等空位）：对端一直等窗口，下载被上传拖到几乎停住 | 本端的窗口回补走插队队列，发送泵每取一项先看它，不受背压；插队只让它提前，不越过 `CLOSE` 与重协商闸门（`spec/05` §3.2） |
+| 一堆隧道连接、SFTP 一起在传时，普通队列里排着每条通道一帧，终端的按键排在它们后面：积压 2 MiB、上行 5 Mbit/s 时按键要等 3 秒以上 | 交互式通道（`OpenShellAsync` 开的）走交互道，发送泵在回补之后让它与普通队列轮流出队：按键至多等一帧，粘贴大段时普通队列也不会被饿死；一条通道的报文全走同一条道，自身顺序不变（`spec/05` §3.2，Q7） |
 | 保活探测在背压上等，或者上线之后才开始计时：死链的典型样子正是发送泵卡在一次写上，探测跟着卡住，恰恰在最需要判死的时候判不了 | 探测不受背压，期限从入队那一刻算起；每个周期至多一帧，不会无界（`spec/05` §6.3） |
 | 自适应窗口只看「见底」：消费者一慢，窗口就一路翻到上限，几十 MiB 没读的数据堆在本端 | 见底**并且**读的一方最近读空过才扩；连续 3 轮没见底就缩（`spec/05` §3.3，本文 §5.5） |
 | 对端开通道时，接收循环就地等使用者的处理器（它可能弹窗、查配置）：处理器一慢，整条连接上所有通道的收包都停住 | 解析与查处理器在接收循环上做完，「问处理器、建通道、回确认」交给后台；同时在决定的最多 64 条，超出的以 `RESOURCE_SHORTAGE` 拒绝（`spec/05` §8.1） |
