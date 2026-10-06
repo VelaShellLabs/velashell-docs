@@ -429,7 +429,7 @@ interface ISshSigner
 }
 ```
 
-Built in: file private keys, ssh-agent, PKCS#11, Azure Key Vault — **the private key never has to enter the process**.
+Built in: file private keys, ssh-agent, Windows CNG key stores (software, TPM, smart card; spec/04 §4.8); PKCS#11 and Azure Key Vault plug in through `ISshSigner` from the user side — **the private key never has to enter the process**.
 This is also where VelaShell's "credential manager integration" track lands.
 
 Private key formats supported: OpenSSH v1 (including bcrypt_pbkdf encryption), PKCS#1, PKCS#8 (including encrypted), PuTTY `.ppk` v2/v3.
@@ -656,7 +656,7 @@ while handing timing constraints over to callers (the rules are in §4.1 of `src
 | 2 | `ISshCipherSuite` | New ciphers. **Including Chinese national standards SM4-GCM / SM3** (a real requirement for Chinese government and enterprise customers) | 🔒 Seam inside the library: adding one = implement the interface + register a name in the algorithm list |
 | 3 | `ISshKeyExchange` | New KEX. Post-quantum (ML-KEM, sntrup761) built in; future hybrid schemes get added the same way | 🔒 Seam inside the library: `SshKeyExchangeFactory` is a fixed table, and adding one means adding a row; **no runtime registration** (the design-stage `KexRegistry` has been removed, §11.2.24) |
 | 4 | Host key types | New host key types, including **CA-signed host certificates** (`*-cert-v01@openssh.com`) | 🔒 Added in `SshPublicKey`; host certificates are already supported (§11.2.22). `IHostKeyTypePreference` is public, and only governs "which types to negotiate first when connecting" |
-| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain | ✅ Public. Built in: `InMemorySshSigner` (private key files), agent identities, `SshCertificateSigner` (certificates) |
+| 5 | `ISshSigner` | Where the private key comes from: file / Agent / PKCS#11 / HSM / KeyVault / OS keychain | ✅ Public. Built in: `InMemorySshSigner` (private key files), agent identities (including FIDO `sk-*`), `SshCertificateSigner` (certificates), `CngSshSigner` (Windows key stores) |
 | 6 | Authentication methods | New authentication methods, including bastion hosts' private extensions | 🔒 Credentials are the public `SshCredential` family; a new method means adding a credential type and an authenticator branch inside the library. The design-stage `IAuthMethod` was not built |
 | 7 | `IHostKeyPolicy` | Trust model: known_hosts / CA / TOFU / enterprise allowlist | ✅ Public. Built in: `KnownHostsPolicy`, `PinnedFingerprintHostKeyPolicy`, `DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | Server-initiated channels: **agent forwarding**, X11, `forwarded-tcpip` | 🔒 Seam inside the library. All three are built in (`AgentForwarder`, `X11Forwarder`, `RemotePortForwarder`, which implement this interface explicitly) |

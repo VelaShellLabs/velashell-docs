@@ -428,7 +428,7 @@ interface ISshSigner
 }
 ```
 
-内置：文件私钥、ssh-agent、PKCS#11、Azure Key Vault —— **私钥可以从不进程内**。
+内置：文件私钥、ssh-agent、Windows CNG 密钥库（软件、TPM、智能卡；spec/04 §4.8）；PKCS#11、Azure Key Vault 经 `ISshSigner` 由使用者接入 —— **私钥可以从不进程内**。
 这同时是 VelaShell「凭据管理器集成」那条线的落点。
 
 私钥读取支持：OpenSSH v1（含 bcrypt_pbkdf 加密）、PKCS#1、PKCS#8（含加密）、PuTTY `.ppk` v2/v3。
@@ -656,7 +656,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesRe
 | 2 | `ISshCipherSuite` | 新加密算法。**含国密 SM4-GCM / SM3**（国内政企的现实需求） | 🔒 库内接缝：加一种 = 实现接口 + 在算法清单里登记一个名字 |
 | 3 | `ISshKeyExchange` | 新 KEX。后量子（ML-KEM、sntrup761）内置，将来的混合方案照此加 | 🔒 库内接缝：`SshKeyExchangeFactory` 是一张固定的表，加一种就是加一行；**没有运行期注册**（设计时的 `KexRegistry` 已删，§11.2.24） |
 | 4 | 主机密钥类型 | 新主机密钥类型，含 **CA 签发的主机证书**（`*-cert-v01@openssh.com`） | 🔒 在 `SshPublicKey` 里加；主机证书已支持（§11.2.22）。`IHostKeyTypePreference` 是公开的，只管「连接时先谈哪几种」 |
-| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 | ✅ 公开。内置 `InMemorySshSigner`（私钥文件）、agent 身份、`SshCertificateSigner`（证书） |
+| 5 | `ISshSigner` | 私钥从哪来：文件 / Agent / PKCS#11 / HSM / KeyVault / 系统密钥链 | ✅ 公开。内置 `InMemorySshSigner`（私钥文件）、agent 身份（含 FIDO 的 `sk-*`）、`SshCertificateSigner`（证书）、`CngSshSigner`（Windows 密钥库） |
 | 6 | 认证方法 | 新认证方式，含堡垒机的私有扩展 | 🔒 凭据是公开的 `SshCredential` 家族；新方法在库里加一个凭据类型与认证器分支。设计时的 `IAuthMethod` 没有做 |
 | 7 | `IHostKeyPolicy` | 信任模型：known_hosts / CA / TOFU / 企业白名单 | ✅ 公开。内置 `KnownHostsPolicy`、`PinnedFingerprintHostKeyPolicy`、`DangerousAcceptAnyHostKeyPolicy` |
 | 8 | `IIncomingChannelHandler` | 服务端发起的通道：**agent 转发**、X11、`forwarded-tcpip` | 🔒 库内接缝。三种都已内置（`AgentForwarder`、`X11Forwarder`、`RemotePortForwarder`，它们对这个接口是显式实现） |

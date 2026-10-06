@@ -480,6 +480,28 @@ RSA 是 n、e、d、iqmp、p、q；ECDSA 是曲线名、公钥点、d），然�
 
 〔已核对〕本库造的两种公钥，真 `ssh-keygen -lf` 读得出、认成 `ED25519-SK` / `ECDSA-SK`、指纹一致。
 
+### 4.8 系统密钥库里的钥（Windows CNG）
+
+企业发的智能卡、合规要求「私钥不落盘」的环境里，钥放在密钥库里、导不出来。`CngSshSigner.Open(名字, 密钥库, 选项)` 打开 Windows CNG 密钥库里
+一把有名字的钥做签名器：**私钥不导出，签名交给密钥库做**。
+
+| 密钥库 | `CngProvider` |
+| --- | --- |
+| 软件密钥库（默认） | `MicrosoftSoftwareKeyStorageProvider` |
+| TPM | `MicrosoftPlatformCryptoProvider` |
+| 智能卡 | `MicrosoftSmartCardKeyStorageProvider`（或卡厂商的 KSP） |
+
+支持 RSA（`rsa-sha2-512` / `-256`）与 ECDSA P-256 / P-384 / P-521；CNG 没有 Ed25519。
+
+〔决策〕**`IsLocalAndCheap` 为假**：TPM 签一次要上百毫秒，智能卡可能还要输 PIN、弹确认 —— 认证器因此先问服务端认不认这把钥（§4.1 阶段一）再签；
+签名放到线程池上做，不堵调用方的线程。私钥导不出来，这把钥也就加不进 agent。
+
+〔决策〕**打不开就当场报**：找不到、没有权限是 `KeyFileUnreadable`；不能签名的钥（ECDH）、不认识的算法是 `Unsupported`。
+
+PKCS#11 令牌与 macOS Secure Enclave 不在这一步（`ISshSigner` 扩展点照样留着，使用者可以自己实现）。
+
+〔已核对〕在当前用户的软件密钥库里现建**不可导出**的 RSA 与 ECDSA 钥，签出来的名公钥验得过；对真 sshd：公钥临时加进 `authorized_keys`，只用这把钥登录。
+
 ---
 
 ## 五 `password`（RFC 4252 §8）

@@ -491,6 +491,28 @@ an implementation could only vouch for itself. Security keys as host keys, and s
 
 〔Verified〕For both public key types this library produces, a real `ssh-keygen -lf` reads them, labels them `ED25519-SK` / `ECDSA-SK`, and the fingerprints match.
 
+### 4.8 Keys in the system key store (Windows CNG)
+
+In environments with company-issued smart cards, or compliance rules that keep private keys off disk, keys live in a key store and cannot be exported. `CngSshSigner.Open(name, provider, options)` opens a named key in a Windows CNG
+key store as a signer: **the private key is not exported; the key store does the signing**.
+
+| Key store | `CngProvider` |
+| --- | --- |
+| Software key store (default) | `MicrosoftSoftwareKeyStorageProvider` |
+| TPM | `MicrosoftPlatformCryptoProvider` |
+| Smart card | `MicrosoftSmartCardKeyStorageProvider` (or the card vendor's KSP) |
+
+RSA (`rsa-sha2-512` / `-256`) and ECDSA P-256 / P-384 / P-521 are supported; CNG has no Ed25519.
+
+〔Decision〕**`IsLocalAndCheap` is false**: a TPM signature takes a hundred milliseconds or more, and a smart card may ask for a PIN or a confirmation —— so the authenticator first asks the server whether it accepts the key (§4.1 phase one) before signing;
+signing runs on the thread pool and does not block the caller's thread. Since the private key cannot be exported, the key cannot be added to an agent either.
+
+〔Decision〕**Fail immediately when it cannot be opened**: not found or no permission is `KeyFileUnreadable`; a key that cannot sign (ECDH) or an unknown algorithm is `Unsupported`.
+
+PKCS#11 tokens and the macOS Secure Enclave are not part of this step (the `ISshSigner` extension point stays, and users can implement their own).
+
+〔Verified〕**Non-exportable** RSA and ECDSA keys created on the fly in the current user's software key store produce signatures that verify with the public key; against a real sshd, with the public key temporarily added to `authorized_keys`, login works with only that key.
+
 ---
 
 ## 5 `password` (RFC 4252 §8)
