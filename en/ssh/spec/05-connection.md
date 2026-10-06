@@ -602,7 +602,8 @@ and does not have to delete lines by hand, so that warning regains its weight.
 
 〔Decision〕**Only add keys for "known hosts"**:
 - Hosts presenting a certificate (CA-managed) are skipped —— their trust comes from the CA, not from any key in `known_hosts`;
-- The announcement must include the key this connection used, and that key must be **recorded in `known_hosts` as a plain key** (`GetKnownHostKeysAsync`) —— otherwise it is unclear on whose behalf to record
+- The announcement must include the key this connection used, and that key must be **recorded in `known_hosts` as a plain key** (`GetKnownHostKeyFingerprintsAsync`, which returns fingerprints:
+  trust stores often keep only fingerprints, and a SHA-256 fingerprint covers the whole public key blob, so comparing fingerprints is the same as comparing blobs; they are compared after normalization, with or without padding) —— otherwise it is unclear on whose behalf to record
   (a key accepted by TOFU in this session but not recorded, or a pinned fingerprint, does not count);
 - Only the keys **not yet recorded** are sent for proof; certificates, types the library does not know, and duplicates are ignored; at most 16 keys are looked at.
 
