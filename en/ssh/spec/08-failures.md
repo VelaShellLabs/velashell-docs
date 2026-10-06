@@ -183,6 +183,7 @@ Timeouts, negotiation failures and rejected host keys during setup are likewise 
 | `ProxyRefused` | Proxy refused to forward | ✔ | **See §5.2** |
 | `ProxyAuthRequired` | Proxy requires authentication, and no credentials are configured | ✘ | Configure proxy credentials |
 | `ProxyAuthFailed` | Proxy rejected the configured credentials | ✘ | Correct the proxy username or password |
+| `TlsFailed` | TLS handshake failed (`DialerChain.Tls`): untrusted certificate, mismatched name, or the peer does not speak TLS (`09-dialing.md` §4.4) | ✘ | See `Message`; a self-signed certificate needs its fingerprint pinned |
 | `NotAnSshServer` | Peer does not speak SSH | ✘ | Wrong port |
 | `VersionMismatch` | Protocol version is not 2.0 | ✘ | |
 | `NegotiationFailed` | No algorithm in common | ✘ | **See §5.1** |

@@ -58,6 +58,12 @@ Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 // Nesting: reach the SOCKS5 proxy via the HTTP proxy, then let it connect to the target (via = how to reach the proxy itself)
 Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
+// HTTPS proxy: TLS on the leg to the proxy (certificates are validated strictly by the system's rules by default)
+Dialer = DialerChain.HttpConnect("proxy.corp", 443, credentials, via: DialerChain.Tls()),
+
+// SSH wrapped in TLS on port 443 (sslh / stunnel on the server); pin a self-signed certificate's fingerprint
+Dialer = DialerChain.Tls(new SshTlsOptions { RemoteCertificateValidation = (_, cert, _, _) => IsPinned(cert) }),
+
 // Jump host (ssh -J): the jump host is itself a full connection, with its own credentials and host key policy
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
 

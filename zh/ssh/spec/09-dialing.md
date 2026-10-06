@@ -268,6 +268,24 @@ sequenceDiagram
   需要时由使用者实现自己的拨号器。
 - 不跟随重定向。
 
+### 4.4 TLS（`DialerChain.Tls`，RFC 8446）
+
+`DialerChain.Tls(options, via)` 在 `via` 连到的**那个端点**上套一层 TLS —— 它不是单独的一跳，跳信息记的是 `via` 的种类。
+握手交给 BCL 的 `SslStream`，协议版本由操作系统挑。两种用法：
+
+- **HTTPS 代理**：当 HTTP 代理的内层，`HttpConnect("proxy", 443, via: DialerChain.Tls())` —— 到代理的那一段走 TLS，Basic 凭据不再明文过网。
+- **SSH 套在 TLS 里走 443**（只放行 HTTPS、有深度包检测的网络）：直接当连接的拨号器，服务端用 sslh / stunnel 剥掉 TLS 再交给 sshd。
+
+〔决策〕**证书校验默认严格**：按系统的规则（链可信、名字对得上、在有效期内）。自行部署的 stunnel 用自签证书时，
+用 `SshTlsOptions.RemoteCertificateValidation` 钉住那一张的指纹，而不是一律放行 —— 一律放行的 TLS 挡不住中间人
+（SSH 自己的主机密钥校验照样在，但走在 TLS 里的代理凭据就暴露了）。`SshTlsOptions.ServerName` 改写 SNI 与校验名（按 IP 连、证书签给域名时用）。
+
+〔决策〕**握手失败报 `TlsFailed`**（拨号阶段，带跳信息）：证书不可信、名字对不上、对端说的不是 TLS。
+`via` 到不了这一跳时原样报 `via` 的失败（不说成 TLS 的问题）；连接的计时器到点报 `Timeout`。
+
+〔注意〕`SslStream` 握手失败时用**同步** `Write` 发告警，而内存流与跳板的通道流只支持异步写 ——
+那一下的 `NotSupportedException` 会盖掉真正的握手失败原因。握手期间的载体流吞掉同步写的这一种失败（告警只是礼节，连接随后就拆），握手之后照常。
+
 ---
 
 ## 五 跳板（`ProxyJump`，RFC 4254 §7.2）

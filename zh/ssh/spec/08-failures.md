@@ -181,6 +181,7 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 | `ProxyRefused` | 代理拒绝转发 | ✔ | **见 §5.2** |
 | `ProxyAuthRequired` | 代理要求认证，而没配凭据 | ✘ | 配置代理凭据 |
 | `ProxyAuthFailed` | 代理拒绝了配置的凭据 | ✘ | 改对代理的用户名或口令 |
+| `TlsFailed` | TLS 握手失败（`DialerChain.Tls`）：证书不可信、名字对不上，或对端说的不是 TLS（`09-dialing.md` §4.4） | ✘ | 见 `Message`；自签证书要钉指纹 |
 | `NotAnSshServer` | 对端不说 SSH | ✘ | 端口连错了 |
 | `VersionMismatch` | 协议版本不是 2.0 | ✘ | |
 | `NegotiationFailed` | 算法无交集 | ✘ | **见 §5.1** |

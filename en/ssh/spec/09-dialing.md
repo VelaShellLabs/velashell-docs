@@ -270,6 +270,24 @@ and host names often do not come from whoever wrote the configuration (`ssh://` 
   users who need them implement their own dialer.
 - Redirects are not followed.
 
+### 4.4 TLS (`DialerChain.Tls`, RFC 8446)
+
+`DialerChain.Tls(options, via)` wraps a TLS layer around **the endpoint** that `via` connects to — it is not a separate hop, and the hop information records the kind of `via`.
+The handshake is done by the BCL's `SslStream`, with the protocol version chosen by the operating system. Two uses:
+
+- **HTTPS proxy**: as the inner dialer of an HTTP proxy, `HttpConnect("proxy", 443, via: DialerChain.Tls())` — the leg to the proxy runs over TLS, so Basic credentials no longer cross the network in clear text.
+- **SSH wrapped in TLS on port 443** (networks that only allow HTTPS, with deep packet inspection): used directly as the connection's dialer, with sslh / stunnel on the server stripping the TLS before handing over to sshd.
+
+〔Decision〕**Certificate validation is strict by default**: by the system's rules (trusted chain, matching name, within validity). When a self-hosted stunnel uses a self-signed certificate,
+pin that certificate's fingerprint with `SshTlsOptions.RemoteCertificateValidation` rather than accepting everything — TLS that accepts everything does not stop a man in the middle
+(SSH's own host key check still applies, but proxy credentials carried inside the TLS are exposed). `SshTlsOptions.ServerName` overrides the SNI and the name checked (for connecting by IP to a certificate issued for a domain).
+
+〔Decision〕**A failed handshake is reported as `TlsFailed`** (dialing phase, with hop information): an untrusted certificate, a mismatched name, or a peer that does not speak TLS.
+When `via` cannot reach the endpoint, `via`'s failure is reported as is (not as a TLS problem); when the connection's timer expires, it is `Timeout`.
+
+〔Note〕On a failed handshake `SslStream` sends its alert with a **synchronous** `Write`, while in-memory streams and jump-host channel streams only support asynchronous writes —
+the resulting `NotSupportedException` would hide the real handshake failure. During the handshake the carrier stream swallows that one kind of failure of a synchronous write (the alert is a courtesy; the connection is torn down right after), and behaves normally after the handshake.
+
 ---
 
 ## 5. Jump hosts (`ProxyJump`, RFC 4254 §7.2)

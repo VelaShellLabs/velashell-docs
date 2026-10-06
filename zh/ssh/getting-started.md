@@ -56,6 +56,12 @@ Dialer = DialerChain.HttpConnect("proxy.corp", 3128),
 // 嵌套：经 HTTP 代理到达 SOCKS5 代理，再由它连目标（via = 怎么到达代理本身）
 Dialer = DialerChain.Socks5("socks.internal", 1080, via: DialerChain.HttpConnect("proxy.corp", 3128)),
 
+// HTTPS 代理：到代理的那一段套 TLS（证书默认按系统规则严格校验）
+Dialer = DialerChain.HttpConnect("proxy.corp", 443, credentials, via: DialerChain.Tls()),
+
+// SSH 套在 TLS 里走 443（服务端 sslh / stunnel）；自签证书钉指纹
+Dialer = DialerChain.Tls(new SshTlsOptions { RemoteCertificateValidation = (_, cert, _, _) => IsPinned(cert) }),
+
 // 跳板（ssh -J）：跳板本身是一条完整连接，有自己的凭据与主机密钥策略
 Dialer = DialerChain.Jump(new SshConnectionOptions("ops@bastion.example.com") { Credentials = [...] }),
 
