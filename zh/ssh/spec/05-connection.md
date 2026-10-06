@@ -459,7 +459,13 @@ OpenSSH 服务端收到后关掉远端进程的输出端，进程再写就收到
 | `exit-status` | false | `uint32` 退出码 → `SshChannelEvent.ExitStatus` |
 | `exit-signal` | false | 见下 |
 | `keepalive@openssh.com` | true | 回 `CHANNEL_FAILURE`（RFC 允许，对端只要一个应答） |
+| `xon-xoff`（RFC 4254 §6.8） | false | `boolean client can do` → `SshChannelEvent.FlowControl`；最近一次的值在 `SshChannel.ClientMayDoFlowControl`（没收到过为 `null`） |
 | 其它 | 按 `want_reply` | 未知类型：`want_reply` 为 true 时回 `CHANNEL_FAILURE`，否则忽略 |
+
+〔决策〕**`xon-xoff` 类型化成一条事件**，与未知请求一起受事件积压上限约束（对端可以来回翻个不停），最近一次的值另存在属性上、不受上限影响。
+〔历史〕早期它只以通用的 `PeerRequest` 出现，使用者得自己解载荷。
+宿主不接它：RFC 允许客户端不理会这条消息，而真 OpenSSH（10.x）在 `stty ixon` / `-ixon` 来回切换时也不发它 ——
+^S / ^Q 照常当按键发给远端的 pty 处理。
 
 `exit-signal`：
 

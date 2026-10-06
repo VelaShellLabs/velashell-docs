@@ -461,7 +461,13 @@ end:      byte 0 (TTY_OP_END)
 | `exit-status` | false | `uint32` exit code → `SshChannelEvent.ExitStatus` |
 | `exit-signal` | false | See below |
 | `keepalive@openssh.com` | true | Reply `CHANNEL_FAILURE` (allowed by RFC; the peer only needs a reply) |
+| `xon-xoff` (RFC 4254 §6.8) | false | `boolean client can do` → `SshChannelEvent.FlowControl`; the latest value is in `SshChannel.ClientMayDoFlowControl` (`null` if never received) |
 | Others | Per `want_reply` | Unknown type: reply `CHANNEL_FAILURE` when `want_reply` is true, otherwise ignore |
+
+〔Decision〕**`xon-xoff` is typed into an event**, subject to the event backlog cap together with unknown requests (the peer can flip it back and forth endlessly); the latest value is also kept in a property, unaffected by the cap.
+〔History〕Early versions surfaced it only as a generic `PeerRequest`, and callers had to decode the payload themselves.
+The host does not act on it: the RFC lets the client ignore this message, and a real OpenSSH (10.x) does not send it even while `stty ixon` / `-ixon` is toggled —
+^S / ^Q are sent as keystrokes as usual and handled by the remote pty.
 
 `exit-signal`:
 
