@@ -708,6 +708,8 @@ await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // how many times it has rekeyed
 Console.WriteLine(conn.LastRekey);         // how the last one came about: SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
+Console.WriteLine(conn.LastRekeyDuration); // how long the last one took (channel data is held back meanwhile)
+conn.Rekeyed += (_, e) => log.Info($"rekey #{e.Count} ({e.Cause.Trigger}) took {e.Duration.TotalMilliseconds} ms");   // runs on the receive loop: do not block
 ```
 
 Three things worth knowing:

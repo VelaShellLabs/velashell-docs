@@ -658,6 +658,10 @@ the session rekeys as soon as either direction reaches 2³¹ packets under the s
 (one more and the sequence number would wrap to a value these keys have already used) is refused in both directions and the connection is dropped. The packet count used to be just an item of the policy,
 and `Disabled` or a threshold above 2³² could switch it off — a cryptographic hard constraint that the public API could turn off.
 
+〔Decision〕**Every completed rekey is reported** (the `SshConnection.Rekeyed` event: cause, ordinal, duration, newly negotiated algorithms): peer-initiated, threshold-initiated and explicitly requested ones alike;
+failed ones are not (the connection is declared dead). The duration runs from receiving the peer's `KEXINIT` to the new keys being installed — channel data is held back during that time, which is where "the terminal hiccups now and then" lines up;
+the latest one also stays in `LastRekeyDuration`. The event is raised synchronously on the receive loop, so subscribers must not block; exceptions thrown by subscribers are swallowed.
+
 ### 8.2 Send gate
 
 This is where this implementation differs most from common practice, and it is the core of [architecture.md §5.4](../design/architecture.md).

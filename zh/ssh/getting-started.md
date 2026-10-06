@@ -706,6 +706,8 @@ await conn.StartRekeyAsync(ct);
 
 Console.WriteLine(conn.RekeyCount);        // 换过几次
 Console.WriteLine(conn.LastRekey);         // 上次是怎么来的：SshRekeyCause { Trigger = Packets, Observed = …, Threshold = … }
+Console.WriteLine(conn.LastRekeyDuration); // 上次用了多久（这段时间通道数据暂存）
+conn.Rekeyed += (_, e) => log.Info($"第 {e.Count} 次重协商（{e.Cause.Trigger}）用了 {e.Duration.TotalMilliseconds} ms");   // 在接收循环上调，别阻塞
 ```
 
 三件事值得知道：
