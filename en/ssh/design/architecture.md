@@ -1473,8 +1473,8 @@ nothing is not exempt** — that still errors, otherwise invalid zlib data would
 
 This can't go into a regular unit test: the switch can only be set once at process start,
 and the static field that reads it is read once per process, so cases running in parallel in the
-same process can't each set their own. So it's a **separate file-based script**, run as its own
-step in CI:
+same process can't each set their own. So it's a **separate file-based script**, run by hand when the
+compression code changes (〔History〕it used to be a separate CI job, removed on 2026-10-07):
 
 ```bash
 dotnet run scripts/ssh/compression/verify-strict-validation.cs
