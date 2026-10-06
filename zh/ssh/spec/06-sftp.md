@@ -623,7 +623,7 @@ UI 线程上是界面卡住一个 RTT，线程池上并发一多就是饿死。�
 | `fsync@openssh.com` | 强制落盘 | 抛 `Unsupported` |
 | `limits@openssh.com` | §5.2；宣告了 `max-open-handles` 就按它排队：每个开着的文件、目录占一个额度，关了还回来，额度用完时新的 `OPEN` / `OPENDIR` 等着，而不是撞上服务端的上限得到一个随机的「操作失败」 | 用保守默认；句柄不限 |
 | `statvfs@openssh.com` | 文件系统用量：`GetFileSystemInfoAsync(路径)` 交回与 POSIX `statvfs` 一一对应的 11 个字段（顺序已与真 OpenSSH 的 `stat -f` 核对），加上按 `f_frsize`（为 0 时按 `f_bsize`，与 `df` 一致）算出的总容量、空闲、普通用户还能写多少（`AvailableBytes`，上传前预检看这个）、是否只读；字节数溢出时饱和 | 抛 `Unsupported`（看 `HasStatVfs`） |
-| `copy-data` | **服务端内**复制，不经过网络 | 〔现状〕能力位可查（`HasCopyData`），**还没有封装**；宿主的远端复制走「下载再上传」 |
+| `copy-data` | **服务端内**复制，不经过网络：`CopyFileAsync(源, 目标, 覆盖, 进度)`。目标按源的权限位（rwx）创建；不覆盖时 `CREAT\|EXCL`、覆盖时 `CREAT\|TRUNC`。〔决策〕**按段复制**（默认每段 64 MiB 一个请求）：OpenSSH 的 sftp-server 是单线程的，一个请求复制几个 GB 会把整条 SFTP 通道堵住几分钟；分段之后别的请求插得进来，也有了进度、在两段之间取消得了。源的长度在开始时取一次；服务端没给长度时一个请求复制到 EOF（长度 0）。中途失败或取消时目标留着已复制的部分（与 `cp` 一致）。宿主同一台服务器上的复制走它 | 抛 `Unsupported`（看 `HasCopyData`）；宿主退回「下载再上传」 |
 | `home-directory` | 取指定用户的家目录：`ExpandPathAsync("~用户名…")` 在没有 `expand-path` 时用它 | `~用户名` 报 `Unsupported`；`~`、`~/…` 不需要它（用 `REALPATH "."`，§4.6） |
 | `expand-path@openssh.com` | 展开 `~`：`ExpandPathAsync(路径)` 把 `~`、`~/…`、`~用户名`、`~用户名/…` 整条交给服务端（顺带规范化，已与真 OpenSSH 的 `$HOME` 核对）；不以 `~` 开头的等同 `GetRealPathAsync`。`REALPATH` 本身不展开 `~` | `~`、`~/…` 用登录时的工作目录拼、再 `REALPATH`；`~用户名` 改用 `home-directory` |
 | `lsetstat@openssh.com` | 设属性但**不跟随**符号链接（`touch -h` / `chown -h`）：`SetLinkAttributesAsync`，同步目录时保留链接自身的时间戳 | 抛 `Unsupported`（看 `HasLSetStat`），**不退化**成跟随链接的 `SETSTAT` —— 那会改到目标 |
