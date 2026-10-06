@@ -380,6 +380,8 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | Session parameters (agent and X11 forwarding for shell / exec), not connection parameters. Forwarding turned on by them is requested with `Continue` (`07-forwarding.md` §7.5.8): when there is no local agent / display, or the server refuses, the shell starts normally |
 | Values of `ForwardAgent` | Four forms (`ssh_config(5)`): `yes` → forward the default agent; `no` (default) → do not forward; an agent socket path (with `~` and `%d` `%u` `%h` `%r` expanded) → forward that one; `$ENV_VAR_NAME` → forward the one the variable's value points to, and do not forward when the variable is unset or empty. `yes` / `no` are case-insensitive. 〔History〕It used to accept only `yes`: a configuration that gave a path was treated as `no`, and forwarding silently stayed off |
 | `ForwardX11Timeout` | Validity period of the X11 forwarding turned on by `ForwardX11` (`07-forwarding.md` §7.5.7). `ssh_config` time format: a number followed by `s` / `m` / `h` / `d` / `w`, no unit means seconds, several parts add up (`1h30m`); `0` means no expiry. An invalid value is ignored and the default of 20 minutes applies |
+| `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | Applied to the default algorithm lists in the syntax of §7.2 (both directions together for encryption and MAC); a mistake is `InvalidConfiguration`, naming the host and the reason |
+| `PubkeyAcceptedAlgorithms` (old name `PubkeyAcceptedKeyTypes`) | Applied in the syntax of §7.2 to the signature algorithms the library uses for public key authentication by default; if `ssh-rsa` remains in the result, SHA-1 RSA signatures are allowed (`AllowSha1RsaSignatures`) —— the most common line for old servers, `+ssh-rsa`. Other forms are only validated for now |
 
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;
@@ -454,3 +456,23 @@ Each `Match` condition has three outcomes: satisfied, not satisfied, and **canno
 - **`Match host` compares against the host name after `HostName` rewriting** (if an earlier block set `HostName`, that is used, with `%h` replaced by the name the user typed);
   `Match originalhost` and `Host` blocks compare against the name the user typed. `Match host` used to compare against the typed alias every time, so blocks written for the real host name never matched.
 - `CreateConnectionOptionsAsync` knows only the host name when evaluating, so blocks with `user` / `localuser` / `exec` conditions do not apply on that path.
+
+### 7.2 Algorithm list syntax (`SshAlgorithmSpec`)
+
+The four algorithm lists of `ssh_config` and the host's "custom algorithm lists" in a connection profile share one parser (`SshAlgorithmSpec.Apply` / `ApplyTo`):
+
+| Form | Result |
+| --- | --- |
+| `+a,b` | Appended after the defaults (names already in the defaults are not repeated) |
+| `-a,b` | Removed from the defaults; `*` / `?` wildcards allowed (case-sensitive, as in the protocol) |
+| `^a,b` | Moved to the front, with the remaining defaults following in their original order |
+| `a,b` | Replaces the list entirely |
+| Blank | The defaults as they are |
+
+Names are separated by commas or whitespace; duplicates count once.
+
+〔Decision〕**Which names may be written follows `SshAlgorithmCatalog`.** Implemented names are accepted (including legacy ones that are off by default —— that is exactly how `+ssh-rsa` is used);
+mistakes throw `SshAlgorithmSpecException` with a structured reason: `Empty` (no names), `Unknown`, `Unimplemented` (known but not implemented:
+CBC, 3des, group1 and the like can never be agreed), `NothingLeft` (everything removed). **A removal entry without wildcards must still be a known name**:
+a misspelled `-chacha20-poly1305` (missing `@openssh.com`) removes nothing while the user believes it is off.
+〔History〕This parser used to exist only in the host, so these keys had no effect when importing `~/.ssh/config`.

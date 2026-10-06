@@ -378,6 +378,8 @@ sequenceDiagram
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数。由它们打开的转发按 `Continue` 请求（`07-forwarding.md` §7.5.8）：本机没有 agent / 显示、服务端拒绝时 shell 照常启动 |
 | `ForwardAgent` 的取值 | 四种写法（`ssh_config(5)`）：`yes` → 转发默认的 agent；`no`（缺省）→ 不转发；agent 套接字路径（展开 `~` 与 `%d` `%u` `%h` `%r`）→ 转发那一个；`$环境变量名` → 转发变量值指的那一个，变量没设或为空时不转发。`yes` / `no` 不分大小写。〔历史〕曾经只认 `yes`：写了路径的配置被当成 `no`，转发悄悄没开 |
 | `ForwardX11Timeout` | 随 `ForwardX11` 打开的 X11 转发的有效期（`07-forwarding.md` §7.5.7）。`ssh_config` 的时间格式：数字后跟 `s` / `m` / `h` / `d` / `w`，不带单位为秒，几段相加（`1h30m`）；`0` 为不过期。写不对的值忽略，沿用默认 20 分钟 |
+| `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | 按 §7.2 的写法作用到默认算法清单上（加密与 MAC 两个方向一起）；写错报 `InvalidConfiguration`，说出主机与原因 |
+| `PubkeyAcceptedAlgorithms`（旧名 `PubkeyAcceptedKeyTypes`） | 按 §7.2 的写法作用到本库公钥认证默认的签名算法上；结果里留着 `ssh-rsa` 时放开 SHA-1 的 RSA 签名（`AllowSha1RsaSignatures`）—— 老服务器最常见的那一行 `+ssh-rsa`。其余写法目前只用于校验 |
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
@@ -452,3 +454,23 @@ Windows 上会去读写当前目录里一个叫 `none` 的文件。
 - **`Match host` 比的是经 `HostName` 改写之后的主机名**（前面的块里给过 `HostName` 就用它，其中的 `%h` 换成输入的名字）；
   `Match originalhost` 与 `Host` 块比的是使用者输入的那个名字。曾经 `Match host` 一律拿输入的别名去比，为真实主机名写的块永远对不上。
 - `CreateConnectionOptionsAsync` 求值时只知道主机名，所以带 `user` / `localuser` / `exec` 条件的块在这条路径上不生效。
+
+### 7.2 算法清单的写法（`SshAlgorithmSpec`）
+
+`ssh_config` 的四项算法清单与宿主连接配置里的「自定义算法清单」共用一份解析（`SshAlgorithmSpec.Apply` / `ApplyTo`）：
+
+| 写法 | 结果 |
+| --- | --- |
+| `+a,b` | 追加到默认之后（已在默认里的不重复） |
+| `-a,b` | 从默认里删掉；可带 `*` / `?` 通配（大小写敏感，与协议一致） |
+| `^a,b` | 提到最前，其余默认照原顺序跟在后面 |
+| `a,b` | 整个替换 |
+| 空白 | 原样用默认 |
+
+名字之间用逗号或空白分隔，重复的只算一次。
+
+〔决策〕**「能写哪些名字」以 `SshAlgorithmCatalog` 为准。**实现了的照常收（含默认不开的老算法 —— `+ssh-rsa` 正是这么用的）；
+写错的抛 `SshAlgorithmSpecException`，带结构化的原因：`Empty`（没写名字）、`Unknown`（不认识）、`Unimplemented`（认得却没实现，
+CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不剩）。**不带通配的删除项也要是认得的名字**：
+拼错了的 `-chacha20-poly1305`（少了 `@openssh.com`）什么都删不掉，使用者却以为已经关了。
+〔历史〕这份解析原来只在宿主里，导入 `~/.ssh/config` 时这几项不生效。
