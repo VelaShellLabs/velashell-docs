@@ -296,6 +296,10 @@ If one is ever actually encountered, handle it via an extension mechanism along 
 
 This must also be stated clearly in a code comment, otherwise someone will certainly "fix it in passing" in the future.
 
+〔Decision〕**Read it back once after creating it** (a self-check, not a switch): if a link can be read at `linkpath`, it succeeded (the server may have normalized the target text, so it is not compared verbatim);
+if not, and `targetpath` now holds a link pointing back at `linkpath`, the server parsed the draft order —— the misplaced link is removed and an error is raised.
+No check when the server does not support `READLINK`. 〔History〕There used to be no check: with the order opposite to the server's, the link was created in the wrong place without any error.
+
 ### 4.6 `SSH_FXP_REALPATH`
 
 Used to canonicalize relative paths, `~`, `.`, `..` into absolute paths.
