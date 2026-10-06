@@ -93,16 +93,21 @@ byte[m]   mac                —— m = MAC 长度（AEAD 套件下为 0，tag �
 
 ## 二 密码套件的「形状」
 
-不同套件在**分帧**上的差异只有四个维度。把它们抽成数据（`CipherSuiteShape`），
-帧层就不必为每种算法写一遍「先读几个字节」的分支。
+不同套件在**发包**时的差异只有几个维度，抽成数据（`CipherSuiteShape`），算填充的那一份代码就不必为每种算法写一遍：
 
 | 维度 | 含义 |
 | --- | --- |
-| `LengthIsEncrypted` | 长度字段本身是否被加密（决定能不能直接读前 4 字节） |
-| `AadBytes` | 参与完整性计算但不加密的前缀字节数 |
 | `TagBytes` | AEAD tag 或 MAC 的长度 |
 | `BlockBytes` | 填充对齐的块大小 |
-| `EncryptThenMac` | MAC 覆盖的是密文（EtM）还是明文（MtE） |
+| `LengthInAlignment` | 4 字节长度字段算不算进对齐（MtE 算；EtM 与 AEAD 不算，§1.2） |
+| `IsEncrypted` | 提不提供保密性（握手期的空套件不提供） |
+
+**收包**时长度字段是否加密、哪些字节是 AAD、先验证还是先解密，各套件在自己的 `TryOpen` 里处理 —— 它们本来就知道；
+帧层只把缓冲交给套件。〔历史〕形状里曾经还有「长度是否加密」「AAD 字节数」「是否 EtM」「先读几个字节」四项，没有任何代码读，
+留着只是一份会和实现漂开的副本，已删（TR-D4）。下面实例里的「长度加密 / AAD」是描述，不是字段。
+
+〔决策〕**长度在被认证之前就要据它等数据、分配内存**，所以各套件拿到 `packet_length` 后先过同一道检查
+（`SshPacketFormat.ValidateLength`）：不超过上限、至少 5、按块对齐（MtE 连同长度字段）。曾经这三项在四个套件里各写一份。
 
 ### 2.1 三种形状的实例
 
@@ -111,7 +116,7 @@ byte[m]   mac                —— m = MAC 长度（AEAD 套件下为 0，tag �
 依据：OpenSSH `PROTOCOL.chacha20poly1305`。
 
 ```
-LengthIsEncrypted = true    AadBytes = 0   TagBytes = 16   BlockBytes = 8   EtM = —
+长度加密（K_1）   AAD 无   TagBytes = 16   BlockBytes = 8   LengthInAlignment = false
 ```
 
 **两把独立的密钥**（密钥材料共 64 字节，前 32 字节是 `K_2`，后 32 字节是 `K_1`）：
@@ -132,7 +137,7 @@ tag 覆盖**整个密文**（含那 4 字节加密过的长度）。
 依据：RFC 5647 + OpenSSH 的 nonce 约定。
 
 ```
-LengthIsEncrypted = false   AadBytes = 4   TagBytes = 16   BlockBytes = 16(仅对齐用)   EtM = —
+长度明文、作 AAD（4 字节）   TagBytes = 16   BlockBytes = 16(仅对齐用)   LengthInAlignment = false
 ```
 
 - 长度字段是**明文**，同时作为 AAD 参与 tag 计算。
@@ -146,8 +151,8 @@ LengthIsEncrypted = false   AadBytes = 4   TagBytes = 16   BlockBytes = 16(仅�
 #### ③ `aes*-ctr` + 独立 MAC
 
 ```
-LengthIsEncrypted = true(CTR 加密长度)   AadBytes = 0
-TagBytes = MAC 长度   BlockBytes = 16   EtM = 由 MAC 算法名决定
+MtE：长度加密（CTR）   EtM：长度明文   AAD 无
+TagBytes = MAC 长度   BlockBytes = 16   LengthInAlignment = MtE 为 true、EtM 为 false
 ```
 
 CBC 在分帧上也是这个形状，但本库不实现它（00 §6.3）。
@@ -162,9 +167,8 @@ CBC 在分帧上也是这个形状，但本库不实现它（00 §6.3）。
 〔决策〕**EtM 排在 MtE 之前。** 理由：MtE 要求先解密不可信数据才能验证，
 本质上是一个解密预言机；EtM 没有这个问题。这也是 OpenSSH 的默认顺序。
 
-〔注意〕EtM 下**长度字段是明文**（尽管加密算法是 CTR），
-这与上表的 `LengthIsEncrypted = true` 冲突 —— 因此 `CipherSuiteShape` 里
-这个标志由「加密算法 + MAC 算法」的**组合**决定，不是加密算法单独决定。
+〔注意〕EtM 下**长度字段是明文**（尽管加密算法是 CTR），而且不进对齐 —— 所以 `LengthInAlignment` 与收包流程
+由「加密算法 + MAC 算法」的**组合**决定，不是加密算法单独决定。
 实现时这是 `ISshCipherSuite` 组装函数的职责，不是两个独立枚举的笛卡尔积。
 
 ### 2.2 握手期的「空套件」
@@ -186,13 +190,9 @@ sequenceDiagram
 
     F->>P: ReadAsync()
     P-->>F: ReadOnlySequence<byte>（可能不足一帧）
-    F->>C: Shape
-    alt LengthIsEncrypted
-        F->>C: DecryptLength(前 4 字节, 序号)
-    else
-        F->>F: 直接读前 4 字节
-    end
-    F->>F: 校验 packet_length 上限
+    F->>C: TryOpen(缓冲, 序号)
+    C->>C: 读出 packet_length（长度加密的套件先解出它）
+    C->>C: ValidateLength：上限、至少 5、按块对齐
     alt 数据不足整帧
         F->>P: AdvanceTo(start, examined=end) —— 不消费，等更多数据
         Note over F,P: 回到 ReadAsync

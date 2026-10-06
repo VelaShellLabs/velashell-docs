@@ -94,16 +94,21 @@ Each direction maintains its own `uint32` sequence number:
 
 ## 2 The "shape" of a cipher suite
 
-Different suites differ in **framing** along only four dimensions. Extracting them as data (`CipherSuiteShape`)
-spares the framing layer from writing a "how many bytes to read first" branch for every algorithm.
+Suites differ in **sending** along only a few dimensions; extracting them as data (`CipherSuiteShape`) spares the padding code from being written once per algorithm:
 
 | Dimension | Meaning |
 | --- | --- |
-| `LengthIsEncrypted` | Whether the length field itself is encrypted (decides whether the first 4 bytes can be read directly) |
-| `AadBytes` | Number of prefix bytes that take part in integrity computation but are not encrypted |
 | `TagBytes` | Length of the AEAD tag or MAC |
 | `BlockBytes` | Block size used for padding alignment |
-| `EncryptThenMac` | Whether the MAC covers the ciphertext (EtM) or the plaintext (MtE) |
+| `LengthInAlignment` | Whether the 4-byte length field counts toward alignment (MtE yes; EtM and AEAD no, §1.2) |
+| `IsEncrypted` | Whether the suite provides confidentiality (the handshake's null suite does not) |
+
+When **receiving**, whether the length field is encrypted, which bytes are AAD, and whether to verify or decrypt first are handled by each suite in its own `TryOpen` —— it knows these anyway;
+the framing layer just hands the buffer to the suite. 〔History〕The shape used to have four more fields ("is the length encrypted", "AAD bytes", "is it EtM", "how many bytes to read first") that no code read;
+they were only a copy that would drift from the implementation and have been removed (TR-D4). In the instances below, "length encrypted / AAD" is description, not fields.
+
+〔Decision〕**The length has to be acted on (waited for, allocated against) before it is authenticated**, so every suite runs the same check on `packet_length` first
+(`SshPacketFormat.ValidateLength`): not above the limit, at least 5, aligned to the block (together with the length field under MtE). These three checks used to be written separately in four suites.
 
 ### 2.1 Instances of the three shapes
 
@@ -112,7 +117,7 @@ spares the framing layer from writing a "how many bytes to read first" branch fo
 Basis: OpenSSH `PROTOCOL.chacha20poly1305`.
 
 ```
-LengthIsEncrypted = true    AadBytes = 0   TagBytes = 16   BlockBytes = 8   EtM = —
+length encrypted (K_1)   no AAD   TagBytes = 16   BlockBytes = 8   LengthInAlignment = false
 ```
 
 **Two independent keys** (64 bytes of key material in total; the first 32 bytes are `K_2`, the last 32 bytes are `K_1`):
@@ -133,7 +138,7 @@ The tag covers **the entire ciphertext** (including the 4 bytes of encrypted len
 Basis: RFC 5647 + OpenSSH's nonce convention.
 
 ```
-LengthIsEncrypted = false   AadBytes = 4   TagBytes = 16   BlockBytes = 16(alignment only)   EtM = —
+length in plaintext, as AAD (4 bytes)   TagBytes = 16   BlockBytes = 16(alignment only)   LengthInAlignment = false
 ```
 
 - The length field is **plaintext**, and also takes part in tag computation as AAD.
@@ -147,8 +152,8 @@ LengthIsEncrypted = false   AadBytes = 4   TagBytes = 16   BlockBytes = 16(align
 #### ③ `aes*-ctr` + separate MAC
 
 ```
-LengthIsEncrypted = true(CTR encrypts the length)   AadBytes = 0
-TagBytes = MAC length   BlockBytes = 16   EtM = determined by the MAC algorithm name
+MtE: length encrypted (CTR)   EtM: length in plaintext   no AAD
+TagBytes = MAC length   BlockBytes = 16   LengthInAlignment = true for MtE, false for EtM
 ```
 
 CBC has this same shape in framing terms, but this library does not implement it (00 §6.3).
@@ -163,9 +168,8 @@ Two MAC orders:
 〔Decision〕**EtM is ordered before MtE.** Rationale: MtE requires decrypting untrusted data before it can be verified,
 which is essentially a decryption oracle; EtM does not have this problem. This is also OpenSSH's default order.
 
-〔Note〕Under EtM **the length field is plaintext** (even though the encryption algorithm is CTR),
-which conflicts with `LengthIsEncrypted = true` in the block above —— therefore in `CipherSuiteShape`
-this flag is determined by the **combination** of "encryption algorithm + MAC algorithm", not by the encryption algorithm alone.
+〔Note〕Under EtM **the length field is plaintext** (even though the encryption algorithm is CTR) and is not part of alignment —— so `LengthInAlignment` and the receive flow
+are determined by the **combination** of "encryption algorithm + MAC algorithm", not by the encryption algorithm alone.
 In the implementation this is the responsibility of the `ISshCipherSuite` assembly function, not a Cartesian product of two independent enums.
 
 ### 2.2 The "null suite" during the handshake
@@ -187,13 +191,9 @@ sequenceDiagram
 
     F->>P: ReadAsync()
     P-->>F: ReadOnlySequence<byte> (possibly less than one frame)
-    F->>C: Shape
-    alt LengthIsEncrypted
-        F->>C: DecryptLength(first 4 bytes, sequence number)
-    else
-        F->>F: Read the first 4 bytes directly
-    end
-    F->>F: Validate packet_length upper limit
+    F->>C: TryOpen(buffer, sequence number)
+    C->>C: Read packet_length (suites with an encrypted length decrypt it first)
+    C->>C: ValidateLength: limit, at least 5, block alignment
     alt Not enough data for a whole frame
         F->>P: AdvanceTo(start, examined=end) —— consume nothing, wait for more data
         Note over F,P: Back to ReadAsync
