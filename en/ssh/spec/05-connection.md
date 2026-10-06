@@ -434,7 +434,9 @@ end:      byte 0 (TTY_OP_END)
 - Opcodes 1–159 carry a `uint32` argument; 160–255 are reserved (stop parsing upon an unknown one).
 - 〔Decision〕The opcode table lives in `Channels/SshTerminalModeOpcode.cs`;
   common ones (`VINTR`=1, `VERASE`=3, `ECHO`=53, `ICRNL`=36, `ONLCR`=72,
-  `IUTF8`=42, `ISPEED`=128, `OSPEED`=129) get named members, the rest may be passed as raw values.
+  `IUTF8`=42, `ISPEED`=128, `OSPEED`=129) get named members, the rest may be passed as raw values — cast to the enum (`(SshTerminalModeOpcode)n`;
+  the enum's underlying type is `byte`). `SshTerminalModes.With` has only this one entry point: there used to be a second overload taking a raw `byte` that did the same thing,
+  and since the literal `0` converts implicitly to both, `With(0, …)` did not even compile. 0 (the end marker) and 160–255 throw when set.
 - It **must** end with `TTY_OP_END` (0). If this byte is missing, OpenSSH rejects the entire `pty-req`.
 
 ### 5.4 Requests we receive (server → client)

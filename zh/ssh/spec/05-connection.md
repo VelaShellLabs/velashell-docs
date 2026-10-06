@@ -432,7 +432,9 @@ CLOSE 发出、账本关掉、在途的请求以「没成」结算，通道号�
 - opcode 1–159 带 `uint32` 参数；160–255 保留（遇到未知的直接停止解析）。
 - 〔决策〕opcode 表放在 `Channels/SshTerminalModeOpcode.cs`，
   常用的（`VINTR`=1、`VERASE`=3、`ECHO`=53、`ICRNL`=36、`ONLCR`=72、
-  `IUTF8`=42、`ISPEED`=128、`OSPEED`=129）给具名成员，其余允许传裸数值。
+  `IUTF8`=42、`ISPEED`=128、`OSPEED`=129）给具名成员，其余允许传裸数值 —— 强转成枚举即可（`(SshTerminalModeOpcode)n`，
+  枚举的底层类型就是 `byte`）。`SshTerminalModes.With` 只有这一个入口：曾经另有一个收裸 `byte` 的重载做同一件事，
+  字面量 `0` 两边都能隐式转换，`With(0, …)` 直接编译不过。0（结束标记）与 160–255 在设值时就抛。
 - **必须**以 `TTY_OP_END`（0）结尾。漏掉这个字节，OpenSSH 会拒绝整个 `pty-req`。
 
 ### 5.4 我们会收的请求（服务端 → 客户端）
