@@ -403,25 +403,34 @@ interface IPacketTap
     void OnPacket(in PacketTapRecord record);
 }
 
-readonly struct PacketTapRecord
+readonly ref struct PacketTapRecord
 {
     PacketDirection Direction;     // Inbound / Outbound
     byte            MessageNumber;
-    int             Length;        // payload length
+    int             Length;        // payload length (including the message number)
     uint            SequenceNumber;
-    uint?           ChannelNumber; // only for channel messages
+    uint?           ChannelNumber; // only for channel messages (91–100)
     ReadOnlySpan<byte> Payload;    // **empty by default**, see below
 }
 ```
 
+Hooked up through `SshConnectionOptions.PacketTap`. Each hop on a jump chain is its own connection; to watch a hop, set it in that hop's connection options.
+
 **Three hard rules**:
 
-1. **Disabled by default, and zero-overhead.** When the field is `null`, the entire call is eliminated by the JIT.
-2. **The payload is not provided by default.** Providing it requires explicitly setting `TapOptions.IncludePayload = true`,
+1. **Disabled by default.** When `PacketTap` is `null` (the default), the send and receive paths pay one null check.
+2. **The payload is not provided by default.** Providing it requires explicitly setting `SshConnectionOptions.PacketTapIncludesPayload = true`,
    and that option's documentation **must** state that it exposes passwords, keys and file contents.
-3. **Payloads from the authentication phase are never provided**, even with `IncludePayload = true`.
+3. **Payloads of authentication messages are never provided**, even with `PacketTapIncludesPayload = true`: for messages numbered 50–79
+   (the range [RFC 4252](https://www.rfc-editor.org/rfc/rfc4252) reserves for the user authentication protocol, keyboard-interactive prompts and answers included)
+   the tap sees metadata only.
    〔Decision〕There is no switch for this — no troubleshooting scenario is worth logging a password,
    and if a switch exists, someone will certainly turn it on in production.
+
+〔Implementation〕The tap sits at the two points where the framing layer sends and receives: inbound packets after decryption and decompression, outbound ones before compression and encryption — the tap sees the plaintext payload layer,
+and the sequence number is that packet's number in its direction (reset by every `NEWKEYS` under strict KEX, see [`03-key-exchange.md`](03-key-exchange.md) §6).
+`Payload` borrows the transport's buffer and is only valid for the duration of that `OnPacket` call (hence a `ref struct`); copy it to keep it.
+The callback runs on the send/receive loop, so it must be fast and must not block; exceptions it throws are swallowed — the tap is user code, and its failures should not take the connection down.
 
 Uses: connection diagnostics panel, protocol-level troubleshooting, record and replay.
 

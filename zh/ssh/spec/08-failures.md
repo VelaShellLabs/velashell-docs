@@ -401,25 +401,34 @@ interface IPacketTap
     void OnPacket(in PacketTapRecord record);
 }
 
-readonly struct PacketTapRecord
+readonly ref struct PacketTapRecord
 {
     PacketDirection Direction;     // Inbound / Outbound
     byte            MessageNumber;
-    int             Length;        // 载荷长度
+    int             Length;        // 载荷长度（含消息编号）
     uint            SequenceNumber;
-    uint?           ChannelNumber; // 通道消息才有
+    uint?           ChannelNumber; // 通道消息（91–100）才有
     ReadOnlySpan<byte> Payload;    // **默认为空**，见下
 }
 ```
 
+挂法：`SshConnectionOptions.PacketTap`。跳板链上每一跳是各自的连接，要看哪一跳就在那一跳的连接参数里设。
+
 **三条硬规则**：
 
-1. **默认不启用，且零开销。** 字段为 `null` 时整段调用被 JIT 消掉。
-2. **载荷默认不给。** 要给必须显式设 `TapOptions.IncludePayload = true`，
+1. **默认不启用。** `PacketTap` 为 `null`（默认）时收发路径上只多一次判空。
+2. **载荷默认不给。** 要给必须显式设 `SshConnectionOptions.PacketTapIncludesPayload = true`，
    且该选项的文档里**必须**写明它会带出密码、密钥与文件内容。
-3. **认证阶段的载荷永远不给**，即使 `IncludePayload = true`。
+3. **认证报文的载荷永远不给**，即使 `PacketTapIncludesPayload = true`：消息编号落在 50–79
+   （[RFC 4252](https://www.rfc-editor.org/rfc/rfc4252) 给用户认证协议留的段，含键盘交互的提问与回答）的报文，
+   旁路只看得到元信息。
    〔决策〕这一条不提供开关 —— 没有任何排错场景值得把密码打进日志，
    而提供了开关就一定会有人在生产上打开它。
+
+〔实现〕挂在帧层收发的两个点上：收到的在解密、解压之后，发出的在压缩、加密之前 —— 旁路看到的是明文载荷层，
+序号是该方向上这个报文的序号（严格 KEX 下每次 `NEWKEYS` 归零，见 [`03-key-exchange.md`](03-key-exchange.md) §6）。
+`Payload` 借的是传输的缓冲，只在这次 `OnPacket` 调用期间有效（所以记录是 `ref struct`），要留就复制。
+回调跑在收发循环上，必须很快、不能阻塞；它抛的异常被吞掉 —— 旁路是使用者的代码，它出错不该让连接断开。
 
 用途：连接诊断面板、协议级排错、录制回放。
 
