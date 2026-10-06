@@ -518,7 +518,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     {
         // Display = X11Display.Parse(":0"),   // 默认读 DISPLAY
         IsTrusted = false,                      // 默认：对应 ssh -X
-        Timeout = TimeSpan.FromMinutes(20),     // Zero = 不过期
+        Timeout = TimeSpan.FromMinutes(20),     // Timeout.InfiniteTimeSpan = 不过期
     },
 }, ct);
 
@@ -541,7 +541,7 @@ Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} �
    Windows 上通常两者都没有 —— 那里只能用 `IsTrusted = true`，
    但要清楚那等于把本机显示完全交给远端。
 3. **`Timeout` 两种模式都生效**（OpenSSH 只管非受信）。
-   受信模式恰恰更危险，却反而没期限，说不通。长会话显式设 `TimeSpan.Zero`。
+   受信模式恰恰更危险，却反而没期限，说不通。长会话显式设 `Timeout.InfiniteTimeSpan`（设 0 或负数当场抛）。
 
 服务端那边需要 `sshd_config` 里 `X11Forwarding yes` 且装了 `xauth`；
 没有的话请求会被拒，异常消息里直接写着这两条。

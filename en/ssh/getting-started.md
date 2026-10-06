@@ -520,7 +520,7 @@ await using SshShell shell = await conn.OpenShellAsync(new SshShellOptions
     {
         // Display = X11Display.Parse(":0"),   // reads DISPLAY by default
         IsTrusted = false,                      // default: corresponds to ssh -X
-        Timeout = TimeSpan.FromMinutes(20),     // Zero = never expires
+        Timeout = TimeSpan.FromMinutes(20),     // Timeout.InfiniteTimeSpan = never expires
     },
 }, ct);
 
@@ -543,7 +543,7 @@ Three things worth knowing:
    Windows usually has neither — there you can only use `IsTrusted = true`,
    but be clear that this amounts to handing the local display entirely to the remote.
 3. **`Timeout` applies in both modes** (OpenSSH only applies it to untrusted).
-   Trusted mode is precisely the more dangerous one, so having no time limit there makes no sense. For long sessions, set `TimeSpan.Zero` explicitly.
+   Trusted mode is precisely the more dangerous one, so having no time limit there makes no sense. For long sessions, set `Timeout.InfiniteTimeSpan` explicitly (0 or a negative value throws immediately).
 
 On the server side, `X11Forwarding yes` in `sshd_config` and an installed `xauth` are required;
 without them the request is rejected, and the exception message states these two conditions directly.

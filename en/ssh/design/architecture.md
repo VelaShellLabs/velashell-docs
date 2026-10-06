@@ -1931,7 +1931,7 @@ OpenSSH's `ForwardX11Timeout` only applies to untrusted mode. **Ours applies to 
 
 Reason: "an expiry that only takes effect in one of the modes" is an API that trips people up —
 and trusted mode is precisely the far more dangerous one, yet it would have no expiry at all, which makes no sense.
-For long sessions that need it indefinitely, set `Timeout = TimeSpan.Zero` explicitly.
+For long sessions that need it indefinitely, set `Timeout = Timeout.InfiniteTimeSpan` explicitly ("no time limit" has only this one spelling across the library; this used to be `TimeSpan.Zero`).
 
 This came up while writing the cases: `过期之后不再接受新的x11通道` ("no new x11 channels accepted after expiry") failed in trusted mode,
 and only on looking into it did I realize that "copying OpenSSH" had copied a counterintuitive behavior here.

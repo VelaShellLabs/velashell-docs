@@ -897,16 +897,16 @@ the user's own local X programs can no longer connect to their own display.
 a remote display as `host:N`, and a macOS launchd one as the full socket path — if only `:N` were left,
 `xauth` would look up (or generate) the entry for a different display.
 〔Decision〕Forwarding has a **validity period** (default 20 minutes, corresponding to `ForwardX11Timeout` in `ssh_config`); after it expires, new `x11` channels are refused,
-while existing ones are unaffected; 0 means valid for the whole connection.
+while existing ones are unaffected; no expiry (`Timeout.InfiniteTimeSpan`, written as 0 in `ssh_config`) means valid for the whole connection, and 0 or a negative value throws when set.
 〔Intentional difference from OpenSSH〕In OpenSSH `ForwardX11Timeout` only governs untrusted mode; we apply it to **both modes** —
 trusted mode is by far the more dangerous one, and it makes no sense for it alone to have no time limit.
 
-〔Decision〕**The `timeout` given to `xauth` is our validity period plus 60 seconds; when the validity period is 0, pass 0.**
+〔Decision〕**The `timeout` given to `xauth` is our validity period plus 60 seconds; with no expiry, pass 0.**
 The X SECURITY extension specifies that a restricted authorization is purged by the X server once it has spent `timeout` seconds in the state of
 "no connection is using it", and that 0 means it never expires (the default when omitted is 60 seconds). The two sides keep separate clocks: the X server counts from
 the moment of generation, we count from the forwarding request — with equal values there is an edge case where we have just accepted an `x11` channel and the X server
 has just purged the authorization, so that connection is refused by the X server. The margin guarantees the X server side always ends later than ours.
-When the validity period is 0, any concrete number of seconds would make the X server purge the authorization after being idle that long while we still accept new connections —
+With no expiry, any concrete number of seconds would make the X server purge the authorization after being idle that long while we still accept new connections —
 so neither side has a time limit.
 
 ### 7.5.8 What to do on failure
