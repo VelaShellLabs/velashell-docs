@@ -440,6 +440,8 @@ There used to be no such signal and the host could only check "does the object s
 that session's file panel stayed broken until the whole SSH connection reconnected.
 
 〔Decision〕**Stopping creates no unobserved task exceptions.** A request already abandoned (its waiter cancelled) gets no exception when the pipeline stops; when abandonment and the fault race, the abandoning side observes the fault.
+A request that the stop catches before it was sent (queued on the send lock) is abandoned too: the stop has already set the fault on it, and the "not sent" path used to withdraw it from the ledger without observing it.
+The same goes for the task waiting for `VERSION` during the handshake: the pipeline stops only after the handshake timed out, when its waiter is long gone, so the fault is observed right after it is set.
 When an in-flight write of a file stream fails, the error is recorded on the stream (later writes and `FlushAsync` / closing report an interruption with the resume point) and the write task itself does not end faulted.
 Exceptions nobody looks at raise `UnobservedTaskException` at GC time, which the host writes to its crash log — one disconnect made dozens of writes "crash" at once, filling the crash log with records that were not crashes.
 
