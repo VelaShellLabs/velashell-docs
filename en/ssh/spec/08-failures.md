@@ -47,8 +47,8 @@ showing the same sentence twice, with the second copy bypassing the cleaning.
 ```
 SshException                          Abstract base; carries Reason / Phase / IsRetryable
 ├── SshConnectException               Connection setup (dialing, version, negotiation, host key) — carries Hops
-│   └── SshNegotiationException       Algorithm negotiation failed — carries both sides' lists
-├── SshKeyExchangeException           Key exchange computation failed (invalid public value from the peer)
+│   ├── SshNegotiationException       Algorithm negotiation failed — carries both sides' lists
+│   └── SshKeyExchangeException       Key exchange computation failed (invalid public value from the peer)
 ├── SshAuthenticationException        Authentication failed — carries per-method attempt records
 ├── SshProtocolException              Peer violated the protocol
 ├── SshConnectionClosedException      Connection gone (closed by peer / keep-alive timeout / DISCONNECT received / aborted locally / host key changed on rekey)
@@ -105,9 +105,12 @@ A frame with an empty payload is rejected at the frame layer (spec/01 §5) inste
 and the upper layer's reconnect policy should apply only to the latter. Put them in the same inheritance chain,
 and a caller's `catch (SshConnectionClosedException)` would swallow the former too.
 
-〔Decision〕**`SshPublicKeyException` and `SshKeyExchangeException` both derive from `SshException`.**
+〔Decision〕**`SshPublicKeyException` and `SshKeyExchangeException` are both under `SshException`.**
 Both used to derive directly from `Exception`: callers using `catch (SshException)` as the catch-all for library failures missed them, and the host's exception translation did not recognize them;
 `SshKeyExchangeException` also leaked to callers as-is during connection setup.
+〔Decision〕**`SshKeyExchangeException` derives from `SshConnectException`**, on the same level as `SshNegotiationException`: it is a handshake-phase failure,
+and getting-started says handshake-phase failures are `SshConnectException`. It used to derive directly from `SshException`, so callers that branch on that type (the host's exception translation)
+sent it down the fallback branch and a connection failure was treated as a generic error. A failure during re-keying is also this exception (the session goes down with it), just like a negotiation failure during re-keying.
 `SshPublicKeyException` has `Phase` `None` (see above); it used to have `KeyExchange`, a phase that does not hold when reading a local `.pub`.
 `SshKeyExchangeException` has `Reason` `ProtocolError`: what it reports is almost always an invalid public value from the peer (wrong length, not on the curve, a weak value);
 the "algorithm not implemented" kind is already stopped before connecting (`SshConnection.ConnectAsync` checks the algorithm lists first).

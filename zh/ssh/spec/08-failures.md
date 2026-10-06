@@ -45,8 +45,8 @@
 ```
 SshException                          抽象基类；带 Reason / Phase / IsRetryable
 ├── SshConnectException               建连阶段（拨号、版本、协商、主机密钥）—— 带 Hops
-│   └── SshNegotiationException       算法协商失败 —— 带双方名单
-├── SshKeyExchangeException           密钥交换的计算失败（对端公开值不合法）
+│   ├── SshNegotiationException       算法协商失败 —— 带双方名单
+│   └── SshKeyExchangeException       密钥交换的计算失败（对端公开值不合法）
 ├── SshAuthenticationException        认证失败 —— 带逐方法尝试记录
 ├── SshProtocolException              对端违反协议
 ├── SshConnectionClosedException      连接已断（对端关闭 / 保活判死 / 收到 DISCONNECT / 本端中止 / 重协商时换了主机密钥）
@@ -103,9 +103,12 @@ exec / pty-req / shell 被拒报成 `ChannelOpenFailed`（通道其实开成功�
 上层的重连策略只该对后者生效。把它们放进同一条继承链，
 调用方 `catch (SshConnectionClosedException)` 就会把前者也吞进去。
 
-〔决策〕**`SshPublicKeyException` 与 `SshKeyExchangeException` 都派生自 `SshException`。**
+〔决策〕**`SshPublicKeyException` 与 `SshKeyExchangeException` 都在 `SshException` 之下。**
 两者都曾经直接派生自 `Exception`：调用方用 `catch (SshException)` 兜库的失败时漏掉它们，宿主的异常翻译也认不出；
 `SshKeyExchangeException` 在建连时还会原样漏给调用方。
+〔决策〕**`SshKeyExchangeException` 派生自 `SshConnectException`**，与 `SshNegotiationException` 同一层：它是握手阶段的失败，
+而 getting-started 说握手阶段的失败是 `SshConnectException`。曾经直接派生自 `SshException`，按那个类型分流的调用方（宿主的异常翻译）
+把它落进兜底分支，建连失败被当成一般错误。重协商时失败也是它（会话随之断开），与重协商时协商失败一样。
 `SshPublicKeyException` 的 `Phase` 记 `None`（见上一段）；它曾经记 `KeyExchange`，读本地 `.pub` 时那个阶段并不成立。
 `SshKeyExchangeException` 的 `Reason` 记 `ProtocolError`：它报的几乎总是对端给的公开值不合法（长度不对、不在曲线上、弱值）；
 「算法没实现」那一类在连接之前就被挡住了（`SshConnection.ConnectAsync` 先核对算法清单）。
