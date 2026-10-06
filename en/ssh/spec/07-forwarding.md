@@ -403,6 +403,10 @@ Also published through `System.Diagnostics.Metrics`:
 as a tag, the number of series in a time-series database would grow with every forward ever opened and never be reclaimed. For the traffic and connections of one particular forward, use the forwarder's own
 `Throughput` / `Connections` (§5.1). 〔History〕This table used to list a `bind` tag that the code never emitted.
 
+〔Decision〕**A forwarder reports why it stopped** (`PortForwarder.Completion`): when the connection ended, the connection's end reason (the same one as `SshConnection.Completion`);
+on local disposal, `Aborted` — whichever comes first; it completes successfully with the reason as its result. A forwarder stops only for these two things — a failure of a single connection raises `Error` and the forwarder keeps running.
+〔History〕There used to be none, so the host's tunnel panel had to watch the connection's end itself to turn "running" into a status with a reason.
+
 〔Decision〕**Provide both paths**: events for the desktop UI (which refreshes a panel in real time),
 Metrics for server scenarios (feeding OpenTelemetry). Picking only one would force users to rewrite the data plane themselves —
 which is exactly the 376 lines we set out to eliminate.
