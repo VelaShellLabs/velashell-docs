@@ -276,7 +276,7 @@ There are two reasons, and the second is a hard one:
 
 〔Important〕**The two streams share a single channel window** (RFC 4254 §5.2: `CHANNEL_EXTENDED_DATA` counts against the window too).
 Each pipe has its own buffer, but there is only one window: if one side is not read, once its data fills the window **the other side stalls too**.
-So either read both sides (`ReadToEndAsync` reads them concurrently) or set the stderr you do not care about to `Discard`.
+So either read both sides (concurrently; that is how `RunAsync` reads them) or set the stderr you do not care about to `Discard`.
 
 〔Decision〕**stderr can be explicitly discarded** (`SshChannelOptions.StderrMode = SshStderrMode.Discard`).
 In that case the library still receives packets as usual and **replenishes the window immediately**, but does not buffer — otherwise discarding would turn into a deadlock.
@@ -492,7 +492,7 @@ But the case "CLOSE received while there is still no exit status" **must** still
 in that case `ExitCode` is `null`, and the reason is carried in `SshChannelEvent.Closed`.
 
 〔Decision〕**The exit status is cached on the channel**, not kept only in the event stream: the event stream has a single reader, and once read it is gone. Once the channel has closed, `WaitAsync`
-returns the cached value — however many times it is called, whether after `ReadToEndAsync` or after the caller has read the events itself, the answer is the same. It used to be `null` on the second ask.
+returns the cached value — however many times it is called, whether after `RunAsync` has read the output or after the caller has read the events itself, the answer is the same. It used to be `null` on the second ask.
 〔Decision〕**`WaitAsync` does not read the event stream**; it waits on the channel's own close signal, and the event stream belongs to the caller (`ReadEventAsync`). It used to loop reading events until `Closed`,
 competing with the caller's own reader for the same single-reader stream — when both ran concurrently it was anyone's guess who got the exit status, and waiting first then reading found the events already consumed.
 

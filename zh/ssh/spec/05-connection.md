@@ -274,7 +274,7 @@ ValueTask<SshChannelEvent> ReadEventAsync(...)  // Eof / Closed / ExitStatus / E
 
 〔重要〕**两条流共用一个通道窗口**（RFC 4254 §5.2：`CHANNEL_EXTENDED_DATA` 同样计入窗口）。
 两条管道各有缓冲，但窗口只有一个：一边不读，那边的数据堆满窗口之后，**另一边也会停住**。
-所以要么两边都读（`ReadToEndAsync` 就是并发读两边的），要么把不关心的 stderr 设成 `Discard`。
+所以要么两边都读（并发读；`RunAsync` 就是这么读的），要么把不关心的 stderr 设成 `Discard`。
 
 〔决策〕**stderr 可以被显式丢弃**（`SshChannelOptions.StderrMode = SshStderrMode.Discard`）。
 此时库内部照常收包并**立即回补窗口**，但不缓冲 —— 否则丢弃就变成了死锁。
@@ -490,7 +490,7 @@ RFC 要求 `exit-status` 在 `CHANNEL_CLOSE` **之前**发。
 此时 `ExitCode` 为 `null`，并在 `SshChannelEvent.Closed` 里带上原因。
 
 〔决策〕**退出状态缓存在通道上**，不只活在事件流里：事件流是单读者的，读过一次就没了。`WaitAsync` 等到通道关闭之后
-按缓存的那一份交回 —— 调多少次、`ReadToEndAsync` 之后再问、调用方自己先读过事件，答案都一样。曾经读过一次再问就是 `null`。
+按缓存的那一份交回 —— 调多少次、`RunAsync` 读完输出之后再问、调用方自己先读过事件，答案都一样。曾经读过一次再问就是 `null`。
 〔决策〕**`WaitAsync` 不读事件流**，等的是通道自己的关闭信号；事件流归调用方（`ReadEventAsync`）。曾经它循环读事件直到 `Closed`，
 与调用方自己的读者抢同一条单读者流 —— 并发时谁拿到退出状态说不准，先等完再读的话事件已经被它读光了。
 
