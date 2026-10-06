@@ -408,6 +408,24 @@ a throwing `ConnectionOpened` subscriber used to stop that connection from relay
 Byte counts are accumulated **in the copy loop**, not at the channel layer — channel-layer byte counts include protocol overhead,
 whereas the panel should show application data volume.
 
+### 5.1 Live throughput, connection snapshots and rate limits
+
+| Member | Content |
+| --- | --- |
+| `PortForwarder.Throughput` | `ForwardThroughput(SentPerSecond, ReceivedPerSecond)`: the average over **the last three whole seconds** (application bytes / second), excluding the second in progress |
+| `PortForwarder.Connections` | A snapshot of the connections being relayed (ordered by id): `Id` (as in the connection events), `Source`, `Target`, `StartedAt`, and `BytesSent` / `BytesReceived` so far; removed when the connection ends |
+| `LocalPortForwardOptions.MaxBytesPerSecond` / `RemotePortForwardOptions.MaxBytesPerSecond` | At most this many application bytes per second in each direction; `null` (default) means unlimited, and a non-positive value throws when set |
+
+〔Decision〕**Throughput is an average over whole-second windows, not an instantaneous value.** An instantaneous value jumps with every chunk and is unreadable on a panel;
+excluding the second in progress costs one to two seconds of lag.
+
+〔Decision〕**Rate limits are per forwarder and per direction**: all connections of a forwarder share one token bucket (one per direction) ——
+"how much bandwidth this tunnel may take" belongs to the forwarder, not to a single connection; otherwise opening ten connections means ten times the rate.
+**A burst of one second's allowance** is allowed; after that the deficit is carried and waited off; after a pause the allowance refills, but never beyond one second's worth.
+
+〔Decision〕**Wait in the copy loop, before writing to the other side**: while waiting nothing more is read, the data stays in the read buffer, and backpressure flows back to the sender through the TCP window / channel window ——
+no extra buffer and no dropped data. Use: with several tunnels open over a slow link, one download cannot crowd out the interactive terminal.
+
 ---
 
 ## 6. The copy loop
