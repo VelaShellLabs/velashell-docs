@@ -354,7 +354,7 @@ sequenceDiagram
 | `ServerAliveInterval` / `ServerAliveCountMax` | 保活策略 |
 | `ConnectTimeout` | 连接超时（`SshConnectionOptions.ConnectTimeout`，§2.4）；每个跳板用它自己那台主机的配置 |
 | `UserKnownHostsFile` | 主机密钥策略改用该文件（写了多个路径时只用第一个；`~` 与 `%d` `%u` `%h` `%r` `%%` 照这台主机与用户展开，〔历史〕曾经 `%h` / `%r` 代入空串、所有主机挤进同一个文件）；`none` / `/dev/null` → **不读也不写**任何 `known_hosts`（`KnownHostsPolicy.WithoutFile`：每台主机都当成没见过，接受了也不记）。`StrictHostKeyChecking` 为 `ask` / 缺省且调用方给了策略时，这一项不起作用（见下一行） |
-| `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝 |
+| `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝。`AskUnknownHost` 只在「问」时交给策略：`yes` / `accept-new` 下不调用它（`spec/03` §5） |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。第一跳照它自己的 `ProxyJump` / `ProxyCommand` 到达，**之后的每一跳经前一跳到达，它们自己的 `ProxyJump` / `ProxyCommand` 不解析**（〔历史〕曾经先解析一遍再丢掉：白批准一次 `ProxyCommand`，用不上的链里有环也报错）；〔决策〕`ProxyJump` 只有它自己一跳（`Host *.corp` 带出来、跳板忘了写 `ProxyJump none`）当成直连，不报「链有环」。跳板拿到哪些调用方凭据见下 |
 | `ProxyCommand` | 代理命令拨号器，**要调用方批准才执行**（见下）；`none` 表示不用 |
 | `ForwardAgent` / `ForwardX11` / `ForwardX11Trusted` | 会话参数（shell / exec 的 agent 与 X11 转发），不是连接参数。由它们打开的转发按 `Continue` 请求（`07-forwarding.md` §7.5.8）：本机没有 agent / 显示、服务端拒绝时 shell 照常启动 |

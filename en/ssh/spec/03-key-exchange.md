@@ -495,6 +495,10 @@ The verification order in §5.3 gains two rules:
 - When a certificate algorithm is negotiated, `K_S` must be a certificate; when a plain algorithm is negotiated, it must not be — a mismatch is `HostKeyRejected`;
 - the RSA minimum length applies to **the key inside the certificate** (its type string is `ssh-rsa-cert-v01@openssh.com`, so comparing the type string to `ssh-rsa` would skip the check).
 
+〔Decision〕**An ask callback and "what to do with an unseen host" (`UnknownHost`) are either-or.** With an ask callback given (the constructor's `askUnknownHost`) and `UnknownHost`
+set to `Reject` / `AcceptAndPersist`, the callback would never be called — setting it throws `ArgumentException` instead of silently ignoring the callback; an undefined value throws
+`ArgumentOutOfRangeException`. Accordingly, the `ssh_config` path hands the caller's ask callback to the policy only when it asks (`spec/09` §7).
+
 **How `KnownHostsPolicy` decides** (in order; once a rule applies, later ones are not consulted):
 
 1. An `@revoked` line matching the host whose key is the key inside the certificate, the whole certificate, or the CA that signed it → `Revoked`.

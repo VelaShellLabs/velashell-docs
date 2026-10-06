@@ -494,6 +494,10 @@ ValueTask<SshHostKeyVerdict> EvaluateAsync(SshHostKeyContext context, Cancellati
 - 协商出证书算法时 `K_S` 必须是证书，协商出普通算法时 `K_S` 必须不是 —— 不符即 `HostKeyRejected`；
 - RSA 长度下限看的是**证书里那把钥**（它的类型串是 `ssh-rsa-cert-v01@openssh.com`，按类型串比 `ssh-rsa` 会让检查落空）。
 
+〔决策〕**询问回调与「没见过时怎么办」（`UnknownHost`）只能二选一。** 给了询问回调（构造函数的 `askUnknownHost`）又设成
+`Reject` / `AcceptAndPersist`，回调永远不会被调用 —— 设值时就抛 `ArgumentException`，不再静默忽略回调；不认识的取值抛
+`ArgumentOutOfRangeException`。`ssh_config` 那一路照此只在「问」的时候把调用方的询问回调交给策略（`spec/09` §7）。
+
 **`KnownHostsPolicy` 的裁决**（按顺序，前一条成立就不看后面）：
 
 1. 对上这台主机的 `@revoked` 行里，钥等于证书里那把钥、整张证书或签发它的 CA 公钥之一 → `Revoked`。

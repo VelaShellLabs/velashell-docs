@@ -1994,7 +1994,10 @@ the local display lives in the same process, connecting to a local port is only 
 lets the caller supply a connector: it is called once per `x11` channel for a duplex stream, and the setup message is written
 into it with the cookie replaced by `LocalCookie` (empty if none was given) (`spec/07` §7.5.9). **The fake-cookie check is
 unchanged** — that layer guards against the remote side. Trusted mode only: untrusted mode needs `xauth` to reach the local
-display and sign a restricted cookie, so setting both makes the request fail instead of silently falling back to trusted.
+display and sign a restricted cookie, so setting both is a configuration contradiction — the session entry points (`ExecuteAsync` / `OpenShellAsync`)
+throw `ArgumentException` before opening the channel, `ForwardFailureMode.Continue` does not swallow it, and nothing silently falls back to trusted
+(it used to be reported only when sending `x11-req`, as "forwarding did not come up"). Likewise, `AgentForwardOptions` takes only one of `AgentEndpoint`
+and `LocalConnector`; setting both throws (the endpoint used to be silently ignored).
 An unavailable connector side is treated as "local display unreachable". Three tests (relaying with cookie replacement,
 unavailable connector, combined with untrusted mode).
 
