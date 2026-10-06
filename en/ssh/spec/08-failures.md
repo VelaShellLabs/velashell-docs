@@ -353,24 +353,30 @@ It is not sent before the version exchange has completed (the peer may not even 
 
 ## 7. Metrics (`System.Diagnostics.Metrics`)
 
-〔Status〕**Only the forwarding set is implemented so far** (`velashell.ssh.forward.*`, Meter name `VelaShell.Ssh.Forwarding`, see [`07-forwarding.md`](07-forwarding.md) §5).
-The other instruments in the table below (connections, bytes, rekeys, channel windows, SFTP pipeline depth) **are not implemented yet**; they are the plan.
+Meter name: `VelaShell.Ssh` (`SshMetrics.MeterName`; the forwarding set has its own Meter `VelaShell.Ssh.Forwarding`, see [`07-forwarding.md`](07-forwarding.md) §5).
+Only the name is public; the instruments themselves are not — handing out writable counters would let anyone record into them. With no subscriber, each recording costs one check.
 
-Meter name: `VelaShell.Ssh`
+| Instrument | Type | Tags | When it records |
+| --- | --- | --- | --- |
+| `velashell.ssh.connections.active` | UpDownCounter | `host` | +1 when authentication completes, -1 when the connection ends (peer disconnect, failure, local dispose) |
+| `velashell.ssh.connect.duration` | Histogram (ms) | `host`, `outcome`, `phase` | Once per `ConnectAsync`: from dialing to authentication success or failure. `outcome` is `Success`, an `SshFailureReason` name, `Canceled` (the caller cancelled) or `CallbackFailed` (a user callback threw); `phase` is where it stopped (`Open` on success) |
+| `velashell.ssh.bytes` | Counter | `host`, `direction` | Every byte actually sent and received on the stream (identification string, packet headers, padding, MAC, after compression); matches `SshConnection.BytesSent` / `BytesReceived` |
+| `velashell.ssh.packets` | Counter | `host`, `direction` | Once per packet; matches `SshConnection.PacketsSent` / `PacketsReceived` |
+| `velashell.ssh.rekeys` | Counter | `host` | Once per completed rekey (matches `SshConnection.RekeyCount`) |
+| `velashell.ssh.channels.active` | UpDownCounter | `host`, `type` | +1 when the peer confirms (or we accept a channel the peer opened), -1 when the channel winds down |
+| `velashell.ssh.channel.window` | Histogram (bytes) | `host`, `type` | Actual values of the adaptive window: once when the channel opens, then again on every grow and shrink |
+| `velashell.ssh.sftp.inflight` | Histogram | `host` | Actual values of the pipeline depth: on every request sent, the number in flight at that moment (itself included) |
+| `velashell.ssh.forward.*` | See [`07-forwarding.md`](07-forwarding.md) §5 | | |
 
-| Instrument | Type | Tags |
-| --- | --- | --- |
-| `velashell.ssh.connections.active` | UpDownCounter | `host` |
-| `velashell.ssh.connect.duration` | Histogram (ms) | `host`, `outcome`, `phase` |
-| `velashell.ssh.bytes` | Counter | `host`, `direction` |
-| `velashell.ssh.packets` | Counter | `host`, `direction` |
-| `velashell.ssh.rekeys` | Counter | `host` |
-| `velashell.ssh.channels.active` | UpDownCounter | `host`, `type` |
-| `velashell.ssh.channel.window` | Histogram (bytes) | `host`, `type` — actual values of the adaptive window |
-| `velashell.ssh.sftp.inflight` | Histogram | `host` — actual values of the pipeline depth |
-| `velashell.ssh.forward.*` | See [`07-forwarding.md`](07-forwarding.md) §5 |
+`direction` is `sent` / `received` (as in the forwarding set). `type` only takes known channel types (`session`, `direct-tcpip`, `forwarded-tcpip`, `x11`,
+`auth-agent@openssh.com`, `direct-streamlocal@openssh.com`, `forwarded-streamlocal@openssh.com`); anything else is recorded as `other` —
+the type of a channel the peer opens is a string the peer chose, and taking it as-is would let the peer decide the tag cardinality.
 
-〔Decision〕**The `host` tag uses the "logical target", not the IP.** The final target on the jump chain is what the user recognizes.
+Live numbers for a single connection or channel do not need a metrics subscription; read the properties on the objects: `SshConnection.BytesSent` / `BytesReceived` / `PacketsSent` / `PacketsReceived`
+(on the wire), `SshChannel.BytesSent` / `BytesReceived` (application data: the data part of `CHANNEL_DATA` and `CHANNEL_EXTENDED_DATA`, no protocol overhead; received bytes count whether or not they were read).
+
+〔Decision〕**The `host` tag uses the "logical target", not the IP.** The final target on the jump chain is what the user recognizes: through jump hosts, every hop's connection
+(including the jump hop's `connect.duration` and `bytes`) is recorded under the final target. Connections built directly in tests, without `ConnectAsync`, record no metrics.
 
 〔Decision〕**Do not tag with key fingerprints, usernames and the like.** Tags go into a time-series database; cardinality explosion is one concern,
 and writing usernames into widely queryable metrics is another.

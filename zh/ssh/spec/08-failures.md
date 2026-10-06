@@ -351,24 +351,30 @@ bool                       PartialSuccessAchieved
 
 ## 七 度量（`System.Diagnostics.Metrics`）
 
-〔现状〕**目前只实现了转发的那一组**（`velashell.ssh.forward.*`，Meter 名 `VelaShell.Ssh.Forwarding`，见 [`07-forwarding.md`](07-forwarding.md) §5）。
-下表其余的仪表（连接、字节、重协商、通道窗口、SFTP 管线深度）**还没有实现**，是规划。
+Meter 名：`VelaShell.Ssh`（`SshMetrics.MeterName`；转发的那一组另有自己的 Meter `VelaShell.Ssh.Forwarding`，见 [`07-forwarding.md`](07-forwarding.md) §5）。
+对外只交出名字，仪表本身不公开 —— 交出可写的计数器等于让任何人都能往里记账；没有订阅者时每次记账只是一次判断。
 
-Meter 名：`VelaShell.Ssh`
+| 仪表 | 类型 | 标签 | 何时记 |
+| --- | --- | --- | --- |
+| `velashell.ssh.connections.active` | UpDownCounter | `host` | 认证完成 +1，连接结束（对端断开、出错、本端释放）-1 |
+| `velashell.ssh.connect.duration` | Histogram (ms) | `host`、`outcome`、`phase` | 每次 `ConnectAsync` 一笔：从拨号到认证完成或失败。`outcome` 是 `Success`、`SshFailureReason` 的名字、`Canceled`（调用方取消）或 `CallbackFailed`（使用者的回调自己抛了）；`phase` 是停在哪一步（成功为 `Open`） |
+| `velashell.ssh.bytes` | Counter | `host`、`direction` | 流上实际收发的全部字节（版本标识串、报文头、填充、MAC，压缩之后的），与 `SshConnection.BytesSent` / `BytesReceived` 一致 |
+| `velashell.ssh.packets` | Counter | `host`、`direction` | 每个报文一次，与 `SshConnection.PacketsSent` / `PacketsReceived` 一致 |
+| `velashell.ssh.rekeys` | Counter | `host` | 每完成一次重协商（与 `SshConnection.RekeyCount` 一致） |
+| `velashell.ssh.channels.active` | UpDownCounter | `host`、`type` | 对端确认（或我们接受对端开的）+1，通道收尾 -1 |
+| `velashell.ssh.channel.window` | Histogram (bytes) | `host`、`type` | 自适应窗口的实际取值：开通道时记一次，每扩、缩一次再记一次 |
+| `velashell.ssh.sftp.inflight` | Histogram | `host` | 管线深度的实际取值：每发一个请求记一次此刻的在途数（含它自己） |
+| `velashell.ssh.forward.*` | 见 [`07-forwarding.md`](07-forwarding.md) §5 | | |
 
-| 仪表 | 类型 | 标签 |
-| --- | --- | --- |
-| `velashell.ssh.connections.active` | UpDownCounter | `host` |
-| `velashell.ssh.connect.duration` | Histogram (ms) | `host`、`outcome`、`phase` |
-| `velashell.ssh.bytes` | Counter | `host`、`direction` |
-| `velashell.ssh.packets` | Counter | `host`、`direction` |
-| `velashell.ssh.rekeys` | Counter | `host` |
-| `velashell.ssh.channels.active` | UpDownCounter | `host`、`type` |
-| `velashell.ssh.channel.window` | Histogram (bytes) | `host`、`type` —— 自适应窗口的实际取值 |
-| `velashell.ssh.sftp.inflight` | Histogram | `host` —— 管线深度的实际取值 |
-| `velashell.ssh.forward.*` | 见 [`07-forwarding.md`](07-forwarding.md) §5 |
+`direction` 取 `sent` / `received`（与转发的那一组一致）。`type` 只取已知的通道类型（`session`、`direct-tcpip`、`forwarded-tcpip`、`x11`、
+`auth-agent@openssh.com`、`direct-streamlocal@openssh.com`、`forwarded-streamlocal@openssh.com`），别的一律记 `other` ——
+对端开过来的通道类型是对端给的字符串，照单全收就是让对端决定标签基数。
 
-〔决策〕**`host` 标签用「逻辑目标」而不是 IP。** 跳板链上的最终目标才是用户认识的东西。
+单个连接、单条通道的实时数字不必订阅度量，直接读对象上的属性：`SshConnection.BytesSent` / `BytesReceived` / `PacketsSent` / `PacketsReceived`
+（线上），`SshChannel.BytesSent` / `BytesReceived`（应用数据：`CHANNEL_DATA` 与 `CHANNEL_EXTENDED_DATA` 的数据段，不含协议开销；收到的读没读走都算）。
+
+〔决策〕**`host` 标签用「逻辑目标」而不是 IP。** 跳板链上的最终目标才是用户认识的东西：经跳板时，各跳的连接（含跳板那一跳的
+`connect.duration`、`bytes`）也记在最终目标的名下。测试里不经 `ConnectAsync` 直接建的连接不记度量。
 
 〔决策〕**不给密钥指纹、用户名之类打标签。** 标签会进时序数据库，基数爆炸是一方面，
 把用户名写进可被广泛查询的指标里是另一方面。
