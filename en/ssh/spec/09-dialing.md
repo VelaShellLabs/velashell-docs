@@ -45,7 +45,7 @@ If the target is an IP literal, send it as an IP; otherwise send it as a domain 
 
 | Field | Meaning |
 | --- | --- |
-| `Kind` | `Tcp` / `Socks5` / `HttpConnect` / `SshJump` / `Custom` |
+| `Kind` | `Tcp` / `Socks5` / `HttpConnect` / `SshJump` / `ProxyCommand` / `InMemory`; a dialer the caller implemented is always `Custom` |
 | `Target` | The endpoint this hop is trying to reach (`host:port`) |
 | `Succeeded` | Whether this hop succeeded |
 | `Elapsed` | Time spent on this hop |
@@ -53,6 +53,11 @@ If the target is an IP literal, send it as an IP; otherwise send it as a domain 
 
 The order is **nearest to farthest**: item 0 is the hop closest to the local machine.
 When an inner dialer fails, the outer dialer **preserves** the hop information given by the inner one **as-is**, and only appends its own after it (if it got as far as itself).
+
+〔Decision〕**`ISshTransportDialer` does not ask implementers to declare "what kind am I".** It used to have a public `Kind` member: an implementation that picks its route on every dial
+(direct this time, through a proxy next time — the host's proxy dialer works that way) cannot give a true value and could only record "the last one"; and the member was only read when the dialer served as a proxy's inner dialer (`via`).
+Now only the library's own dialers report a kind, and a dialer the caller implemented is always recorded as `Custom` in the hop information — the only answer that cannot be wrong.
+For the same reason, the host key decision material (`SshHostKeyContext`) dropped `HopKind`, which was never assigned and was always `Tcp`: trust is about the logical host, not how it was reached.
 
 Reason code conventions:
 
