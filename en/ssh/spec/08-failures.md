@@ -341,8 +341,9 @@ Whether to send it, and with which code:
 | When | Reason code |
 | --- | --- |
 | The connection is disposed normally (queued frames are flushed first, within a time limit; `DISCONNECT` goes last, so once it is out, everything before it is out too) | `BY_APPLICATION` (11) |
-| What the peer sent cannot be decoded or violates the protocol (during the handshake, authentication or the session; a failed integrity check at the frame layer is reported this way too, not as a separate `MAC_ERROR` — echoing check details back to the peer is a side channel) | `PROTOCOL_ERROR` (2) |
+| What the peer sent cannot be decoded or violates the protocol (during the handshake, authentication or the session; a failed integrity check at the frame layer is reported this way too, not as a separate `MAC_ERROR` — echoing check details back to the peer is a side channel; a peer public value failing its checks during key exchange is separate, see two rows down) | `PROTOCOL_ERROR` (2) |
 | Algorithm negotiation fails | `KEY_EXCHANGE_FAILED` (3) |
+| A peer public value fails its checks during key exchange (length, encoding, not on the curve, all-zero X25519, DH out of range, a non-prime GEX `p` or an out-of-range `g`, a hybrid method's total length; [03 §3.7.4](03-key-exchange.md)). The local reason is still `ProtocolError` | `KEY_EXCHANGE_FAILED` (3) |
 | The host key is rejected, fails verification, or changes during a rekey | `HOST_KEY_NOT_VERIFIABLE` (9) |
 | Authentication methods are exhausted (including a one-time code being required but not configured, and a required password change) | `NO_MORE_AUTH_METHODS_AVAILABLE` (14) |
 | The user cancelled authentication at a prompt (§2.1) | `AUTH_CANCELLED_BY_USER` (13) |

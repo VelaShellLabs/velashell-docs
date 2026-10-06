@@ -4,7 +4,8 @@
 > RFC 5656 (ECDH, NIST curves); RFC 8731 (curve25519-sha256); RFC 8268 (group14/16 + SHA-2);
 > RFC 4419 (group exchange); RFC 8308 (Extension Negotiation);
 > `kex-strict-*-v00@openssh.com` in OpenSSH `PROTOCOL` (Terrapin mitigation, CVE-2023-48795);
-> draft-kampanakis-curdle-ssh-pq-ke (ML-KEM hybrid); the sntrup761 hybrid in OpenSSH `PROTOCOL`.
+> RFC 10042 (ML-KEM hybrids: `mlkem768x25519-sha256` and the two NIST-curve ones; draft-kampanakis-curdle-ssh-pq-ke before publication);
+> FIPS 203 (ML-KEM); the sntrup761 hybrid in OpenSSH `PROTOCOL`.
 >
 > Corresponding implementation: `Crypto/` (L3) and `Session/` (the `KeyExchange` / `Rekeying` states of L4).
 >
@@ -274,6 +275,8 @@ Both names are sent, and they share one implementation.
 ### 3.6 Post-quantum hybrids: `mlkem768x25519-sha256` and `sntrup761x25519-sha512`
 
 Both have the same shape: **a KEM run in parallel with X25519**, with the shared secret being the hash of both results.
+The basis of `mlkem768x25519-sha256` is RFC 10042 §2.3.3 (draft-kampanakis-curdle-ssh-pq-ke before publication), which agrees with this section;
+the two other methods in the same RFC, which replace X25519 with a NIST curve, are in §3.7.
 
 | Method | KEM | Hash | Client sends | Server sends |
 | --- | --- | --- | --- | --- |
@@ -292,6 +295,185 @@ Both have the same shape: **a KEM run in parallel with X25519**, with the shared
   〔Decision〕**M1 does only `mlkem768x25519-sha256`**; sntrup761 is deferred to M5,
   because OpenSSH 9.9+ already ranks ML-KEM first, and sntrup761 is only for compatibility with 8.5–9.8.
 - `sntrup761x25519-sha512@openssh.com` is the old name of the same algorithm (used by OpenSSH < 9.9).
+
+### 3.7 FIPS-oriented post-quantum hybrids: `mlkem768nistp256-sha256` and `mlkem1024nistp384-sha384`
+
+> Basis: RFC 10042 §2.1–§2.5 (shape of the hybrid exchange, message numbers, method names, shared secret `K`, exchange hash), §3 (message size), §5 (fresh ephemeral keys for every exchange);
+> FIPS 203 Table 3 (ML-KEM sizes), §7.3 (decapsulation input checks), §3.3 (destruction of intermediate values);
+> RFC 5656 §4 and SEC 1 §2.3.3–§2.3.5, §3.2.2 (EC point encoding, fixed-length field element encoding, public key validation).
+>
+> **Implementation status (2026-10-06)**: specification first, **not implemented yet** (F12). The verification target and the checklist are in §3.7.7.
+
+The shape is exactly that of §3.6 —— **a KEM run in parallel with one elliptic-curve DH** —— except that the classical half is the NIST-curve ECDH of §3.3 instead of X25519.
+Both use only FIPS-approved primitives (ML-KEM, ECDH on P-256 / P-384, SHA-2): servers in FIPS mode, which offer neither X25519 nor sntrup761, reach post-quantum key exchange through them.
+
+| Method | KEM | Curve | Hash | Client sends `C_INIT` | Server sends `S_REPLY` | `K_CL` | `K` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `mlkem768nistp256-sha256` | ML-KEM-768 | P-256 | SHA-256 | `ek_pq ‖ Q_C`: 1184 + 65 = **1249** bytes | `ct_pq ‖ Q_S`: 1088 + 65 = **1153** bytes | 32 bytes | 32 bytes |
+| `mlkem1024nistp384-sha384` | ML-KEM-1024 | P-384 | SHA-384 | `ek_pq ‖ Q_C`: 1568 + 97 = **1665** bytes | `ct_pq ‖ Q_S`: 1568 + 97 = **1665** bytes | 48 bytes | 48 bytes |
+
+- `ek_pq` is the ML-KEM encapsulation key and `ct_pq` the ML-KEM ciphertext (sizes per FIPS 203 Table 3; the ML-KEM shared secret is always 32 bytes).
+- `Q_C` / `Q_S` are uncompressed EC points `0x04 ‖ X ‖ Y` (32-byte coordinates on P-256, 48-byte on P-384), encoded as in §3.3.
+
+#### 3.7.1 Messages
+
+The numbers are the 30 / 31 of §3.1; RFC 10042 calls them `SSH_MSG_KEX_HYBRID_INIT` / `SSH_MSG_KEX_HYBRID_REPLY`
+(OpenSSH's debug log still shows them as `SSH2_MSG_KEX_ECDH_INIT` / `SSH2_MSG_KEX_ECDH_REPLY` for these two methods —— it is the same pair of numbers).
+
+`SSH_MSG_KEX_HYBRID_INIT` (30, C → S)
+
+| # | Type | Field | Notes |
+| :-: | --- | --- | --- |
+| 1 | `byte` | 30 | |
+| 2 | `string` | `C_INIT` | `ek_pq` immediately followed by `Q_C`, **the two parts concatenated into one `string`** (not two). KEM first, EC point second |
+
+`SSH_MSG_KEX_HYBRID_REPLY` (31, S → C)
+
+| # | Type | Field | Notes |
+| :-: | --- | --- | --- |
+| 1 | `byte` | 31 | |
+| 2 | `string` | `K_S` | Server host public key blob (§5.1) |
+| 3 | `string` | `S_REPLY` | `ct_pq` immediately followed by `Q_S`, again one `string`, KEM first |
+| 4 | `string` | `signature` | Signature over `H` made with the host private key (§5.2) |
+
+The inputs of the exchange hash `H` are exactly the eight items of §4.1: item 6 is `string C_INIT`, item 7 is `string S_REPLY`, item 8 is `string K`, and `HASH` is the method's hash.
+
+#### 3.7.2 Shared secret `K`
+
+1. `K_PQ`: decapsulate `ct_pq` with the ML-KEM decapsulation key generated for this exchange, giving 32 bytes.
+2. `K_CL`: ECDH between our EC private key and `Q_S`; take the **X coordinate** of the shared point and encode it big-endian at a **fixed length** —— 32 bytes on P-256, 48 bytes on P-384,
+   **leading zeros kept** (the field-element-to-octet-string conversion of SEC 1 §2.3.5; RFC 10042 §2.4 phrases it as re-encoding the `mpint` that plain ECDH would produce as a fixed-length byte string).
+3. `K = HASH(K_PQ ‖ K_CL)`: **the KEM result first**, `HASH` being the method's hash. This gives 32 bytes (SHA-256) or 48 bytes (SHA-384).
+4. `K` is encoded as a **`string`** both in the exchange hash (§4.1 item 8) and in key derivation (§7) (a `uint32` length of 32 / 48 followed by the raw bytes), **not as an `mpint`**.
+
+〔Critical〕There are two "fixed lengths" here, each matching a probabilistic signature failure whose only symptom is "signature verification failed":
+
+- If `K_CL` has its leading zeros stripped the way an `mpint` would (§3.3 habits), or the X coordinate returned by the platform is short and not padded, it breaks only when the first byte of X is 0 —— about **1/256** of exchanges;
+- If `K` is encoded as an `mpint`, an extra `0x00` appears whenever the top bit is 1 —— about **1/2** of exchanges.
+
+〔Decision〕The X coordinate returned by the platform's ECDH primitive is always **right-aligned and left-padded with zeros** to the coordinate length before use; if it is still longer than the coordinate after stripping leading zeros, that is the library's own bug (`InvalidOperationException`), not the peer's fault.
+
+〔Note〕What can and cannot be reused from the neighbouring sections:
+
+| Item | §3.6 `mlkem768x25519-sha256` | §3.7 the two NIST-curve hybrids | §3.3 `ecdh-sha2-nistp*` |
+| --- | --- | --- | --- |
+| Message numbers and outer shape | 30 / 31, each public value one `string` | Same as left | Same as left |
+| Concatenation order | KEM first, classical second | **Same as left** | — |
+| Classical public key | 32-byte X25519 | Uncompressed point, 65 / 97 bytes | Uncompressed point, 65 / 97 / 133 bytes |
+| Classical validation | Length; result must not be all zeros | First byte `0x04`, coordinates less than p, on the curve (**the §3.3 checks, reused as is**) | Same as left |
+| How the classical result enters `K` | 32 bytes (X25519 output is fixed-length anyway) | X coordinate, **fixed 32 / 48 bytes, leading zeros kept** | The X coordinate **is `K` itself, as `mpint`** |
+| `K` | `HASH(K_PQ ‖ K_CL)`, as `string` | **Same as left** | X coordinate, as `mpint` |
+| Hash | SHA-256 | SHA-256 / **SHA-384** | SHA-256 / 384 / 512 |
+
+So the hybrid skeleton of §3.6 (concatenation, length check, computing `K` and encoding it as `string`) and the point encoding and curve validation of §3.3 can all be reused directly;
+what **cannot** be reused is the shared-secret output of §3.3 (an X coordinate meant to be encoded as `mpint`), nor the existing two-way hash choice of §3.6 (SHA-256, otherwise SHA-512) ——
+SHA-384 must be a branch of its own: falling into SHA-512 raises no error at all, it just makes every signature fail.
+
+#### 3.7.3 Order of checks after the client receives 31
+
+A step that fails stops everything after it:
+
+```mermaid
+flowchart TD
+    A[KEX_HYBRID_REPLY received] --> B{S_REPLY exactly<br/>1153 / 1665 bytes?}
+    B -->|no| X[KEX failure<br/>ProtocolError, DISCONNECT 3]
+    B -->|yes| C{first byte of Q_S == 0x04?}
+    C -->|no| X
+    C -->|yes| D{both coordinates less than p<br/>and on the curve? see §3.3}
+    D -->|no| X
+    D -->|yes| E[decapsulate ct_pq to K_PQ<br/>ECDH to K_CL, padded to fixed length]
+    E -->|platform primitive throws| X
+    E --> F[K = HASH K_PQ ‖ K_CL<br/>wipe K_PQ, K_CL and the concatenation buffer]
+    F --> G[compute H, verify signature, policy verdict, see §5.3]
+```
+
+1. **Total length**: the length of `S_REPLY` must equal exactly the sum of the method's `ct_pq` and `Q_S` (1153 / 1665). RFC 10042 §2.1 requires this check **before** decapsulation (against length-extension attempts).
+   This step is also the "ciphertext type check" of FIPS 203 §7.3: the point encoding has a fixed length (next item), so when the total is right, the ciphertext length is right too.
+2. **Point encoding**: the first byte of `Q_S` must be `0x04` (uncompressed).
+3. **Point on the curve**: per the 〔Decision〕 in §3.3 the library checks first (both coordinates less than p, and y² = x³ − 3x + b (mod p)), then hands the point to the platform for import.
+   P-256 / P-384 have cofactor 1, so "on the curve and not the point at infinity" is the full validation of SEC 1 §3.2.2; no multiplication by the order is needed.
+4. **Decapsulation**: 〔Decision〕the other two checks of FIPS 203 §7.3 (the decapsulation key type check and hash check) are not performed —— that key was generated by us in this very exchange and never left the process;
+   FIPS 203 explicitly lets the decapsulating party obtain the "has been checked" assurance by other means, and only the ciphertext check (step 1) is required on every execution.
+   ML-KEM decapsulation **cannot fail as such**: given a modified ciphertext it still returns a pseudo-random `K_PQ` (implicit rejection), so `K` differs from the server's,
+   which shows up as **signature verification failure** (§5.3 → `HostKeyRejected`). This is the expected behaviour, not an error to be detected separately; besides, `S_REPLY` itself is part of `H`, so a modified reply can never pass signature verification anyway.
+5. **ECDH and combination**: see §3.7.2. Any exception thrown by a platform primitive in steps 4 and 5 is treated as a KEX failure (caught broadly, as in §3.3: platforms throw different exception types).
+
+〔Decision〕**Only uncompressed points are sent and accepted.** RFC 10042 follows RFC 5656 in allowing point compression; we do not use it and do not accept it (a wrong total length, or a first byte of `0x02` / `0x03`, is rejected). Reasons:
+
+- RFC 10042 requires the total length to be checked against "the expected length for the method" before decapsulation —— that expected length is a single number only if the point encoding has a fixed length;
+- It is the same rule as §3.3 (`ecdh-sha2-*` has long accepted uncompressed points only, pinned down by a test);
+- 〔Interop〕AlmaLinux 10.2's OpenSSH 9.9p1 (with RHEL 10.2's downstream patch) sends uncompressed points for both methods: capturing the cleartext first exchange in a container,
+  its server's `S_REPLY` is 1153 / 1665 bytes with `0x04` as the byte after the ciphertext; its client's `C_INIT` is 1249 / 1665 bytes, likewise with `0x04` after `ek_pq`.
+  If a server that sends compressed points ever turns up, record which one and which version, then revisit.
+
+#### 3.7.4 How failures are reported
+
+| Situation | Local reason | `DISCONNECT` sent to the peer |
+| --- | --- | --- |
+| Wrong `S_REPLY` total length, `Q_S` not uncompressed, `Q_S` not on the curve, a platform primitive throws | `ProtocolError` (`SshKeyExchangeException`, `Phase = KeyExchange`; during a rekey the phase is `Rekeying`, see [`08-failures.md`](08-failures.md) §2.1) | `KEY_EXCHANGE_FAILED` (3) |
+| `ct_pq` modified (implicit rejection) → signature fails | `HostKeyRejected` | `HOST_KEY_NOT_VERIFIABLE` (9) |
+
+〔Decision〕**When a peer public value fails its checks during key exchange, the `DISCONNECT` reason code is `KEY_EXCHANGE_FAILED` (3), not `PROTOCOL_ERROR` (2).**
+RFC 10042 §2.1 makes it a MUST for the hybrid methods (a wrong length and a decapsulation failure must both disconnect with 3); RFC 8731 §3 makes it a SHOULD for curve25519.
+The rule **applies to every method**: every `SshKeyExchangeException` thrown in §3.2–§3.7 when a peer public value fails its checks (length, encoding, not on the curve, all-zero X25519, DH out of range, a non-prime GEX `p` or an out-of-range `g`) sends 3 ——
+RFC 4253 / 5656 / 4419 name no reason code, and one rule is easier to remember than a per-method table, and harder to miss. The local `SshFailureReason` does not change: it is still `ProtocolError` (the peer supplied an invalid value).
+The description text says something like "key exchange failed"; it must not borrow the negotiation failure's "no matching algorithms". 〔History〕Such failures used to send 2 across the board ([`08-failures.md`](08-failures.md) §6).
+
+#### 3.7.5 Ephemeral keys and platforms
+
+- 〔Decision〕**Every exchange generates a fresh ML-KEM key pair and a fresh ECDH key pair**, every rekey included (a MUST in RFC 10042 §5); they are destroyed when the exchange ends,
+  and the decapsulation key is never kept for the next one (FIPS 203 §3.3: intermediate values are destroyed as soon as they are no longer needed). `K_PQ`, `K_CL` and the concatenation buffer are wiped once `K` is computed.
+- 〔Decision〕ML-KEM is handled as in §3.6: through the BCL when `MLKem.IsSupported` (`MLKemAlgorithm.MLKem768` / `MLKemAlgorithm.MLKem1024`), otherwise falling back to BouncyCastle (`ml_kem_768` / `ml_kem_1024`).
+  The test that the BCL and BouncyCastle interoperate (one side generates, the other encapsulates) gets a 1024 case next to the 768 one. ECDH goes through the BCL's `ECDiffieHellman` (`nistP256` / `nistP384`), as in §3.3, available on every platform.
+  **Both names are always in the lists, regardless of platform**: one of the two paths is always available, so the KEXINIT is the same on every OS and the method agreed with a given server does not depend on the client's OS —— one variable fewer when diagnosing.
+- Message size: the largest `C_INIT` is 1665 bytes, and the reply plus host key and signature is still far below the 32768 / 35000 bytes RFC 4253 §6.1 requires to be supported; no special handling is needed (RFC 10042 §3).
+- Name constants: `SshAlgorithmNames.MlKem768Nistp256Sha256` (`mlkem768nistp256-sha256`) and `SshAlgorithmNames.MlKem1024Nistp384Sha384` (`mlkem1024nistp384-sha384`),
+  in the same style as the existing `MlKem768X25519Sha256` and `EcdhSha2Nistp256`; one row each in the `SshKeyExchangeFactory` table, and the algorithm catalog (00 §6.6) lists them as a result. All `internal`; no new public members.
+
+Where they go in the default list and in `SshAlgorithmSet.FipsApprovedOnly`, and why, is in [`00-overview.md`](00-overview.md) §6.1 and §6.6:
+both lists place them before the elliptic curves without post-quantum protection; in the default list they come after `mlkem768x25519-sha256` and before sntrup761; in both lists 768 / P-256 comes first.
+
+〔Interop〕Servers that implement these two (looked at in Docker on 2026-10-06):
+
+- **AlmaLinux 10.2** (a rebuild of RHEL 10.2), OpenSSH 9.9p1 with RHEL's downstream patch: both. The lists the system crypto policies give sshd (`/usr/share/crypto-policies/<policy>/opensshserver.txt` in the image):
+  DEFAULT is `mlkem768x25519-sha256`, `mlkem768nistp256-sha256`, `mlkem1024nistp384-sha384`, then curve25519, ECDH, DH (no sntrup761);
+  FIPS puts the two nistp hybrids first, then ECDH, `diffie-hellman-group-exchange-sha256` and the DH standard groups (no X25519 and no sntrup761); FUTURE keeps only the three ML-KEM hybrids.
+- **Upstream OpenSSH 10.6p1** (the Alpine edge package): `ssh -Q kex` lists `mlkem768nistp256-sha256` but not `mlkem1024nistp384-sha384`; neither the client's nor the server's default list contains it,
+  so it has to be added explicitly (`KexAlgorithms +mlkem768nistp256-sha256`). Its release notes do not mention it; `ssh -Q kex` is what counts.
+
+〔History〕Before F12 these two were not implemented: one wrong byte in the exchange hash also shows up only as "signature verification failed", and with no server to check the wire format against, an implementation could only vouch for itself ——
+which is why the FIPS preset of 00 §6.6 at first did not include them. On 2026-10-06 AlmaLinux 10.2 was found as a verification target and the draft had been published as RFC 10042, so this section was written.
+
+#### 3.7.6 Test vectors
+
+RFC 10042 gives no test vectors. The new rows of the §4.1 table are pinned down by two things: self-consistent vectors from the in-memory server side (`TestKexResponder` extended with these two methods),
+and the checks against a real server in §3.7.7. The server side **must independently** compute `K_CL` and `K` at fixed length and must not call the code under test —— otherwise both sides are wrong in the same way and the test still passes.
+
+#### 3.7.7 〔To be verified〕Checklist against a real server for the implementation session
+
+The target is the `ssh-pq` service in `docker-compose.test.yml` at the repository root (AlmaLinux 10.2, port 2226, account `vela-pq` / `velapass`):
+its list is configured like a server in FIPS mode —— the two nistp hybrids plus plain ECDH, no X25519 and no sntrup761.
+`kex: algorithm: …` in the server log (`docker logs`, `LogLevel DEBUG1`) corroborates from the peer's side.
+Interop tests return early when the target is absent, and MSTest records that as passed: to confirm they really ran, look for `[SKIP]` lines in `TestContext`.
+
+1. **Handshake + command, once for each**: a list containing only that name; connect, authenticate, run a command and get its output; the key exchange in `SshConnection.Algorithms` is that name, and the server log shows the same name.
+2. **Rekeying, several times for each**: rekey explicitly on the same connection, with commands still working after each; `SshConnection.Rekeyed` reports that name as the key exchange.
+3. **The fixed-length `K_CL` is actually exercised**: at least **1200 exchanges** per method (rekeys are cheaper than whole connections), all succeeding.
+   The chance that the first byte of X is 0 is 1/256, so the chance of never hitting it in 1200 exchanges is about 0.9%; together with the in-memory test in item 7, which is guaranteed to hit it, both must pass.
+4. **When the server offers only one of them**: run one sshd offering only `mlkem768nistp256-sha256` (plus plain ECDH) and one offering only `mlkem1024nistp384-sha384` (plus plain ECDH)
+   (a second sshd process on another port in the same image, or another compose service): both `SshAlgorithmSet.Default` and `SshAlgorithmSet.FipsApprovedOnly` agree on that one and do not fall back to ECDH.
+5. **Result of the default list**: against `ssh-pq` (no X25519), `Default` agrees on `mlkem768nistp256-sha256` (it used to be `ecdh-sha2-nistp256`);
+   against a server offering all three ML-KEM hybrids (Alma's DEFAULT policy, i.e. without the `KexAlgorithms` line), `Default` still agrees on `mlkem768x25519-sha256` and `FipsApprovedOnly` on `mlkem768nistp256-sha256`.
+6. **FIPS preset against a server without X25519**: `FipsApprovedOnly` agrees on `mlkem768nistp256-sha256` with `ssh-pq`, with commands and rekeying working; against a server offering only plain ECDH it still agrees on `ecdh-sha2-nistp256`.
+7. **Negative tests (in memory)**: `S_REPLY` one byte too long and one byte too short; the first byte of `Q_S` changed to `0x02` / `0x03`; one bit of `Q_S`'s Y flipped (off the curve); a coordinate equal to p; the all-zero point
+   → `SshKeyExchangeException`, `Reason = ProtocolError`, disconnect code 3. One bit of `ct_pq` flipped → the exchange itself raises no error, signature verification fails → `HostKeyRejected`.
+   Plus one test guaranteed to hit leading zeros: generate keys repeatedly until the first byte of the shared point's X coordinate is 0, then assert that `K_CL` is 32 / 48 bytes with a first byte of 0, and that both sides compute the same `K`.
+8. **Negative tests (real server)**: put a byte-modifying relay between the client and `ssh-pq` (the first exchange is in cleartext):
+   modify one byte of the EC point in `S_REPLY` → `ProtocolError` locally, and the server log shows the peer disconnecting with reason code 3 (`Received disconnect from … 3: …`);
+   modify one byte of `ct_pq` → `HostKeyRejected` locally, and reason code 9 in the server log.
+9. **Packet capture of the wire lengths (optional)**: the first exchange is in cleartext; `C_INIT` should be 1249 / 1665 bytes and `S_REPLY` 1153 / 1665 bytes, with `0x04` as the byte after `ek_pq` / `ct_pq`.
+10. **A second implementation (optional)**: on upstream OpenSSH 10.6p1 (`KexAlgorithms +mlkem768nistp256-sha256`), force `mlkem768nistp256-sha256` for a handshake and rekeying;
+    forcing `mlkem1024nistp384-sha384` should give `NegotiationFailed` with both sides' lists in the exception. Apache MINA SSHD 2.20 also implements both and can serve as another cross-check.
 
 ---
 
@@ -319,7 +501,7 @@ The types of items 6/7/8 depend on the method:
 | curve25519 | `string` | `string` | **`mpint`** |
 | ecdh-nistp* | `string` | `string` | **`mpint`** |
 | dh-group14/16 | **`mpint`** | **`mpint`** | **`mpint`** |
-| mlkem768x25519 / sntrup761x25519 | `string` | `string` | **`string`** |
+| mlkem768x25519 / mlkem768nistp256 / mlkem1024nistp384 / sntrup761x25519 | `string` | `string` | **`string`** |
 
 > **Make this table the data source for unit tests.** One known vector per row, asserting `H` byte by byte.
 > This is the place in the entire specification most worth writing tests for first.
@@ -619,9 +801,10 @@ K_x = HASH(K ‖ H ‖ "X" ‖ session_id)
 
 **Key points**:
 
-1. `K` is encoded according to the type for its method (the table in §4.1); `H` and `session_id` as `string`.
+1. `K` is encoded according to the type for its method (the table in §4.1: `string` for the post-quantum hybrids, `mpint` for the rest); `H` and `session_id` are **raw bytes**, with no length prefix.
    **The letter `X` is a single raw byte, not a `string`.**
-2. **When the key is not long enough, it must be extended** (the HASH output is 32 bytes, but AES-256 needs 32 and ChaCha20 needs 64):
+   〔History〕This item used to say "`H` and `session_id` as `string`", which contradicts RFC 4253 §7.2; the implementation switched to raw bytes long ago ([architecture.md §11.2.13](../design/architecture.md): the two extra length prefixes made the first connection to a real OpenSSH fail across the board).
+2. **When the key is not long enough, it must be extended** (SHA-256 outputs 32 bytes and SHA-384 48 bytes, while ChaCha20 needs 64):
    ```
    K1 = HASH(K ‖ H ‖ "X" ‖ session_id)
    K2 = HASH(K ‖ H ‖ K1)
@@ -754,6 +937,9 @@ Blocking the receiving side as well would lose data.
 | X25519 result is all zeros | `ProtocolError` | No |
 | ECDH point not on the curve | `ProtocolError` | No |
 | DH `e`/`f` out of range | `ProtocolError` | No |
+| Wrong total length of a hybrid method's `S_REPLY` (§3.6 / §3.7) | `ProtocolError` | No |
+| `Q_S` of a NIST-curve hybrid not uncompressed or not on the curve (§3.7) | `ProtocolError` | No |
+| ML-KEM ciphertext modified (implicit rejection, shows up as signature verification failure, §3.7.3) | `HostKeyRejected` | No |
 | GEX `p` smaller than 2048 bits or larger than 8192 bits | `NegotiationFailed` | No |
 | GEX `p` not prime (even, has a small factor, or Miller-Rabin finds a witness of compositeness) | `ProtocolError` | No |
 | GEX `g` not satisfying `1 < g < p-1` | `ProtocolError` | No |
@@ -768,6 +954,7 @@ Blocking the receiving side as well would lose data.
 | `K_S` changed during rekeying | `HostKeyChanged` | No |
 | KEX timeout | `Timeout` | Yes |
 
-**Every `ProtocolError` SHOULD send `SSH_MSG_DISCONNECT` before disconnecting**
-(`SSH_DISCONNECT_KEY_EXCHANGE_FAILED = 3` or `SSH_DISCONNECT_PROTOCOL_ERROR = 2`),
-on a best-effort basis —— failure to send it does not affect the disconnect itself.
+**Every `ProtocolError` SHOULD send `SSH_MSG_DISCONNECT` before disconnecting**,
+on a best-effort basis —— failure to send it does not affect the disconnect itself. Reason code: a peer public value failing its checks during key exchange (in the table above: wrong `Q_C`/`Q_S` length, all-zero X25519,
+the ECDH point, DH out of range, a non-prime GEX `p` or an out-of-range `g`, and the two hybrid rows) sends `SSH_DISCONNECT_KEY_EXCHANGE_FAILED = 3` (§3.7.4);
+everything else sends `SSH_DISCONNECT_PROTOCOL_ERROR = 2`.

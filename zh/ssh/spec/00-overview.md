@@ -121,7 +121,9 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 
 | 算法 | 依据 | 默认启用 | 备注 |
 | --- | --- | :-: | --- |
-| `mlkem768x25519-sha256` | draft-kampanakis-curdle-ssh-pq-ke | ✅ 最高优先 | 后量子混合；BCL 有 ML-KEM |
+| `mlkem768x25519-sha256` | RFC 10042（原 draft-kampanakis-curdle-ssh-pq-ke） | ✅ 最高优先 | 后量子混合；BCL 有 ML-KEM |
+| `mlkem768nistp256-sha256` | RFC 10042 | ✅ | 后量子混合（ML-KEM-768 + P-256），面向 FIPS；也是 `FipsApprovedOnly` 的第一位（§6.6、03 §3.7） |
+| `mlkem1024nistp384-sha384` | RFC 10042 | ✅ | 后量子混合（ML-KEM-1024 + P-384），面向 FIPS；也在 `FipsApprovedOnly` 里 |
 | `sntrup761x25519-sha512` | OpenSSH `PROTOCOL` | ✅ | 后量子混合；OpenSSH 8.5+ 默认 |
 | `sntrup761x25519-sha512@openssh.com` | 同上 | ✅ | 同一算法的旧名，兼容 OpenSSH < 9.9 |
 | `curve25519-sha256` | RFC 8731 | ✅ | |
@@ -132,6 +134,22 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备、加固过的服务端常只给这个。排在椭圆曲线之后、DH 标准群之前；群由服务端现给，要查（03 §3.5） |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启**（§6.6） |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | 不是真算法，是**指示符**，见 03 |
+
+默认清单的顺序是：`mlkem768x25519-sha256`、`mlkem768nistp256-sha256`、`mlkem1024nistp384-sha384`、
+`sntrup761x25519-sha512`、`sntrup761x25519-sha512@openssh.com`、`curve25519-sha256`、`curve25519-sha256@libssh.org`、
+`ecdh-sha2-nistp256/384/521`、`diffie-hellman-group-exchange-sha256`、`diffie-hellman-group16-sha512`、`diffie-hellman-group14-sha256`。
+
+〔决策〕**两种 NIST 曲线的 ML-KEM 混合进默认清单**，位置这样定：
+
+- **排在 curve25519 与 ECDH 之前**（§7 第 1 条：后量子混合 > 椭圆曲线）。开了 FIPS 策略的服务端不给 X25519 与 sntrup761，
+  清单里没有这两种的话只能退到不带后量子的 `ecdh-sha2-nistp256`，丢掉对「先截获、以后再解」的防护。
+- **排在 `mlkem768x25519-sha256` 之后**：同为 ML-KEM，X25519 那一半更容易写成没有侧信道的、也更快（RFC 10042 §5），
+  OpenSSH 与 RHEL 的默认都把它放第一。三种都给的服务端（RHEL 10.2 的 DEFAULT 策略）谈成的仍是它，与以前一样。
+- **排在 sntrup761 之前**：ML-KEM 是 FIPS 203 标准化的 KEM、RFC 10042 注册的方法；sntrup761 留着只为兼容 OpenSSH 8.5–9.8（03 §3.6），
+  而那些版本没有 nistp 混合，对它们结果不变。
+- **768 / P-256 在 1024 / P-384 之前**：报文小（`C_INIT` 1249 对 1665 字节）、算得快；与 RHEL 10.2 的 DEFAULT 与 FIPS 策略的顺序一致；
+  上游 OpenSSH 10.6 只有前一种。要 1024 / P-384 优先的（例如照 CNSA 2.0），自己组清单。
+- 上游 OpenSSH 默认不开 `mlkem768nistp256-sha256`，这不影响我们放进客户端清单：服务端不给，协商就跳过它，代价只是 KEXINIT 里多两个名字。
 
 ### 6.2 主机密钥
 
@@ -207,11 +225,21 @@ CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）用 `Wit
 〔历史〕曾经没有这份目录，宿主用 `Default.WithLegacyInterop()` 推算实现了哪些，再手工维护一份「认得但没实现」的名单。
 
 〔决策〕**只含 FIPS 认可算法的清单**：`SshAlgorithmSet.FipsApprovedOnly`，与 RHEL 的 FIPS 加密策略对 SSH 放行的一致 ——
-密钥交换只用 NIST 曲线的 ECDH 与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
-MAC 只用 HMAC-SHA2；不含 X25519、Ed25519、ChaCha20-Poly1305 与后量子混合。**它只限定了算法，不等于本库通过了 FIPS 140 验证**：
-AES、SHA-2、ECDH、ECDSA、RSA 走 BCL（Windows 上是经过验证的 CNG，别的平台取决于系统的 OpenSSL），DH 标准群的模幂走 BouncyCastle。
-面向 FIPS 的后量子混合（`mlkem768nistp256-sha256` / `mlkem1024nistp384-sha384`）暂不实现：还没有能对照验证线上格式的服务端，
-写了也只能自己证明自己（03 §3.6）。
+密钥交换先是两种面向 FIPS 的后量子混合，再是 NIST 曲线的 ECDH 与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
+MAC 只用 HMAC-SHA2；不含 X25519、Ed25519、ChaCha20-Poly1305，也不含带 X25519 或 sntrup761 的后量子混合。**它只限定了算法，不等于本库通过了 FIPS 140 验证**：
+AES、SHA-2、ECDH、ECDSA、RSA 走 BCL（Windows 上是经过验证的 CNG，别的平台取决于系统的 OpenSSL），ML-KEM 在平台支持时（`MLKem.IsSupported`）走 BCL、
+否则与 DH 标准群的模幂一样走 BouncyCastle。
+
+它的密钥交换清单依次是：`mlkem768nistp256-sha256`、`mlkem1024nistp384-sha384`、`ecdh-sha2-nistp256/384/521`、
+`diffie-hellman-group16-sha512`、`diffie-hellman-group14-sha256`。
+
+〔决策〕**两种 NIST 曲线的 ML-KEM 混合（03 §3.7）排在这份清单的最前面。**它们只用 FIPS 认可的原语（ML-KEM、P-256 / P-384 上的 ECDH、SHA-2），
+RFC 10042 附录 B 的看法是它的组合方式看起来属于 FIPS 认可的派生（NIST SP 800-227 没有点名）；RHEL 10.2 的 FIPS 策略给 sshd 的清单正是这两种在前、ECDH 在后。
+合规环境要的正是「只谈认可的算法」与「先截获、以后再解」的防护两样都有 —— 不给 X25519 的服务端上，没有这两种就只剩不带后量子的 ECDH。
+不支持它们的服务端照旧谈成 `ecdh-sha2-nistp256`，与以前一样。768 / P-256 在前，理由同 §6.1。
+
+〔历史〕这个预设最初不含这两种混合：那时还没有能对照验证线上格式的服务端，写了也只能自己证明自己。
+2026-10-06 找到了靶机（AlmaLinux 10.2 的 OpenSSH 9.9p1，RHEL 10.2 的下游补丁，两种都有），草案也已定稿为 RFC 10042，于是补上（03 §3.7）。
 
 ## 七 算法优先级的排法
 
