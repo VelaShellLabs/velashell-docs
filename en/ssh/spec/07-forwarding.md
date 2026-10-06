@@ -478,6 +478,11 @@ otherwise refuse the connection. The OpenSSH agent's pipe name is fixed (`openss
 and then receive our signing requests — and, when adding keys to the agent (§7.3), **plaintext private keys**. Whoever creates the pipe first can only make themselves its owner.
 This is not defended by lowering the impersonation level to Identification: the OpenSSH agent service stores keys as the connecting user, so lowering it would break the legitimate agent too.
 
+〔Decision〕**The local agent's default endpoint** (`SshAgentClient.DefaultEndpoint`, used both for connecting to the agent and for agent forwarding when no endpoint is given): on other platforms it follows
+`SSH_AUTH_SOCK`; on Windows, `SSH_AUTH_SOCK` is adopted when it is a named pipe (`\\.\pipe\…`) — agents such as 1Password and KeePassXC are configured that way —
+and otherwise the OpenSSH agent service's pipe is used. It more often points at a Git Bash / WSL Unix socket, which is a different agent that .NET cannot reach, so anything that is not a pipe is ignored.
+〔History〕Windows used to ignore `SSH_AUTH_SOCK` altogether, and the host had to make the same check itself.
+
 〔Decision〕**We only forward; we do not implement an agent server.**
 The local agent is provided by the OS (OpenSSH agent / Pageant / 1Password, etc.).
 #### 7.2.1 Signature confirmation must say what the signature is for

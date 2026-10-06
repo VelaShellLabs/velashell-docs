@@ -476,6 +476,11 @@ RSA 证书与 RSA 钥一样拿到远端要的 SHA-2；按证书自己的类型�
 之后收到的是签名请求 —— 往 agent 里加钥（§7.3）时还有**明文私钥**。抢先建管道的人只能把属主设成自己。
 不靠把模拟级别降到 Identification 来防：OpenSSH 的 agent 服务要以连进来的用户身份保存密钥，降级会把正常的 agent 一起弄坏。
 
+〔决策〕**本机 agent 的默认端点**（`SshAgentClient.DefaultEndpoint`，连 agent 与 agent 转发不指定端点时都用它）：其它平台照
+`SSH_AUTH_SOCK`；Windows 上 `SSH_AUTH_SOCK` 是命名管道（`\\.\pipe\…`）时采纳它 —— 1Password、KeePassXC 这类 agent 会这样配 ——
+否则用 OpenSSH agent 服务的管道。它更常指向 Git Bash / WSL 的 Unix 套接字，那是另一套 agent，.NET 连不上，所以不是管道就不认。
+〔历史〕曾经 Windows 上一律无视 `SSH_AUTH_SOCK`，宿主只好自己再判断一遍。
+
 〔决策〕**我们只做转发，不做 agent 服务端。**
 本机 agent 由操作系统提供（OpenSSH agent / Pageant / 1Password 等）。
 #### 7.2.1 签名确认要说得出「签来做什么」
