@@ -388,14 +388,18 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | Applied to the default algorithm lists in the syntax of §7.2 (both directions together for encryption and MAC); a mistake is `InvalidConfiguration`, naming the host and the reason |
 | `PubkeyAcceptedAlgorithms` (old name `PubkeyAcceptedKeyTypes`) | Applied in the syntax of §7.2 to the signature algorithms the library uses for public key authentication by default; if `ssh-rsa` remains in the result, SHA-1 RSA signatures are allowed (`AllowSha1RsaSignatures`) —— the most common line for old servers, `+ssh-rsa`. Other forms are only validated for now |
 | `LocalForward` / `RemoteForward` / `DynamicForward` plus `GatewayPorts`, `ExitOnForwardFailure`, `ClearAllForwardings`, `PermitRemoteOpen` | Not connection parameters: started after connecting by `SshConfigFile.StartForwardsAsync`, see §7.3 |
+| `AddressFamily` / `BindAddress` / `BindInterface` | The direct TCP dialer only connects to target addresses of that family (`inet` / `inet6`; `any` means no restriction) and connects from the given local address (`BindInterface` takes all addresses of that interface, picking the one of the same family as the target for each attempt). No usable target address is `DnsFailure`; a `BindAddress` that is not an IP address, or an interface that does not exist locally, is `InvalidConfiguration`. Not applied via jump hosts or proxy commands (the local end is not governed by this host's configuration) |
+| `HostKeyAlias` | The host key policy looks up and records under the alias instead of the host name, **without the port** (OpenSSH records the alias itself, not `[alias]:port`, even on a non-22 port —— verified black-box against OpenSSH 10.5); the type preference and host key rotation use the alias too. Also used for `%k` |
+| `GlobalKnownHostsFile` | Read-only global known_hosts files (possibly several): consulted together with `UserKnownHostsFile` on lookup (`@revoked` and `@cert-authority` count too), while recording only writes our own file; unreadable ones are treated as absent. 〔Decision〕Read only when configured; the system directory's default file is not looked up |
+| `IdentityAgent` | Handed to the caller: `SshHostConfig.TryGetIdentityAgent` (`none` → no agent; `SSH_AUTH_SOCK` or unset → the default one; `$VAR` → the variable's value, treated as `none` when unset; a path → `~` and tokens expanded). The library does not create agent credentials for the caller (no implicit fallback, 04 §2.2) |
 
 **Tokens in paths** (shared by the paths of `IdentityFile`, `CertificateFile`, `UserKnownHostsFile` and `ForwardAgent`, `SshHostConfig.Expand`):
 `%d` local home directory, `%u` local user, `%h` host (after `HostName` rewriting), `%r` login user, `%p` port, `%n` the name the user typed,
 `%l` / `%L` local host name (full / first label), `%C` (SHA-1 of `%l%h%p%r`, lowercase hex), `%j` (`ProxyJump`), `%k` (`HostKeyAlias`, or the host when absent), `%%`.
 Unknown tokens are left as they are.
 
-**Common keys not handled yet**: `IdentityAgent`, `HostKeyAlias` (only used for `%k`; not yet part of the `known_hosts` lookup), `GlobalKnownHostsFile`, `AddressFamily`,
-`BindAddress` / `BindInterface`, `RequestTTY`, and the `%i` token (local uid).
+**Two things not handled**: `RequestTTY` —— in this library a shell always has a pseudo-terminal, and running a command without one is a different entry point (`ExecuteAsync`) the caller picks; configuration cannot pick it for them;
+the `%i` token (local uid) —— .NET has no managed API for the uid, and calling a platform function for one token is not worth it.
 〔Decision〕When `ProxyJump` and `ProxyCommand` both appear, `ProxyJump` takes precedence.
 (The rule in `ssh_config(5)` is "the first one to appear wins", but this library's parse result does not preserve the order of appearance across keys;
 picking a deterministic one is better than picking one that depends on ordering details.)

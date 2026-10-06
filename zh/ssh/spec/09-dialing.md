@@ -386,14 +386,18 @@ sequenceDiagram
 | `KexAlgorithms` / `HostKeyAlgorithms` / `Ciphers` / `MACs` | 按 §7.2 的写法作用到默认算法清单上（加密与 MAC 两个方向一起）；写错报 `InvalidConfiguration`，说出主机与原因 |
 | `PubkeyAcceptedAlgorithms`（旧名 `PubkeyAcceptedKeyTypes`） | 按 §7.2 的写法作用到本库公钥认证默认的签名算法上；结果里留着 `ssh-rsa` 时放开 SHA-1 的 RSA 签名（`AllowSha1RsaSignatures`）—— 老服务器最常见的那一行 `+ssh-rsa`。其余写法目前只用于校验 |
 | `LocalForward` / `RemoteForward` / `DynamicForward` 及 `GatewayPorts`、`ExitOnForwardFailure`、`ClearAllForwardings`、`PermitRemoteOpen` | 不是连接参数：连上之后由 `SshConfigFile.StartForwardsAsync` 起，见 §7.3 |
+| `AddressFamily` / `BindAddress` / `BindInterface` | 直连时的 TCP 拨号器只连那一族的目标地址（`inet` / `inet6`；`any` 不限）、从指定的本机地址发起（`BindInterface` 取那块网卡的全部地址，每次发起挑与目标同一族的那个）。没有能连的目标地址报 `DnsFailure`；`BindAddress` 不是 IP 地址、本机没有那块网卡报 `InvalidConfiguration`。经跳板、代理命令时不管（本机这一端不归这台主机的配置管） |
+| `HostKeyAlias` | 主机密钥策略查、记时用别名代替主机名，**端口不带**（OpenSSH 记下的就是别名本身，非 22 端口也不写成 `[别名]:端口` —— 黑盒核对 OpenSSH 10.5）；类型偏好与主机密钥轮换同样按别名。也用于 `%k` |
+| `GlobalKnownHostsFile` | 只读的全局 known_hosts（可以几个）：查的时候与 `UserKnownHostsFile` 一起看（`@revoked`、`@cert-authority` 照样算），记的时候只写自己的那份；读不到的照没有。〔决策〕写了才读，不去找系统目录里默认的那一份 |
+| `IdentityAgent` | 交给调用方：`SshHostConfig.TryGetIdentityAgent`（`none` → 不用 agent；`SSH_AUTH_SOCK` 或没写 → 默认的那个；`$变量` → 变量的值，没设当 `none`；路径 → 展开 `~` 与记号）。本库不替调用方建 agent 凭据（不做隐式回退，04 §2.2） |
 
 **路径里的记号**（`IdentityFile`、`CertificateFile`、`UserKnownHostsFile`、`ForwardAgent` 的路径共用，`SshHostConfig.Expand`）：
 `%d` 本机家目录、`%u` 本机用户、`%h` 主机（经 `HostName` 改写之后）、`%r` 登录用户、`%p` 端口、`%n` 使用者输入的名字、
 `%l` / `%L` 本机主机名（完整 / 第一段）、`%C`（`%l%h%p%r` 的 SHA-1，十六进制小写）、`%j`（`ProxyJump`）、`%k`（`HostKeyAlias`，没有就是主机）、`%%`。
 不认识的原样留着。
 
-**还没有的常用键**：`IdentityAgent`、`HostKeyAlias`（只用于 `%k`，还不参与 `known_hosts` 的查找）、`GlobalKnownHostsFile`、`AddressFamily`、
-`BindAddress` / `BindInterface`、`RequestTTY`，以及记号 `%i`（本机 uid）。
+**不处理的两样**：`RequestTTY` —— 本库里 shell 总是带伪终端，不带伪终端跑命令是另一个入口（`ExecuteAsync`），由调用方挑，配置替它挑不了；
+记号 `%i`（本机 uid）—— .NET 没有取 uid 的托管接口，为一个记号去调平台函数不值。
 
 〔决策〕`ProxyJump` 与 `ProxyCommand` 同时出现时 `ProxyJump` 优先。
 （`ssh_config(5)` 的规则是「先出现的生效」，而本库的解析结果不保留跨键的出现顺序；
