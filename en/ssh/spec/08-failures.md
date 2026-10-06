@@ -140,6 +140,12 @@ Reason: this cause lands in the users' `catch` blocks and reconnect policies, an
 (§3: automatic reconnect should apply only to "the connection dropped"). It used to be thrown as-is: internal parse exception types could not be caught by type;
 raw socket exceptions bypassed `Reason`, so a reconnect policy could not tell it was a dropped connection; and the host's exception translation did not recognize them.
 
+〔Decision〕**The connection hands out how it ended**: `SshConnection.Completion` (`Task<SshException>`) completes **with a result** when the connection ends —
+on a drop it is the cause normalized by the table above (keep-alive timeout, peer closed, `DISCONNECT` received with its reason code and the peer's words, protocol error…),
+and on local disposal an `SshConnectionClosedException` with `Aborted`; `CloseReason` is its synchronous form (`null` while the connection is alive).
+It never completes faulted, so it never becomes an unobserved task exception when nobody awaits it. The `Disconnected` token only says "it's over" and cannot carry a cause —
+consumers hooked on it used to report "closed by peer" for everything (the host's tunnel panel did so even when the user disconnected the session), or infer the cause from how the read pipe ended.
+
 **During connection setup** (from the moment dialing succeeds until authentication finishes) the same rules apply, except that `Phase` records the step where the failure happened:
 
 | What happened during setup | What callers get | `Reason` |
