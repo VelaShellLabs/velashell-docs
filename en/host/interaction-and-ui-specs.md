@@ -906,6 +906,10 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   - A jump host whose credential cannot be resolved does **not** prompt (the dialog asks for the target's credentials); the
     connection ends with a “Jump host X: reason” error.
 - **Host fingerprint confirmation**: on the first connection to an unknown host, or when a recorded fingerprint changes, show a “Host Trust” confirmation (fingerprint + Accept and Save/Trust once/Reject; a change also shows the recorded fingerprint from known_hosts alongside), linked to §15 Host Trust Center. A change raises this dialog by default rather than being refused outright (#476); strict fail-closed behaviour is the “Block and alert on fingerprint change” switch on the Security Audit page.
+  **Each key type of a host is recorded separately** (servers often have RSA, ECDSA and Ed25519 keys at once): a key matching any recorded one is accepted; accepting a key of a new type **adds a record** instead of overwriting the existing one,
+  so whichever type is negotiated later is recognised; only a different key of the same type replaces it. The change dialog shows the recorded fingerprint of the same type, or the most recently seen one when that type was never recorded.
+  When connecting, the recorded types go to the front of the host key algorithm list, so a normal server negotiates the type already recorded. The “Trusted hosts” list has one row per key type, and removing a row removes that type.
+  〔History〕Only one key per host:port used to be recorded: a server with an additional key of another type, or a changed host key algorithm for the connection, raised “fingerprint changed”; accepting it overwrote the old key, and switching back raised it again.
   If “Accept and Save” is chosen but the trust store cannot be written, **this connection goes ahead**, the fingerprint is not asked about again for the rest of this run, and a security alert is raised (the audit log records “Host fingerprint could not be saved”) —
   without it, the user would be asked again after a restart and would not know why.
 
