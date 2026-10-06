@@ -1479,7 +1479,8 @@ dotnet run scripts/ssh/compression/verify-strict-validation.cs
 
 这一条不是「补个协议细节」，是**修一个会让长连接断掉的洞**。
 
-OpenSSH 的 `RekeyLimit` 默认 1 GiB 或 1 小时，到点它自己发 `SSH_MSG_KEXINIT`。
+OpenSSH 服务端到了它的 `RekeyLimit`（默认按加密算法的数据量，管理员还可以加时长）就自己发 `SSH_MSG_KEXINIT`。
+〔更正 2026-10-06〕这里曾经写「默认 1 GiB 或 1 小时」；黑盒核对：`sshd_config` 默认 `RekeyLimit default none`，不按时长。
 客户端不应答的表现不是「少个功能」，而是：
 
 - 挂了一下午的 shell 忽然断了；
@@ -1576,7 +1577,7 @@ DecompressPayload: _compressionBuffer.ResetWrittenCount(); … return _compressi
 
 #### 主动发起（同日补完）
 
-阈值落在 `SshRekeyPolicy`（默认 **1 GiB / 1 小时 / 2³¹ 个报文**，默认**开着**）。
+阈值落在 `SshRekeyPolicy`（默认 **1 GiB / 2³¹ 个报文**，默认**开着**；〔2026-10-06，Q1〕时长阈值默认不看，原来是 1 小时，见 spec/03 §8.1）。
 `SshConnection.StartRekeyAsync()` 也公开出来，宿主可以自己挑时机。
 
 **报文数那一条才是硬线。** SSH 的序号是 32 位的，而 AES-GCM 的 nonce

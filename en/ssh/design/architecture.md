@@ -1507,8 +1507,8 @@ The code itself was rewritten against our own interfaces (`ISshCompressor` +
 
 This item isn't "filling in a protocol detail"; it's **fixing a hole that drops long-lived connections**.
 
-OpenSSH's `RekeyLimit` defaults to 1 GiB or 1 hour, and when it's reached it sends
-`SSH_MSG_KEXINIT` on its own. A client that doesn't respond doesn't just "lack a feature"; instead:
+When an OpenSSH server reaches its `RekeyLimit` (by default the cipher's data volume; administrators can add a time limit), it sends
+`SSH_MSG_KEXINIT` on its own. 〔Correction 2026-10-06〕This used to say "defaults to 1 GiB or 1 hour"; checked black-box: `sshd_config` defaults to `RekeyLimit default none`, with no time limit. A client that doesn't respond doesn't just "lack a feature"; instead:
 
 - A shell that's been open all afternoon suddenly drops;
 - A large file transfer drops halfway through.
@@ -1614,7 +1614,7 @@ compression and decompression interleave.
 
 #### Initiating it ourselves (completed the same day)
 
-The thresholds live in `SshRekeyPolicy` (default **1 GiB / 1 hour / 2³¹ messages**, **on** by default).
+The thresholds live in `SshRekeyPolicy` (default **1 GiB / 2³¹ messages**, **on** by default; 〔2026-10-06, Q1〕the time threshold is off by default, it used to be 1 hour, see spec/03 §8.1).
 `SshConnection.StartRekeyAsync()` is also public, so the host can pick its own moment.
 
 **The message-count one is the hard line.** SSH sequence numbers are 32-bit, and the AES-GCM nonce

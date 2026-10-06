@@ -697,7 +697,7 @@ await using SshShell shell = await conn.OpenShellAsync(SshConfigFile.Resolve(blo
 ```csharp
 var options = new SshConnectionOptions("root@example.com")
 {
-    // 默认：1 GiB / 1 小时 / 2³¹ 个报文，任一条到了就换
+    // 默认：1 GiB / 2³¹ 个报文，任一条到了就换；不按时长（要按时长换，显式给 maxInterval）
     Rekey = SshRekeyPolicy.Default,
 };
 
@@ -713,8 +713,8 @@ conn.Rekeyed += (_, e) => log.Info($"第 {e.Count} 次重协商（{e.Cause.Trigg
 三件事值得知道：
 
 1. **接住对端发起的重协商永远开着，关不掉。** `SshRekeyPolicy.Disabled`
-   只关「我们主动发起」。这不是遗漏 —— OpenSSH 的 `RekeyLimit` 默认
-   1 GiB / 1 小时，到点它自己发 `KEXINIT`，不应答的表现是
+   只关「我们主动发起」。这不是遗漏 —— OpenSSH 服务端到了它的 `RekeyLimit`
+   （默认按加密算法的数据量，管理员还可以加时长）就自己发 `KEXINIT`，不应答的表现是
    **挂了一下午的 shell 忽然断了**、**传到一半的大文件断了**。
 2. **报文数那条阈值别调低。** SSH 的序号是 32 位的，AES-GCM 的 nonce
    每个报文推进一次 —— nonce 重用对 GCM 是灾难性的（可恢复认证密钥）。

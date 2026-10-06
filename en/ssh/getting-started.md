@@ -699,7 +699,7 @@ conditions are ANDed, and `!` negation is supported; `canonical` / `final` never
 ```csharp
 var options = new SshConnectionOptions("root@example.com")
 {
-    // default: 1 GiB / 1 hour / 2³¹ packets, rekey when any one is reached
+    // default: 1 GiB / 2³¹ packets, rekey when either is reached; not time-based (pass maxInterval explicitly for that)
     Rekey = SshRekeyPolicy.Default,
 };
 
@@ -715,8 +715,8 @@ conn.Rekeyed += (_, e) => log.Info($"rekey #{e.Count} ({e.Cause.Trigger}) took {
 Three things worth knowing:
 
 1. **Handling peer-initiated rekeying is always on and cannot be turned off.** `SshRekeyPolicy.Disabled`
-   only turns off "rekeying initiated by us". This is not an omission — OpenSSH's `RekeyLimit` defaults to
-   1 GiB / 1 hour, and when the limit is reached it sends `KEXINIT` itself; the symptom of not responding is
+   only turns off "rekeying initiated by us". This is not an omission — when an OpenSSH server reaches its `RekeyLimit`
+   (by default the cipher's data volume; administrators can add a time limit) it sends `KEXINIT` itself; the symptom of not responding is
    **a shell that has been open all afternoon suddenly drops**, **a large file transfer drops halfway through**.
 2. **Do not lower the packet-count threshold.** SSH sequence numbers are 32-bit, and the AES-GCM nonce
    advances once per packet — nonce reuse is catastrophic for GCM (the authentication key can be recovered).

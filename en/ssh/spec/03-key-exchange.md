@@ -645,7 +645,7 @@ it arrives after the exchange, under the new keys; the delayed compression attac
 | Condition | Default | Rationale |
 | --- | --- | --- |
 | Bytes sent/received | **1 GiB** (in either direction) | Recommendation of RFC 4253 §9 |
-| Duration | **1 hour** | Same as above |
+| Duration | 〔Decision〕**Not checked by default** (only when `maxInterval` is given explicitly, minimum 1 minute) | OpenSSH's client and server also rekey by data volume only by default (`ssh -G` reports `rekeylimit 0 0`; `sshd_config` defaults to `RekeyLimit default none`). On old devices that mishandle client-initiated rekeying, time-based rekeying means a scheduled disconnect: once our `KEXINIT` is out the gate is closed and cannot be taken back, until the time limit declares the exchange dead (Q1). 〔History〕It used to default to 1 hour |
 | AES-GCM invocation counter | **Forced** when approaching 2⁶⁴ | Counter wraparound would reuse nonces, which is catastrophic |
 | Packets in one direction under the same keys | **2³¹**, **independent of the policy and cannot be turned off** | The sequence number is 32 bits: chacha20-poly1305's nonce is the sequence number, so wrapping under the same keys reuses nonces and lets messages be forged; HMAC suites become open to replay (RFC 4344 §3.1) |
 
