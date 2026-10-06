@@ -129,7 +129,7 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ 尚未实现 | 〔互操作〕老设备常只给这个。规格见 03 §3.5；实现之前放进清单会在连接前被拒绝（03 §2.2） |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备、加固过的服务端常只给这个。排在椭圆曲线之后、DH 标准群之前；群由服务端现给，要查（03 §3.5） |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启**（§6.6） |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | 不是真算法，是**指示符**，见 03 |
 

@@ -182,8 +182,8 @@ All KEX methods we support have the same two-step shape; only the public key con
 
 > Numbers 30/31 are **method-specific**; different KEX methods may assign them different meanings
 > (see the comment in `Protocol/SshMessageNumber.cs`: 30–49 are deliberately kept out of the global enum).
-> The methods we support all happen to use the 30/31 pair, but `diffie-hellman-group-exchange-*`
-> has an additional set of preceding messages; see §3.5.
+> Almost all the methods we support use the 30/31 pair; only `diffie-hellman-group-exchange-*`
+> has an additional set of preceding messages and then switches to 32/33; see §3.5.
 
 ### 3.2 `curve25519-sha256` (RFC 8731)
 
@@ -240,8 +240,9 @@ Both names are sent, and they share one implementation.
 
 ### 3.5 `diffie-hellman-group-exchange-sha256` (RFC 4419)
 
-> **Implementation status (2026-09-25)**: **not implemented yet**. It is not in the default list and not registered with the key exchange factory,
-> so putting it in the list is rejected by the pre-connect check (§2.2). What follows is the specification to implement it against.
+> **Implementation status (2026-10-06)**: **implemented** (`DiffieHellmanGroupExchange`). In the default list it comes after the elliptic curves and before the DH standard groups ——
+> the client's order wins, so it is only chosen when nothing else can be agreed. Checked against a real OpenSSH 10.3 (initial exchange and rekey);
+> since OpenSSH 10 the server does not enable the DH methods by default, so the interop environment appends it to the server's list with `scripts/ssh/interop/kex-gex.sh`.
 
 **Two more messages than the other methods**, because the group is supplied by the server on the fly according to the client's request:
 
@@ -257,10 +258,17 @@ Both names are sent, and they share one implementation.
 
 - 〔Decision〕`min = 2048`, `n = 3072`, `max = 8192`.
   **A `p` smaller than 2048 bits supplied by the server is not accepted** —— after logjam (CVE-2015-4000), 1024 bits is unacceptable.
-- **MUST validate** that `p` is prime, that `g` is in a reasonable range, and that the bit length of `p` falls within our requested `[min, max]`.
-  Primality testing uses Miller-Rabin (the BCL has no direct API; implement it ourselves on `System.Numerics.BigInteger`,
-  with ≥ 64 rounds). 〔Decision〕This step **may be cached**: the same `(p, g)` is usually reused by a server,
-  so cache the test result keyed by `SHA-256(p ‖ g)` to avoid spending tens of milliseconds on every connection.
+- **MUST validate** that `p` is prime, that `g` is in a reasonable range (`1 < g < p-1`), and that the bit length of `p` falls within our requested `[min, max]`.
+  The cheap checks come first (bit length, parity, the range of `g`), then the primality test.
+- Primality testing uses BouncyCastle's `Primes.HasAnySmallFactors` and `Primes.IsMRProbablePrime` (Miller-Rabin, random bases, **64 rounds**,
+  so a composite passes with probability ≤ 4⁻⁶⁴). 〔Decision〕**We do not write Miller-Rabin ourselves** —— the BCL has no such API and BC does (the ssh library's AGENTS 3.3: "do not write cryptographic primitives").
+- 〔Decision〕The primality test is the real cost of this method: BC running 64 rounds on one thread takes about 2 seconds at 3072 bits and over half a minute at 8192 bits. Three things bring it down:
+  1. **Rounds in parallel**: each round uses an independent random base, and the rounds are spread over the thread pool by core count (each call is `IsMRProbablePrime(p, random, 1)`);
+  2. **Overlapped with the round trip**: it starts in the background as soon as `GEX_GROUP` arrives, while `GEX_INIT` is sent and `GEX_REPLY` awaited; its verdict is awaited only before computing the shared secret;
+  3. **Cached**: a verified `p` is remembered in the process keyed by `SHA-256(p)` (at most 64, cleared when full), so a server reusing a group is not tested again.
+     Only "is prime" is remembered —— a connection with a composite `p` has failed anyway.
+
+  Against a real OpenSSH (a 3072-bit group) a whole connection takes about 0.4–0.5 seconds.
 - The inputs of `H` **include** `min ‖ n ‖ max ‖ p ‖ g`; see §4.2.
 
 ### 3.6 Post-quantum hybrids: `mlkem768x25519-sha256` and `sntrup761x25519-sha512`
@@ -733,8 +741,9 @@ Blocking the receiving side as well would lose data.
 | X25519 result is all zeros | `ProtocolError` | No |
 | ECDH point not on the curve | `ProtocolError` | No |
 | DH `e`/`f` out of range | `ProtocolError` | No |
-| GEX `p` smaller than 2048 bits | `NegotiationFailed` | No |
-| GEX `p` not prime | `ProtocolError` | No |
+| GEX `p` smaller than 2048 bits or larger than 8192 bits | `NegotiationFailed` | No |
+| GEX `p` not prime (even, has a small factor, or Miller-Rabin finds a witness of compositeness) | `ProtocolError` | No |
+| GEX `g` not satisfying `1 < g < p-1` | `ProtocolError` | No |
 | Signature algorithm name does not match the negotiation result | `ProtocolError` | No |
 | Signature verification fails | `HostKeyRejected` | No |
 | RSA modulus below the minimum | `HostKeyRejected` | No (can be relaxed by configuration) |

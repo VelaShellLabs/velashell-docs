@@ -181,8 +181,8 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 > 编号 30/31 是**方法专用**的，不同 KEX 方法可以赋予不同含义
 > （见 `Protocol/SshMessageNumber.cs` 的注释：30–49 刻意不进全局枚举）。
-> 我们支持的方法恰好都用 30/31 这一对，但 `diffie-hellman-group-exchange-*`
-> 多了一组前置报文，见 §3.5。
+> 我们支持的方法几乎都用 30/31 这一对，只有 `diffie-hellman-group-exchange-*`
+> 多了一组前置报文、之后换成 32/33，见 §3.5。
 
 ### 3.2 `curve25519-sha256`（RFC 8731）
 
@@ -239,8 +239,9 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 ### 3.5 `diffie-hellman-group-exchange-sha256`（RFC 4419）
 
-> **实现状态（2026-09-25）**：**尚未实现**。它不在默认清单里，密钥交换工厂也没有注册它，
-> 放进清单会被连接前的校验拒绝（§2.2）。下面是实现它时要照的规格。
+> **实现状态（2026-10-06）**：**已实现**（`DiffieHellmanGroupExchange`），在默认清单里排在椭圆曲线之后、DH 标准群之前 ——
+> 客户端的顺序为准，只有别的都谈不成时才会选中它。已对真 OpenSSH 10.3 核对（首次交换与重协商）；
+> OpenSSH 10 起服务端默认不开 DH 那几种，互通环境用 `scripts/ssh/interop/kex-gex.sh` 追加进服务端清单。
 
 **比其它方法多两个报文**，因为群是服务端按客户端要求现给的：
 
@@ -256,10 +257,17 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 
 - 〔决策〕`min = 2048`、`n = 3072`、`max = 8192`。
   **不接受服务端给出小于 2048 位的 `p`** —— logjam（CVE-2015-4000）之后 1024 位不可接受。
-- **必须校验** `p` 是素数、`g` 在合理范围、`p` 的位数落在我们请求的 `[min, max]` 内。
-  素性检验用 Miller-Rabin（BCL 没有直接 API，`System.Numerics.BigInteger` 上自己实现，
-  轮数 ≥ 64）。〔决策〕这一步**可缓存**：同一个 `(p, g)` 通常被服务端复用，
-  按 `SHA-256(p ‖ g)` 缓存检验结果，避免每次连接都花几十毫秒。
+- **必须校验** `p` 是素数、`g` 在合理范围（`1 < g < p-1`）、`p` 的位数落在我们请求的 `[min, max]` 内。
+  先查便宜的（位数、奇偶、`g` 的范围），再做素性检验。
+- 素性检验用 BouncyCastle 的 `Primes.HasAnySmallFactors` 与 `Primes.IsMRProbablePrime`（Miller-Rabin，随机底，**64 轮**，
+  合数蒙混过关的概率 ≤ 4⁻⁶⁴）。〔决策〕**不自己写 Miller-Rabin** —— BCL 没有这个 API，BC 有（ssh 库 AGENTS 3.3「不自己写密码学原语」）。
+- 〔决策〕素性检验是这一种方法真正的成本：BC 单线程跑 64 轮，3072 位约 2 秒、8192 位半分钟以上。三件事把它压下来：
+  1. **各轮并行**：每轮一个独立的随机底，按核数分给线程池（每次调 `IsMRProbablePrime(p, random, 1)`）；
+  2. **与往返重叠**：收到 `GEX_GROUP` 就在后台起跑，同时发 `GEX_INIT`、等 `GEX_REPLY`；算共享密钥之前才等它的结论；
+  3. **缓存**：检验过的 `p` 按 `SHA-256(p)` 记在进程里（上限 64 个，满了清空），服务端复用同一个群时不再检验。
+     只记「是素数」—— 不是素数的连接本来就失败了。
+
+  对真 OpenSSH（3072 位的群）整次连接约 0.4–0.5 秒。
 - `H` 的输入里**包含** `min ‖ n ‖ max ‖ p ‖ g`，见 §4.2。
 
 ### 3.6 后量子混合：`mlkem768x25519-sha256` 与 `sntrup761x25519-sha512`
@@ -732,8 +740,9 @@ RFC 对接收方向没有同样的限制（对端可能在它发 KEXINIT 之前�
 | X25519 结果全零 | `ProtocolError` | 否 |
 | ECDH 点不在曲线上 | `ProtocolError` | 否 |
 | DH `e`/`f` 越界 | `ProtocolError` | 否 |
-| GEX 的 `p` 小于 2048 位 | `NegotiationFailed` | 否 |
-| GEX 的 `p` 非素数 | `ProtocolError` | 否 |
+| GEX 的 `p` 小于 2048 位或大于 8192 位 | `NegotiationFailed` | 否 |
+| GEX 的 `p` 非素数（偶数、有小因子、Miller-Rabin 找到合数证据） | `ProtocolError` | 否 |
+| GEX 的 `g` 不满足 `1 < g < p-1` | `ProtocolError` | 否 |
 | 签名算法名与协商结果不符 | `ProtocolError` | 否 |
 | 签名验证失败 | `HostKeyRejected` | 否 |
 | RSA 模数小于下限 | `HostKeyRejected` | 否（可配置放宽） |

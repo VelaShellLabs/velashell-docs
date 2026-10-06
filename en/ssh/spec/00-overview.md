@@ -131,7 +131,7 @@ Details of each algorithm are in [`03-key-exchange.md`](03-key-exchange.md); thi
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ❌ not implemented yet | 〔Interop〕old devices often offer only this. Specified in 03 §3.5; until it is implemented, putting it in the list is rejected before connecting (03 §2.2) |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔Interop〕old devices and hardened servers often offer only this. Placed after the elliptic curves and before the DH standard groups; the group is supplied by the server and must be checked (03 §3.5) |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ off by default | 〔Interop〕Cisco IOS / old VRP have only this. **MUST be explicitly enabled by the user** (§6.6) |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | Not real algorithms but **indicators**; see 03 |
 

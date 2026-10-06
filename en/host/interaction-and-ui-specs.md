@@ -796,7 +796,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
       line copied from `~/.ssh/config` works as is. Hovering an input shows the current default list and what else can
       be added (it refreshes with the legacy toggle).
       - Which names are accepted follows what the SSH library actually implements. An unknown name is reported as
-        unknown; a name OpenSSH knows but this version does not implement (CBC, 3des, group1, group-exchange, ssh-dss,
+        unknown; a name OpenSSH knows but this version does not implement (CBC, 3des, group1, group-exchange-sha1, ssh-dss,
         hmac-md5, umac…) is reported as “not implemented in this version” — CBC is the most common thing in a copied
         config, and the user needs to hear “enabling it will not help”, not “you misspelled it”. Removal entries must be
         known names too (a misspelled removal removes nothing while the user believes it is off); removing everything, or
