@@ -579,6 +579,26 @@ Two more points:
 - **Multiple sessions on the same connection can each have their own X11 forwarding**: `x11` channels are dispatched to the right one by fake cookie,
   and releasing one does not affect the others. The most common usage is to specify it directly in the shell options (see §5).
 
+Reading `.Xauthority` to find the real cookie is the library's own business when forwarding; you do not need to deal with it. A program that runs an
+X server of its own and needs to register its cookie in `.Xauthority` (as the host's built-in X Server does) can use `XAuthority` to read and write the
+file format:
+
+```csharp
+string path = XAuthority.DefaultPath!;                       // XAUTHORITY first, else ~/.Xauthority
+byte[] content = File.Exists(path) ? await File.ReadAllBytesAsync(path, ct) : [];
+if (XAuthority.TryDecode(content, out IReadOnlyList<XAuthorityEntry>? entries))   // not fully readable: do not rewrite
+{
+    var mine = new XAuthorityEntry(XAuthority.FamilyLocal, Encoding.ASCII.GetBytes(Environment.MachineName),
+                                   "1", XAuthority.MitMagicCookie1, cookie);
+    byte[] updated = XAuthority.Encode([.. entries, mine]);
+    // Locking (xauth's -c / -l lock-file convention), writing a temporary file, atomic replace — these are yours; the library never touches the file
+}
+```
+
+`TryDecode` is strict: if any record cannot be read in full (truncated, some other format) it returns `false` — do not rewrite a file you cannot fully
+read, or the user's other keys get lost. `XAuthorityEntry` checks at construction that its fields fit in the file, so a record that cannot be encoded
+cannot be created.
+
 ### Tunnels without a listening port
 
 

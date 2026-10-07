@@ -577,6 +577,24 @@ Console.WriteLine($"{x11.AcceptedChannels} 条接受 · {x11.RejectedChannels} �
 - **同一条连接上可以有多个会话各开各的 X11 转发**：`x11` 通道按假 cookie 分给对应的那个，
   释放一个不影响其它的。最常见的用法是直接写在 shell 选项里（见 §五）。
 
+转发找真 cookie 时读 `.Xauthority` 是库自己的事，用不着你操心。自己跑着一个 X 服务端、要把它的 cookie 登记进
+`.Xauthority` 的程序（宿主的内置 X Server 就是这样），可以用 `XAuthority` 读写这个文件的格式：
+
+```csharp
+string path = XAuthority.DefaultPath!;                       // XAUTHORITY 优先，否则 ~/.Xauthority
+byte[] content = File.Exists(path) ? await File.ReadAllBytesAsync(path, ct) : [];
+if (XAuthority.TryDecode(content, out IReadOnlyList<XAuthorityEntry>? entries))   // 认不全就不改写
+{
+    var mine = new XAuthorityEntry(XAuthority.FamilyLocal, Encoding.ASCII.GetBytes(Environment.MachineName),
+                                   "1", XAuthority.MitMagicCookie1, cookie);
+    byte[] updated = XAuthority.Encode([.. entries, mine]);
+    // 上锁（xauth 的 -c / -l 锁文件约定）、写临时文件、原子替换 —— 这几步由你负责，库不碰文件
+}
+```
+
+`TryDecode` 是严格的：有任何一条认不全（截断的、别的格式的）就返回 `false` —— 不要改写一个自己读不全的文件，
+否则会把使用者别的钥匙弄丢。`XAuthorityEntry` 构造时就查字段放不放得进文件，编码不出来的记录建不出来。
+
 ### 不开监听端口的隧道
 
 
