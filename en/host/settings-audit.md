@@ -505,7 +505,8 @@ Changed together with the X Server's second library-wide review. Library behavio
   configs are not migrated**: a saved “on” cannot be told apart from the old default, so it stays in effect until the user turns it off.
 - **The clipboard following the session with the keyboard focus is not a setting**: it is always in effect on the built-in engine (the library's
   `ClipboardFollowsFocus` is on by default and the host leaves it so) — only the focused session can read what is copied locally, and only copies
-  from that session reach the system clipboard; `xclip` / `xsel` in the same SSH session count as the same session. The description of
+  from that session reach the system clipboard; `xclip` / `xsel` in the same SSH session count as the same session. The sessions'
+  selections (PRIMARY / CLIPBOARD) are isolated from each other; copying across sessions goes through the local clipboard. The description of
   “Enable clipboard” says so.
 - **The descriptions state the risks** (five languages): “Copy on selection” adds “Off by default: when on, whatever you copy on this computer can
   be pasted into X programs with a middle click”; “Restrict programs from SSH sessions” names the three restrictions and the cost — recommended

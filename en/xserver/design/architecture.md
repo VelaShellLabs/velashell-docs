@@ -422,8 +422,17 @@ extra (the slack is not charged).
     can read it. Otherwise a password copied locally would be readable by every session as soon as the user clicked any X window, and programs in
     background sessions could keep rewriting the local clipboard. While the server owns the clipboard on the host's behalf, XFIXES owner
     notifications also go only to clients that can read it — other sessions could otherwise learn exactly when the local clipboard got new
-    content. What can still be seen: when the host takes a selection over from an X client, that client gets its SelectionClear as usual, and
-    GetSelectionOwner shows the owner changing to the server. Embedding scenarios with a single trusted client can turn it off.
+    content. While it is on, PRIMARY, SECONDARY and CLIPBOARD are also **isolated per
+    session**: the selection table is keyed by "atom + scope", and each session (clients with the same connection label; local programs without a
+    label all belong to one local session) has its own owner — SetSelectionOwner, GetSelectionOwner, ConvertSelection, SelectionClear, XFIXES
+    notifications, and an owner window being destroyed or its owner disconnecting all take effect only within that session. Other sessions see no
+    owner changes, get no SelectionClear because of them, and cannot read what was copied in another session. All other selections (`WM_S0`,
+    XSETTINGS, drag and drop …) stay display-wide as the protocol defines them. Copy and paste across sessions goes through the host clipboard:
+    clipboard content has a logical clock (new text from the host, a copy from the X side handed to the host, and a program in some session taking
+    a synchronized selection each advance it), and when a session gets the focus (with PointerRoot, when the pointer moves to another top-level)
+    and its copy is older than the latest text, the server takes the selection there on the host's behalf — copy in A, switch to B, paste, and the
+    content arrives; the most recent copy wins, whichever session or the local machine it happened in. Programs in the same session copy and paste
+    to each other as usual. Embedding scenarios with a single trusted client can turn it off.
   - **`RestrictForwardedClients`** (off by default): connections that come in through `ServeAuthenticatedAsync` cannot see XTEST (synthesized input
     is indistinguishable from the real keyboard, so a compromised remote machine could type commands into another session's xterm), receive no
     XI2 raw key events (which would let a client log every key typed in every X window without taking the focus), and get BadAccess for
