@@ -391,7 +391,7 @@ before this section existed get the defaults from `Normalize`.
 | Display number | Auto | `:N` | Auto = the first display nobody listens on, starting at :0; a fixed number that is taken fails before launching. Range :0–:15, clamped the same way by `Normalize` |
 | Window mode | Multiple windows | `-multiwindow` / (none) / `-nodecoration` / `-fullscreen` / `-rootless` | Unrecognized values fall back to multiple windows |
 | Enable clipboard | on | `-clipboard` / `-noclipboard` | |
-| Copy on selection | on | `-primary` / `-noprimary` | Only meaningful with the clipboard on; disabled and omitted from the command line otherwise |
+| Copy on selection | on (off by default since 2026-10, see the eleventh batch) | `-primary` / `-noprimary` | Only meaningful with the clipboard on; disabled and omitted from the command line otherwise |
 | Keyboard layout | Auto | `-xkblayout` | Shared by both engines. Auto = not passed to VcXsrv (it follows the Windows layout), and the built-in engine follows the system's current layout; a chosen layout is passed to VcXsrv as `-xkblayout` and the built-in engine uses the keymap tables shipped with the app |
 | Keyboard model | pc105 | `-xkbmodel` | |
 | Capture special Windows keys | off | `-keyhook` / `-nokeyhook` | |
@@ -420,12 +420,14 @@ lives in `AppSettings.XServer.Engine`; unrecognized values fall back to built-in
 | Engine | Built-in | `builtin` / `vcxsrv` | Only shown on Windows; other platforms only have the built-in one, and a `vcxsrv` value (e.g. synced from Windows) is treated as built-in |
 
 - **Shared by both engines**: display number, enable clipboard, copy on selection, keyboard layout, start with VelaShell, start automatically
-  for X11 forwarding. On the built-in engine the two clipboard switches map to the server's CLIPBOARD / PRIMARY sync.
+  for X11 forwarding. On the built-in engine the two clipboard switches map to the server's CLIPBOARD / PRIMARY sync (since 2026-10
+  the built-in engine also exchanges only with the session that has the keyboard focus, see the eleventh batch).
 - **VcXsrv-only**, shown only when VcXsrv is selected: program location, window mode, keyboard model, capture special
   keys, native OpenGL, disable access control, additional arguments and the command-line preview, tray icon. On Windows the
   built-in engine follows the system keyboard layout and needs no configuration.
 - The “stay out of it” condition of “Start automatically for X11 forwarding” becomes: another X server is already in use —
-  on Windows something listens on `localhost:0`, elsewhere `DISPLAY` is set; a selected-but-missing VcXsrv is silent too.
+  on Windows something listens on `localhost:0` (since 2026-10 only a process in the current user's session counts, see the eleventh
+  batch), elsewhere `DISPLAY` is set; a selected-but-missing VcXsrv is silent too.
 - The former “on non-Windows platforms the page is a single note” is gone: the built-in engine works everywhere, so the page is
   shown on every platform (except the Engine section).
 
@@ -486,3 +488,42 @@ Host side in `plan.md` §155; the rules are under "Customizing shortcuts" in [Ke
   includes it when app settings are synced (it is not a device-local field).
 - The page title went back from "Shortcut reference" to "Shortcuts", and the subtitle no longer says "read-only" (those
   words are what put off the reporter of #551).
+
+### 2026-10-07 Eleventh batch (X Server: clipboard follows the focus, restricting programs from SSH sessions)
+
+Changed together with the X Server's second library-wide review. Library behaviour: [X Server architecture](../xserver/design/architecture.md)
+§7, "Several sessions sharing one display — what is tightened", and §10; interaction: [interaction-and-ui-specs.md](interaction-and-ui-specs.md)
+§4A.3 and §13.1; what users see and what to do: [X Server troubleshooting](../xserver/troubleshooting.md).
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Copy on selection | **off** (was on) | on / off (`XServer.CopyOnSelection`) | Shared by both engines; VcXsrv's default command line therefore has `-noprimary`. On the built-in engine it maps to the server's PRIMARY sync (`SyncPrimary`) — the host used to default it to on, the opposite of the library's own default |
+| Restrict programs from SSH sessions | off | on / off (`XServer.RestrictForwardedClients`) | Built-in engine only, and only shown when it is selected (below the keyboard layout in the “Keyboard” section). Maps to the library's `RestrictForwardedClients`: programs forwarded over SSH cannot see XTEST, receive no raw key events and cannot change input devices |
+
+- **Why “Copy on selection” is now off by default**: when on, whatever is copied locally (passwords included) can be pasted into any X program
+  with a middle click, and selecting text in an X program quietly rewrites the system clipboard. **Only the factory default changed; saved
+  configs are not migrated**: a saved “on” cannot be told apart from the old default, so it stays in effect until the user turns it off.
+- **The clipboard following the session with the keyboard focus is not a setting**: it is always in effect on the built-in engine (the library's
+  `ClipboardFollowsFocus` is on by default and the host leaves it so) — only the focused session can read what is copied locally, and only copies
+  from that session reach the system clipboard; `xclip` / `xsel` in the same SSH session count as the same session. The description of
+  “Enable clipboard” says so.
+- **The descriptions state the risks** (five languages): “Copy on selection” adds “Off by default: when on, whatever you copy on this computer can
+  be pasted into X programs with a middle click”; “Restrict programs from SSH sessions” names the three restrictions and the cost — recommended
+  when connecting to servers you do not fully trust, after which tools such as `xdotool` on those servers stop working.
+- **Why the restriction is off by default and built-in only**: remote tools such as `xdotool` rely on XTEST, so the default keeps today's
+  behaviour (a product decision); telling which connections came “from SSH” is only possible with the built-in engine (the host hands those
+  connections in through `ServeAuthenticatedAsync`), VcXsrv cannot tell them apart. A per-connection trust level and “one display per session”
+  are new features for later.
+- **The “stay out of it” condition of “Start automatically for X11 forwarding” is narrower**: on Windows a listener behind `localhost:0` counts as
+  “an X display already in use” only if it is a process in the current user's session — on a terminal server it may be another user's VcXsrv
+  (often with `-ac`), and remote programs' windows, keyboard and clipboard used to end up on someone else's desktop; if it is not ours, the
+  built-in engine starts automatically as usual (`:0` is taken, so the next free display number is picked). With a display address written into
+  the config, or auto-start turned off, forwarding still follows `DISPLAY` / `localhost:0`.
+- **Display number “Auto”**: when a number the probe found free turns out to be taken at start (someone got in between the probe and the bind, or
+  a lock file / abstract name shows a use the probe cannot see), the next free number is tried, up to 4 times, with the state staying “Starting”
+  meanwhile; a number set by hand still reports the error directly.
+- **“Trusted (`-Y`)” on the connection** (not an X Server page setting, recorded here as well): the hint now explains that all forwarded sessions
+  share one display — they can see each other's windows, read the clipboard and send input; the built-in X Server and most X servers on Windows
+  support only trusted forwarding, and untrusted mode needs an external X server with the SECURITY extension plus a local `xauth`. When the
+  display comes from the built-in X Server and the connection asks for untrusted mode, forwarding is not set up and a yellow line at the top of
+  the terminal explains why, with two ways out (tick Trusted, or use an external X server).
