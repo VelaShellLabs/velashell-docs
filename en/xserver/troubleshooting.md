@@ -102,6 +102,8 @@ sharing one display — what is tightened"):
 - **The clipboard is exchanged only with the session that has the keyboard focus**: what you copy locally can be read only by that
   session (`xclip` / `xsel` in the same SSH session included), and only copies from that session reach the local clipboard; while the
   focus is in a local window nobody can read it. The description of "Enable clipboard" on the settings page says so.
+  The sessions' clipboards are isolated from each other: one session can neither see nor read what was copied in another. To copy and paste
+  across sessions, copy in A as usual, click a window of B and paste — the content goes through the local clipboard.
 - **"Copy on selection" is off by default** (Settings → X Server → Clipboard): when it is on, whatever you copy locally can be pasted
   into any X program with a middle click.
 - **"Restrict programs from SSH sessions"** (Settings → X Server, shown only with the built-in engine, off by default): when on, programs

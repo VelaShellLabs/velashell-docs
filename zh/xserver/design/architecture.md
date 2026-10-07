@@ -314,7 +314,13 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     相同的客户端(同一个 SSH 会话里的 `xclip` / `xsel`,连接名见 `ServeAuthenticatedAsync(stream, label)`)读,X 这边的复制也只收那个会话的;
     没有 X 窗口有焦点时谁都读不到。否则本机复制的密码在用户点一下任意 X 窗口之后对所有会话可读,后台会话里的程序也能反复改写本机剪贴板。
     服务端替宿主占有剪贴板时,XFIXES 的属主通知也只发给读得到的客户端 —— 别的会话本可以据此精确得知「本机剪贴板何时有了新内容」。
-    还看得出来的:宿主从某个 X 客户端手里接过选区时,那个客户端照常收到 SelectionClear,GetSelectionOwner 也看得到属主换成了服务端。
+    开着时 PRIMARY、SECONDARY、CLIPBOARD 还**按会话隔离**:选区表按「原子 + 作用域」存,每个会话(连接名相同的客户端;没有连接名的本机程序
+    同属一个本机会话)各有各的属主 —— SetSelectionOwner、GetSelectionOwner、ConvertSelection、SelectionClear、XFIXES 通知、属主窗口销毁 /
+    属主断开都只在那个会话里生效。别的会话看不到属主变化、收不到因此发的 SelectionClear,也读不到另一个会话里的复制。其余选区
+    (`WM_S0`、XSETTINGS、拖放……)照协议全显示共享。跨会话的复制粘贴经宿主的剪贴板中转:剪贴板内容有一个逻辑时钟(宿主给了新文本、
+    X 端的复制交给了宿主、哪个会话里的程序占有了同步的选区,各推进一格),某个会话拿到焦点(PointerRoot 时指针换了顶层)时它那一份
+    比最新的文本旧,服务端就替宿主在那里占有 —— 在 A 里复制、切到 B 再粘贴,内容照样到;最近一次复制赢,不管它发生在哪个会话或本机。
+    同一会话里的程序之间照常互相复制粘贴。
     只有一个受信客户端的嵌入场景可以关掉。
   - **`RestrictForwardedClients`**(默认关):经 `ServeAuthenticatedAsync` 进来的连接看不到 XTEST(伪造的输入与真实键盘无从区分,被攻破的远端机
     能往别的会话的 xterm 注入命令)、收不到 XI2 的原始按键事件(不抢焦点就能记下所有 X 窗口里敲的键)、XIChangeHierarchy 回 BadAccess
