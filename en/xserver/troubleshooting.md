@@ -2,17 +2,39 @@
 
 中文:[`../../zh/xserver/troubleshooting.md`](../../zh/xserver/troubleshooting.md)
 
-Everything below comes from a real investigation (2026-09-24, `gnome-calculator` — GTK4 + libadwaita — on a remote Ubuntu
-desktop install). The first two are problems in the **remote environment** and look the same with VcXsrv / MobaXterm; the last
-one was a host defect and is fixed.
+Everything below comes from real investigations (the first batch on 2026-09-24, `gnome-calculator` — GTK4 + libadwaita — on a remote
+Ubuntu desktop install). There are three groups: problems in the **remote environment**, which look the same with VcXsrv / MobaXterm;
+**deliberate behaviour** of the built-in X Server — keeping sessions that share one display from seeing into and typing into each other
+(see [3](#3-several-sessions-sharing-one-display)); and **defects** in the host and the library, now fixed.
+
+**Remote environment**
 
 | Symptom | Cause | What to do |
 | --- | --- | --- |
 | The terminal prints `libEGL warning: DRI3 error: Could not get DRI3 device` | Mesa tries DRI3 hardware acceleration first. DRI3 passes file descriptors on the same machine, which is impossible over SSH forwarding | **Harmless**; Mesa falls back to software rendering right away. To hide it, set `LIBGL_ALWAYS_SOFTWARE=1` on the remote side |
 | A GTK4 program takes 25 or 50 seconds to show its window, using almost no CPU meanwhile | The desktop portal (`xdg-desktop-portal`) cannot start, and each of the program's D-Bus calls to it waits for the full 25-second timeout | See [1](#1-slow-start-25-seconds-at-a-time) |
 | The window shows up, but interaction drops frames and is not smooth | GTK4 renders with GL by default; without a GPU on the remote side it falls back to llvmpipe and sends the **whole window's pixels** over SSH for every frame | See [2](#2-sluggish-interaction) |
+
+**Deliberate behaviour of the built-in X Server**
+
+| Symptom | Cause | What to do |
+| --- | --- | --- |
+| With "Trusted (`-Y`)" unticked for the connection, X11 forwarding does not come up, and a yellow line at the top of the terminal says the built-in X Server supports only trusted forwarding | Untrusted forwarding needs the remote `xauth` to obtain an untrusted cookie from the local X server, which requires the SECURITY extension; the built-in X Server does not have it. It used to try anyway, leaving only an `xauth` error to look at | Tick "Trusted" for this connection, or use an external X server that supports the SECURITY extension (with `xauth` installed locally as well). What trusted means: see [3](#3-several-sessions-sharing-one-display) |
+| Text copied on this computer cannot be pasted into a remote X program, or text copied in an X program never reaches the local clipboard | The clipboard is exchanged only with **the session that has the keyboard focus**: while the focus is in another session's X window, or in a local window (no X window has the focus at that moment), nothing can be read from or written to the local clipboard | Click the window of the program you want to paste into first, then paste; `xclip` / `xsel` in the same SSH session count as the same session. See [3](#3-several-sessions-sharing-one-display) |
+| A middle click in an X program does not paste what was copied locally, and selecting text in an X program no longer puts it on the local clipboard | "Copy on selection" (exchanging X's PRIMARY selection with the system clipboard) is off by default | Turn it on under Settings → X Server → Clipboard if you need it. The cost: whatever you copy locally can then be pasted into any X program with a middle click |
+| Remote input tools such as `xdotool` do not work, or complain that the XTEST extension is missing | "Restrict programs from SSH sessions" is on in the settings: programs forwarded over SSH cannot see XTEST, receive no raw key events and cannot change input devices | If you only connect to servers you trust and need these tools, turn it off under Settings → X Server (it is a global setting that applies to every session) |
+| Clicking an X window's close button does nothing, and after a few seconds a "Not Responding — force quit?" dialog appears | The program is stuck: it advertises `_NET_WM_PING`, the server pinged it along with the close request, and no reply came within 5 seconds | "Force Quit" disconnects the program — its other windows close too, and unsaved work is lost. A stuck program that does not advertise `_NET_WM_PING` gets no such dialog; disconnecting its SSH session closes it |
+| No X window reacts to clicks or keys (typically after the SSH link dropped, the laptop slept or the remote process was suspended while one of its menus was open) | That program still holds a pointer / keyboard grab (or holds the whole server with GrabServer), and since its connection has not dropped, the grab stays | Disconnect that SSH session (or wait for the SSH keep-alive to time out); the grab goes when the connection does. When GrabServer is held for more than 10 seconds, VelaShell's log names the connection (with `user@host:port`). There is no "unstick" entry in the host UI yet |
+
+**Fixed defects**
+
+| Symptom | Cause | What to do |
+| --- | --- | --- |
 | After stopping and restarting the X Server from the title bar, the remote side reports `Failed to open display` | Host defect: the connector remembered the server that was running before the stop | Fixed ([architecture.md](design/architecture.md), decision log entry "M3: SSH x11 channels go straight into the server through a connector"); on older versions, reconnect the SSH session |
 | The remote program exited, but its local window stays open | Host defect: the remote EOF was not passed on to the X Server | Fixed (same entry; [SSH spec 07 §7.5.9](../ssh/spec/07-forwarding.md)) |
+| After switching the engine to VcXsrv in the settings, X programs started from SSH sessions that were already open report `Failed to open display` | Host defect: the connector bound when the session opened its shell only knew the built-in engine | Fixed (same entry): once the built-in engine has stopped, x11 channels of existing sessions go over local TCP to whichever X server is running now |
+| Java (Swing / AWT) programs cannot maximize, or after maximize / resize their contents do not relayout, as if leaving room for a title bar that is not there | Java decides from the window manager's name whether the window manager wraps windows in a frame, and assumes it does for any name it does not know — so it keeps waiting for the frame and ignores size changes | Fixed: the built-in X Server calls itself `LG3D` (a name Java knows does not wrap windows), so maximize and resize relayout as usual ([architecture.md](design/architecture.md), decision log entry "Fixes from the second library-wide review", ⑤). When embedding the library elsewhere, do not change `X11ServerOptions.WindowManagerName`; if you must, verify with a Swing program first |
+| On a Windows terminal server (several users logged in at once), remote programs' windows, keyboard and clipboard end up on another user's desktop | Host defect: deciding whether "another X display is already in use" looked only at whether something listened on `localhost:0`, which may be another user's VcXsrv | Fixed: only a listener process in the current user's session counts; otherwise the built-in engine starts automatically as usual (on another free display number) |
 
 ## 1. Slow start, 25 seconds at a time
 
@@ -66,3 +88,28 @@ forwarding into the built-in X Server.)
 
 The X Server cannot choose the renderer for the client — Mesa's software EGL works with the core protocol alone — so setting
 `GSK_RENDERER=cairo` is a remote-side setting; the `~/.bashrc` snippet above already includes it.
+
+## 3. Several sessions sharing one display
+
+The built-in X Server has a single display (`:N`), and every SSH session with X11 forwarding connects to it. That is exactly what
+trusted X11 forwarding means: programs on the same display can see each other's windows, read the clipboard and inject input into
+other windows — a compromised remote machine can, through its forwarding, operate X programs from other sessions.
+**Do not enable X11 forwarding for servers you do not trust.**
+
+Within that, the built-in X Server tightens a few things (details in [architecture.md](design/architecture.md) §7, "Several sessions
+sharing one display — what is tightened"):
+
+- **The clipboard is exchanged only with the session that has the keyboard focus**: what you copy locally can be read only by that
+  session (`xclip` / `xsel` in the same SSH session included), and only copies from that session reach the local clipboard; while the
+  focus is in a local window nobody can read it. The description of "Enable clipboard" on the settings page says so.
+- **"Copy on selection" is off by default** (Settings → X Server → Clipboard): when it is on, whatever you copy locally can be pasted
+  into any X program with a middle click.
+- **"Restrict programs from SSH sessions"** (Settings → X Server, shown only with the built-in engine, off by default): when on, programs
+  forwarded over SSH cannot simulate input (XTEST), cannot listen to every key typed in X windows, and cannot change input devices.
+  Recommended when connecting to servers you do not fully trust; tools such as `xdotool` on those servers stop working.
+- **Remote programs cannot jump to the front by themselves**: when one asks for its window to be activated, that is honoured only if it
+  was caused by what you just did in an X window; otherwise the taskbar entry just flashes. Menus and "always on top" windows stay on top
+  only while you are using an X window and drop behind when you return to a local window — so the keys of a sudo password typed in a
+  terminal cannot be taken by a remote window that jumped to the front.
+- **A window manager started by mistake on a remote machine** (openbox, xfwm4…) cannot take over the other sessions' windows: the built-in
+  X Server holds the window manager's place itself.
