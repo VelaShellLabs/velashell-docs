@@ -192,7 +192,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 `WM_HINTS` 的 initial_state 为 IconicState 时服务端在映射时加上 `Hidden`)、`Decorated`(`_MOTIF_WM_HINTS` 要求无装饰时为 false)、
 尺寸约束(最小 / 最大、步长、`BaseWidth` / `BaseHeight` —— 最小与基准互为缺省、`MinAspect` / `MaxAspect`,一律夹到 0–32767)、
 `WinGravity`、`UserPosition` / `ProgramPosition`、`WindowGroup`、`Functions`(`_MOTIF_WM_HINTS` 的 functions,`XWindowFunctions`)、
-图标(`_NET_WM_ICON`,只解析前 4 MB;没有时把 `WM_HINTS` 的 icon_pixmap / icon_mask 烙成一幅,边长至多 256)、`Urgent`、`AcceptsFocus`、`Opacity`、
+图标(`_NET_WM_ICON`,只解析前 4 MB;没有时把 `WM_HINTS` 的 icon_pixmap / icon_mask 烙成一幅,边长至多 256;`XWindowIcon.Pixels` 是只读的 `ReadOnlyMemory<uint>`)、`Urgent`、`AcceptsFocus`、`Opacity`、
 `ClientFrameExtents`、进程号 / 机器名 / 角色、`Shape`(边界形状)、`InputShape`(SHAPE 1.1 的输入形状与边界形状的交集,没设为 null)、
 `Strut`(`_NET_WM_STRUT_PARTIAL`,没有时取 `_NET_WM_STRUT`)。交给宿主的字符串只取有限的一段(标题至多 4096 个字符,类名 / 机器名 / 角色至多 256 个),
 去掉 C0 / C1 控制字符与双向排版控制符(RLO 之类能在任务栏里把标题倒着显示、伪造扩展名);提示类属性只读规范定义的那几个值。
@@ -314,6 +314,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     相同的客户端(同一个 SSH 会话里的 `xclip` / `xsel`,连接名见 `ServeAuthenticatedAsync(stream, label)`)读,X 这边的复制也只收那个会话的;
     没有 X 窗口有焦点时谁都读不到。否则本机复制的密码在用户点一下任意 X 窗口之后对所有会话可读,后台会话里的程序也能反复改写本机剪贴板。
     服务端替宿主占有剪贴板时,XFIXES 的属主通知也只发给读得到的客户端 —— 别的会话本可以据此精确得知「本机剪贴板何时有了新内容」。
+    还看得出来的:宿主从某个 X 客户端手里接过选区时,那个客户端照常收到 SelectionClear,GetSelectionOwner 也看得到属主换成了服务端。
     只有一个受信客户端的嵌入场景可以关掉。
   - **`RestrictForwardedClients`**(默认关):经 `ServeAuthenticatedAsync` 进来的连接看不到 XTEST(伪造的输入与真实键盘无从区分,被攻破的远端机
     能往别的会话的 xterm 注入命令)、收不到 XI2 的原始按键事件(不抢焦点就能记下所有 X 窗口里敲的键)、XIChangeHierarchy 回 BadAccess
@@ -344,7 +345,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     每个抓取减掉的组合至多 1024 个;XFIXES 的选区监听每客户端 1024 条;每个可绘对象上的 Damage 256 个;Present 排着的请求每客户端 256 条、
     一条 PRESENTNOTIFY 至多 64 项;以 Retain 模式留着资源的客户端 16 个;GetImage 的回复 256 MB;剪贴板文本 16 MB;GLX 见下文。
   - 内存账:`X11ServerOptions.MaxClientMemory`(每客户端,默认 1 GiB)与 `MaxTotalMemory`(全部合计,默认 2 GiB)—— 只限单件的话,一条 16 字节的
-    CreatePixmap 就是 256 MB,十几条就能让服务端连同宿主进程一起耗尽内存。记账的有:每个资源一份固定开销(64 字节);自有缓冲的像素图;
+    CreatePixmap 就是 256 MB,十几条就能让服务端连同宿主进程一起耗尽内存。记账的有:每个资源一份固定开销(64 字节);有独立缓冲的像素图(不是 NameWindowPixmap 那种借用窗口缓冲的);
     顶层窗口的缓冲(映射与改尺寸时先核账);DOUBLE-BUFFER 的后缓冲;Composite 子窗口的像素图,以及 NameWindowPixmap 给出、顶层改尺寸 / 重新映射之后
     独占旧缓冲的像素图(记在像素图属主名下);呈现之前就被释放的 Present 像素图(记在发请求的客户端名下);属性值与 XI 设备属性(记在写它的客户端名下);
     RENDER 字形(记在加它的客户端名下,字形表最后一个引用没了才释放)与渐变的色标;XFIXES 区域;GLX 的对象与拼到一半的 RenderLarge(见下文 GLX)。

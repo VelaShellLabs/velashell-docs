@@ -251,7 +251,7 @@ before mapping; with a `WM_HINTS` initial_state of IconicState the server adds `
 asks for no decorations), size constraints (min / max, increments, `BaseWidth` / `BaseHeight` — min and base default to each other,
 `MinAspect` / `MaxAspect`, all clamped to 0–32767), `WinGravity`, `UserPosition` / `ProgramPosition`, `WindowGroup`, `Functions` (the
 `_MOTIF_WM_HINTS` functions, `XWindowFunctions`), icons (`_NET_WM_ICON`, only its first 4 MB parsed; without it the `WM_HINTS` icon_pixmap /
-icon_mask are baked into one icon, at most 256 on a side), `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine /
+icon_mask are baked into one icon, at most 256 on a side; `XWindowIcon.Pixels` is a read-only `ReadOnlyMemory<uint>`), `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine /
 role, `Shape` (the bounding shape), `InputShape` (SHAPE 1.1's input shape intersected with the bounding shape, null when not set) and `Strut`
 (`_NET_WM_STRUT_PARTIAL`, else `_NET_WM_STRUT`). Strings handed to the host are bounded (titles at most 4096 characters, class / machine / role
 at most 256) and stripped of C0 / C1 control characters and bidirectional formatting characters (an RLO can show a title backwards in the taskbar
@@ -422,7 +422,8 @@ extra (the slack is not charged).
     can read it. Otherwise a password copied locally would be readable by every session as soon as the user clicked any X window, and programs in
     background sessions could keep rewriting the local clipboard. While the server owns the clipboard on the host's behalf, XFIXES owner
     notifications also go only to clients that can read it — other sessions could otherwise learn exactly when the local clipboard got new
-    content. Embedding scenarios with a single trusted client can turn it off.
+    content. What can still be seen: when the host takes a selection over from an X client, that client gets its SelectionClear as usual, and
+    GetSelectionOwner shows the owner changing to the server. Embedding scenarios with a single trusted client can turn it off.
   - **`RestrictForwardedClients`** (off by default): connections that come in through `ServeAuthenticatedAsync` cannot see XTEST (synthesized input
     is indistinguishable from the real keyboard, so a compromised remote machine could type commands into another session's xterm), receive no
     XI2 raw key events (which would let a client log every key typed in every X window without taking the focus), and get BadAccess for
@@ -469,7 +470,7 @@ extra (the slack is not charged).
     clients retaining resources; GetImage replies 256 MB; clipboard text 16 MB; GLX below.
   - Memory accounts: `X11ServerOptions.MaxClientMemory` (per client, 1 GiB by default) and `MaxTotalMemory` (all clients together, 2 GiB by
     default) — with per-item limits alone, one 16-byte CreatePixmap is 256 MB, and a dozen of them exhaust the memory of the server and the host
-    process with it. Charged are: a fixed overhead per resource (64 bytes); pixmaps with their own buffer; top-level buffers (checked at map and
+    process with it. Charged are: a fixed overhead per resource (64 bytes); pixmaps with a buffer of their own (not the kind NameWindowPixmap gives out, which borrows the window's buffer); top-level buffers (checked at map and
     resize); DOUBLE-BUFFER back buffers; Composite pixmaps of subwindows, and pixmaps from NameWindowPixmap that keep the old buffer to
     themselves after the top-level is resized or remapped (charged to the pixmap's owner); Present pixmaps freed before they were presented
     (charged to the client that sent the request); property values and XI device properties (charged to the client that wrote them); RENDER
