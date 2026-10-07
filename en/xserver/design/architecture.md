@@ -5,7 +5,7 @@
 > Status: **M1 (core protocol), M2 (modern toolkits), the "feature-complete" round (a dozen more extensions including XKB and
 > XInput2, the window-manager role, a library-wide performance review), M3 (host integration) and M4 (synchronous grabs, device
 > topology, XKB mapping changes, MIT-SHM, GLX) complete**; project started
-> 2026-09-23. The host's "X Server" button starts this library by default (one Avalonia native window per X window) and SSH X11
+> 2026-09-23; the fixes from the second library-wide review were completed in 2026-10 (§10). The host's "X Server" button starts this library by default (one Avalonia native window per X window) and SSH X11
 > forwarding connects straight into it; the VcXsrv the user installed becomes an optional engine on Windows (see
 > [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.2 and §14).
 
@@ -42,8 +42,10 @@ top-level windows as native windows through Avalonia (rootless), giving one code
 - No XDMCP, no multiple screens (Screen > 1), no indexed colour / writable colormaps (24-bit TrueColor only).
 - No DRI2 / DRI3 (there is no GPU to hand to clients). GLX only registers direct rendering (the client renders in software
   itself and sends pixels with PutImage) and offers software indirect rendering of a fixed-function GL subset; MIT-SHM exists
-  only on Linux and only for local clients connected over a Unix socket. Present does software copies only (there is no video
-  memory to flip).
+  only on Linux and only for local clients connected over a Unix socket from the server's own IPC namespace. Present does
+  software copies only (there is no video memory to flip).
+- No SECURITY extension (no untrusted client level): every client is equally trusted; how sessions are kept apart where
+  possible is in §7.
 
 ## 3. Clean-room rules
 
@@ -57,54 +59,67 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
    *X Damage Extension*, *Composite Extension*, *Double Buffer Extension*, *The Present Extension*, *MIT-SCREEN-SAVER*,
    *DPMS*, *X-Resource*, *Generic Event Extension*, *The MIT Shared Memory Extension* 1.1, and XINERAMA — which has no
    standalone specification document, so its wire format follows the protocol definitions X.Org publishes in panoramiXproto),
-   ICCCM, EWMH and freedesktop.org's XSETTINGS specification; GLX follows Khronos' *OpenGL Graphics with the X Window System*
-   1.4, the *GLX Extensions for OpenGL Protocol Specification* 1.3 (the encoding) and *The OpenGL Graphics System* 1.5 (GL
-   semantics for indirect rendering), with opcodes and enum values taken from the Khronos registry's `gl.xml` / `glx.xml`.
+   ICCCM, EWMH, freedesktop.org's XSETTINGS specification, and the X Consortium's *Compound Text Encoding* (COMPOUND_TEXT
+   encoding and decoding, `Protocol/XText.cs`); GLX follows Khronos' *OpenGL Graphics with the X Window System*
+   1.4, the *GLX Extensions for OpenGL Protocol Specification* 1.3 (the encoding), *The OpenGL Graphics System* 1.5 (GL
+   semantics for indirect rendering) and the GLX_ARB_create_context / GLX_ARB_create_context_profile extension specifications
+   in the Khronos registry, with opcodes and enum values taken from the Khronos registry's `gl.xml` / `glx.xml`.
    **Every protocol file's header names the specification and section it implements.**
 2. **No other X server's source is opened while implementing** (X.Org / XLibre / yserver / node-x11 / WeirdX / VcXsrv),
    and no OpenGL / GLX implementation's source either (Mesa and the like).
 3. Constants from the specifications (opcodes, event codes, error codes, predefined atoms, mask bits) take their
    specified values — they are protocol facts, not copyrightable, and must not be changed to "look different".
 4. **Data is not code**: the built-in bitmap fonts are BDF files from X.Org's `font-misc-misc` (copyright notice:
-   "Public domain font. Share and enjoy."), shipped as data files with their source recorded in `NOTICE.md`.
+   "Public domain font. Share and enjoy."), and the colour-name table is X.Org `rgb`'s `rgb.txt` as is (MIT / X11 licence);
+   both ship as data files with their source and licence recorded in `NOTICE.md`.
 
 ## 4. Layering
 
 ```
 Host/         Every public type, all in the root namespace VelaShell.XServer: IX11ServerHost, X11ServerOptions,
-              XTopLevelWindow with XTopLevelSnapshot / XTopLevelChanges / XFrameExtents, XCursor / XCursorShape / XCursorImage,
-              XKeymap, XMonitor, window-manager requests and enums, XKeycodes, XRect. Everything else is internal
+              XTopLevelWindow with XTopLevelSnapshot / XTopLevelChanges / XFrameExtents / XGravity / XWindowFunctions,
+              XPixelReader / XPixelReadResult, XClientInfo, XCursor / XCursorShape / XCursorImage, XKeymap, XMonitor,
+              window-manager requests and enums, XKeycodes, XRect. Everything else is internal
 Protocol/     Constants (opcodes, event codes, error codes, masks, predefined atoms), byte-order-aware request
-              reading and reply / event / error writing
+              reading and reply / event / error writing, the per-work-item work budget (WorkBudget, §5), STRING /
+              UTF8_STRING / COMPOUND_TEXT encoding and decoding (XText)
 Server/       X11Server: every public member lives in X11Server.cs (construction, lifecycle, host injection); the execution
               loop (WorkLoop), listening and connections (Connection, UnixSocket: TCP 6000+N, Unix sockets and ServeAsync /
               ServeAuthenticatedAsync over any duplex stream, connection setup (time-limited) and authorization (see §7), backpressure, BIG-REQUESTS,
-              cleanup on disconnect), the resource table and XC-MISC (Resources), request dispatch (Dispatch), deferred host
-              callbacks (DeferredHost), the extension registry (Extensions: the numbering table, the check that event / error
-              numbers do not overlap, cleanup hooks for disconnects and destroyed windows, Generic Event);
+              cleanup on disconnect), the resource table, XC-MISC and the memory accounts (Resources), request dispatch (Dispatch),
+              deferred and per-batch coalesced host callbacks (DeferredHost), the extension registry (Extensions: the numbering
+              table, the check that event / error numbers do not overlap, cleanup hooks — connection closed, a client's resources
+              destroyed, window destroyed, resource freed, pixmap freed — and Generic Event);
               request handlers split into partial files by area (Windows / Exposure / Events / Properties / Graphics / Text /
-              Colors / Cursors / Input / GrabFreeze, plus one or more per extension: Shape / XFixes / RandR / Monitors / Xinerama /
-              Render / Damage / Composite / Dbe / Sync / Present / Xkb / XkbSetMap / XInput / XiHierarchy / XTest / ScreenSaver /
-              Dpms / XRes / Shm), the top-level bridge to the host (TopLevels: handles, snapshots and their changes, damage
-              delivery, the host's window-manager actions), the window-manager role in Ewmh, clipboard exchange in Clipboard,
-              the XSETTINGS manager in XSettings; the self-contained GLX is a class of its own, GlxExtension
-Windowing/    Window model (tree, geometry, attributes, event selections, passive grabs, top-level buffer, the three SHAPE shapes)
+              Colors / Cursors / Input / KeyboardControl / GrabFreeze, plus one or more per extension: Shape / XFixes / RandR /
+              Monitors / Xinerama / Render / Damage / Composite / Dbe / Sync / Present / Xkb / XkbSetMap / XInput / XiHierarchy /
+              XTest / ScreenSaver / Dpms / XRes / Shm), the top-level bridge to the host (TopLevels: handles, snapshots and their
+              changes, damage delivery, the host's window-manager actions), the window-manager role in Ewmh, clipboard exchange in
+              Clipboard, the XSETTINGS manager in XSettings; the self-contained GLX is a class of its own, GlxExtension
+Windowing/    Window model (tree, geometry, attributes, event selections (XI2 ones stored per device ID), passive grabs,
+              top-level buffer, the three SHAPE shapes)
 Resources/    Resource types: GCs, pixmaps, colormaps, cursors, font handles, plus each extension's resources (RENDER pictures
               and glyph sets, SYNC, DAMAGE, XFIXES regions, Present event contexts, MIT-SHM segments, GLX contexts and
-              drawables); the colour-name table
+              drawables); the colour-name table (X.Org's rgb.txt, an embedded resource)
 Drawing/      32-bit software framebuffer, y-banded regions, rasterizer: 16 raster ops, plane mask, fill styles, clipping;
-              points / lines (thin Bresenham + wide-line polygons) / rectangles / scan-line polygon fill / arcs /
-              image blocks / text; RENDER: pixel formats, compositing operators and blend modes, sources (image / solid /
-              gradients with repeat, transform, filter), trapezoid coverage
+              points / lines (thin Bresenham + wide lines built as polygons per line-style / join-style / cap-style) /
+              rectangles / scan-line polygon fill / arcs / image blocks / text; RENDER: pixel formats, compositing operators and
+              blend modes, sources (image / solid / gradients with repeat, transform, filter), trapezoid coverage
 Gl/           Software GL for GLX indirect rendering: render-command decoding, display lists, matrix stacks, lighting,
-              clipping, triangle / line / point rasterization, textures, per-fragment operations, queries
-Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching, synthesized cursor and nil2 fonts
-Input/        Keycode ↔ keysym table (evdev-style keycodes), XKB evdev key names, modifier mapping, grab data structures (core and XI2)
+              clipping, triangle (scan-line) / line / point rasterization, textures, per-fragment operations, queries
+Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching (including the fonts.alias short names and the
+              nearest-size fallback), synthesized cursor and nil2 fonts
+Input/        Keycode ↔ keysym table (evdev-style keycodes), keysym case (KeysymCase), XKB evdev key names, modifier mapping,
+              grab data structures (core and XI2; PassiveGrabTable buckets passive grabs by detail)
 ```
 
 Unix sockets: outside Windows the server listens on `/tmp/.X11-unix/X{N}` by default, and on Linux also on the same
-name in the abstract namespace (Xlib / XCB try that first for `:N`); `X11ServerOptions.UnixSocketPath` sets or disables it
-and `ListenTcp` can turn TCP off. A host font-provider interface does not exist yet: core fonts only serve older programs, modern toolkits use RENDER with client-side rasterization, and no program has needed it since the host integration.
+name in the abstract namespace (Xlib / XCB try that first for `:N`); `X11ServerOptions.UnixSocketPath` sets it (a path that does
+not fit a socket address throws at construction) or disables it. TCP is governed by `ListenTcp`: by default (null) it listens only
+when an `AuthorizationCookie` is configured, `true` always listens (logging a warning at start when there is no cookie), `false`
+never does. While listening on a transport tied to the display number, the server holds `/tmp/.X{N}-lock` on Unix-like systems per
+the Xserver(1) convention (see §7). A host font-provider interface does not exist yet: core fonts only serve older programs, modern
+toolkits use RENDER with client-side rasterization, and no program has needed it since the host integration.
 
 ## 5. Threading model
 
@@ -114,43 +129,87 @@ each request's effects are visible to everything after it. Therefore:
 - **One execution loop** (single thread, `Channel<work item>`) runs all requests, host input and timers. Protocol state
   takes no locks — all mutable state is touched only on that thread. The one thing shared across threads is top-level
   pixels, guarded by the pixel lock (not exposed publicly): the loop holds it for a batch within a **4 ms** time budget, then releases it so the
-  host can copy pixels. A host reading pixels through `XTopLevelWindow.ReadPixels` / `CopyPixels` first registers that it is waiting:
-  after every work item the loop checks, releases early if someone is waiting, and re-takes the lock only after the read finishes
+  host can copy pixels. A host reading pixels through `XTopLevelWindow.ReadPixels` / `CopyPixels` / `TryReadPixels` first registers that it is
+  waiting: after every work item the loop checks, releases early if someone is waiting, and re-takes the lock only after the read finishes
   (bounded at 20 ms) — `lock` is unfair, the loop re-takes it within microseconds of releasing it, and a waiting UI thread could lose
   that race again and again, freezing the whole host UI.
-- **Host callbacks are never made while holding the lock**: notifications produced by the loop (map, geometry, damage,
-  cursor, WM requests…) are queued in `DeferredHost` and invoked in order after the lock is released — so a host that
+- **Every work item gets a work budget**: the 4 ms batch budget only acts between work items, and a request holds the pixel lock from start
+  to finish — a request whose cost is out of proportion to its bytes (huge coordinate ranges, overlapping rows, large composites,
+  display lists called over and over) could freeze the host UI along with it. So each work item starts with a budget (2²⁸ units, a unit
+  being roughly one pixel processed: about 270 million pixels, filling a 4K screen 32 times), and hot loops charge what they process:
+  rasterizer rows / pixels / bitmap blocks, polygon edges and rows, RENDER composite pixels, trapezoid coverage and mask allocation, and for
+  GLX render commands vertices (16), fragments (8), triangle scan rows and spans, the area of Clear, and the pixels decoded by DrawPixels /
+  Bitmap / CopyPixels / TexImage. When the budget runs out the request gets Alloc; GLX render commands have no reply, so they record GL's
+  OUT_OF_MEMORY and the rest of that request's render commands are skipped. A work item that holds the lock for more than 250 ms is
+  logged with its client and opcode.
+- **The host can read pixels with a time limit**: `XTopLevelWindow.TryReadPixels(reader, timeout)` returns `Busy` without calling the reader
+  when it cannot get the lock in time. The Avalonia host waits at most 8 ms per frame; if it cannot get in, it skips that frame and keeps the
+  damage for the next one — a slow client cannot hold the host UI hostage. Measured with four fully loaded windows read one after another
+  each frame: median 0.44 ms, never once missed, so there is no separate "read several windows under one lock" API (the scenario is in
+  `scripts/xserver/bench/bench.cs`).
+- **Host callbacks are never made while holding the lock, and are coalesced per batch**: notifications produced by the loop (map, geometry,
+  damage, cursor, WM requests…) are queued in `DeferredHost` and invoked in order after the lock is released — so a host that
   synchronously waits for its UI thread inside a callback, while that UI thread waits for the lock in `ReadPixels`,
-  cannot deadlock; a host callback that throws does not take the loop down either.
+  cannot deadlock. A host callback that throws is logged and swallowed, so is a host log delegate that throws itself, and each batch of
+  the loop has its own safety net, so none of these takes the loop down. Within one batch: a window's `TopLevelChanged` calls are OR-ed into
+  one (at the position of the first; not merged across a map / unmap in between); a map followed by an unmap cancels out; only the last
+  `CursorChanged` and `ClipboardChanged` are delivered; at most 32 `WindowManagerRequested` are delivered and the rest are dropped with a log
+  line; at most one `BellRequested` (the loudest), at least 100 ms apart — a client looping over title changes, map / unmap or bells cannot
+  flood the host's UI thread.
 - One **reader task** per connection (64 KB buffer) cuts complete requests by their length field and hands them to the
   loop; one **writer task** packs the messages the loop queued for that connection into one pooled buffer and writes it.
-  The loop never blocks on a socket, so a slow client cannot stall the others.
+  The loop never blocks on a socket, so a slow client cannot stall the others. When a write fails (the peer is gone) the client is
+  disconnected right away instead of waiting for the reader to notice — the reader may be parked on backpressure and not reading the socket at all.
 - **Backpressure**: at most 1024 read-but-not-executed requests per client, 32 MB in total (the reader waits asynchronously on a
   `SemaphoreSlim` and on the byte budget, and only then allocates and reads — counting requests alone would allow 1024 requests of
-  16 MB, 16 GB); a client whose queued output exceeds 64 MB (it stopped reading) is disconnected. Disconnecting is
-  real — `XClient.Abort` cancels the pending read and write on the connection.
+  16 MB, 16 GB); a client is disconnected when a message arrives while the bytes **already queued** for it have reached 64 MB (it stopped
+  reading). A single message may itself be larger than the limit (with three 4K monitors side by side the reply to `xwd -root` is about
+  100 MB), so the overshoot is at most one message; requests that can produce huge replies have limits of their own (GetImage estimates the
+  size first and returns BadAlloc above 256 MB). Disconnecting is real — `XClient.Abort` cancels the pending read and write on the connection.
   Request buffers are rented from `ArrayPool` and returned after execution (a full-window PutImage is several MB, and allocating
   each one would put every one of them on the large object heap); the request reader carries its own length and reads only that
-  many bytes, and anything a request's content must outlive is copied out. Replies and events are assembled in a writer reused per
-  thread; only the copy handed to the writer task is allocated.
-- **Connection setup has a time limit**: the setup message (the 12-byte header plus the authorization name and data) must arrive,
-  and a failure reply must be written, within 30 seconds, or the connection is closed — the client limit (255) counts only
-  established clients, so without a limit a connection that never finishes setup could hold a socket forever. Waiting for the
-  execution thread to register the client is not timed.
+  many bytes (bounds are checked against the remaining length, so a client-supplied length near 2³¹ cannot wrap around), and anything a
+  request's content must outlive is copied out. Replies and events are assembled in a writer reused per thread; only the copy handed to the
+  writer task is allocated.
+- **The accept loops survive transient errors**: a failed accept (file descriptors exhausted, the peer reset before the accept) is logged and
+  the loop carries on, waiting 100 ms first for errors like fd exhaustion; it only exits on cancellation or once the listener is closed. It used
+  to exit for good on any error, after which no local X program could connect again and nothing was logged.
+- **Connection setup has a time limit and a concurrency limit**: the setup message (the 12-byte header plus the authorization name and data)
+  must arrive, and a failure reply must be written, within 10 seconds, or the connection is closed; at most 32 connections may be in setup at
+  once, and any beyond that are closed on the spot (a connection stops counting once it is registered as a client); the authorization name and
+  data are at most 256 bytes each, checked as soon as the header is in, and longer ones get a connection failure. The client limit (255) counts
+  only established clients — without these, any local user could exhaust file descriptors and memory with tens of thousands of connections that
+  send a header and stall, no cookie needed. Waiting for the execution thread to register the client is not timed; if the caller cancels during
+  that wait, the client that does get registered is disconnected at once, so no connection-less client is left holding a number.
 - **Everything that waits, waits asynchronously**: XTEST and Present delays and SYNC timers use `Task.Delay` and `Post`
   back to the loop when due; SYNC's Await parks that client's later requests and replays them in order once satisfied.
   An XTEST FakeInput with a delay parks that client's later requests the same way (per the spec, no other requests from the client
-  are processed until the delay expires) without blocking the execution thread; Present's NotifyMSC queues at most 256 per client.
-  A client's pending timers are cancelled when it disconnects.
+  are processed until the delay expires) without blocking the execution thread; Present's queued PresentPixmap and NotifyMSC requests are
+  capped at 256 per client together. A client's pending timers are cancelled when it disconnects. Parked requests (GrabServer ending, an Await
+  satisfied, an XTEST delay expiring) go back through a **ready queue**: the loop takes from it before the channel, and each request runs under
+  the usual batch budget with the lock released between batches — they used to run all at once in a single work item, in the worst case
+  255 clients × 1024 requests under the lock. A client's requests still in the channel are always later than its parked ones, so order is kept.
 - **Diagnostics are never written under the lock**: protocol errors and other diagnostics are collected on the execution loop and
   handed to `X11ServerOptions.Log` after the lock is released (host logs often write files synchronously, and writing under the lock
-  makes the UI thread wait on the disk); at most 50 lines per second, with the rest folded into one "N suppressed" line. Each request's
-  opcodes are recorded as integers in a ring and turned into text only when an error is printed.
+  makes the UI thread wait on the disk). Lines that clients can trigger in bulk have two limits: at most 50 lines per second, and a byte
+  allowance (shared by all clients: 32 KB up front, then 256 bytes per second), with the number of dropped lines reported in one line the next
+  time something can be logged. Those lines have C0 / DEL / C1 control characters and bidirectional-text controls written as `\xNN` / `\uNNNN`
+  and are cut to 512 characters (OpenFont names to 200) — a newline in a client-supplied string could forge log lines, and an ESC could inject
+  control sequences into the terminal of whoever reads the log. Unexpected failures of requests, work items and disconnect cleanup log a full
+  stack trace the first time per kind (location + exception type) and one line after that. Each request's opcodes are recorded as integers in a
+  ring and turned into text only when an error is printed.
 - During **GrabServer** the loop runs only the holder's requests; other clients' requests are parked as they are and
-  replayed in order after the ungrab.
-- **While a synchronous grab freezes devices**, device events queue in a single list, pointer and keyboard in arrival order
-  (at most 4096; when full, the oldest motion is dropped first); after release, one work item replays at most 64 of them and the
-  rest go to the next work item — so client requests in between (the next AllowEvents) can get in.
+  replayed in order after the ungrab (through the ready queue, above). If the grab has been held for 10 seconds while others' requests are
+  waiting, a line names the holder (with its connection label, e.g. `user@host:22`) and the number of waiting requests, and again every 60
+  seconds until it lets go; when the holder hangs, the host can call `BreakGrabs` or `DisconnectClient` by number (§6). A holder grabbing again
+  is a no-op.
+- **While a synchronous grab freezes devices**, device events queue in a single list, pointer and keyboard in arrival order (host injection
+  and XTEST queue alike); after release, one work item replays at most 64 of them and the rest go to the next work item — so client requests
+  in between (the next AllowEvents) can get in. The queue holds at most 4096 events and, when full, decides by three classes: droppable ones
+  (pointer motion, leave, key auto-repeat) — the oldest goes first; with nothing droppable, the newly arriving press is dropped and remembered,
+  so its release and auto-repeats are dropped with it and X never sees it pressed; releases are always kept and may exceed the limit (no more
+  releases can arrive than there are keys and buttons held). It used to drop releases too when full, leaving a key or button held after the thaw.
+  A WarpPointer while frozen is queued the same way and computed against the position and windows at the time it is replayed.
 - Damage is merged after a batch of work items and reported to the host once (not once per drawing request); each
   top-level accumulates at most 8 rectangles per batch and falls back to their bounding box beyond that — an exact
   union degrades to O(n²) over a batch of a few hundred requests.
@@ -162,16 +221,81 @@ The library defines the interface and the host implements it; notifications flow
 
 | Direction | Content |
 | --- | --- |
-| Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle") | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction counts as unmapping); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: geometry, title, states, icons, shape, other hints). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` — geometry, title (`WM_NAME` / `_NET_WM_NAME`), class, transient parent (`TransientFor`, another `XTopLevelWindow`), override-redirect, non-rectangular outline (`Shape`, the SHAPE bounding shape, null when rectangular), window-manager hints (`WindowType`, `States`, `Decorated` — false for windows that draw their own title bar, min / max size and increments, icons, `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine / role, `HasAlpha`); the server replaces it whole on every change, and the host reads it into a local before reading fields; clients' window-manager requests (`WindowManagerRequested`: interactive move / resize, state changes, activate, close, minimize — a default interface method); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB cursors); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies); an X client copied text (`ClipboardChanged`) |
-| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (the wheel as buttons 4/5; 6 and up are horizontal wheel and side buttons), pointer leaving, keys (X keycodes); window-manager actions, `*TopLevel`: focus (`FocusTopLevel`, null = no focus), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry and sends ConfigureNotify / Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised, otherwise the client is disconnected), window states and frame extents (`SetTopLevelStates` / `SetTopLevelFrameExtents`, written back to `_NET_WM_STATE` / `_NET_FRAME_EXTENTS`); runtime configuration, `Set*`: the keymap (`SetKeymap`: one `XKeymap` carrying keysyms, the layout name and whether right Alt is AltGr, applied at once with a single round of MappingNotify and XKB notifications), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and RESOURCE_MANAGER), the system clipboard has new text (`SetClipboardText`) |
+| Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle"; all are made on the execution thread after the lock is released, coalesced per batch as in §5) | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction and being reparented away count as unmapping; **not sent one by one at shutdown** — the host closes its native windows itself when it stops the server); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: `Geometry` — position, size, `BorderWidth`, `NeedsPlacement`; `Title` — title, `ClassName`, `InstanceName`; `States`; `Icons`; `Shape` — bounding and input shapes; `Hints` — everything else). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` (see "Snapshot" below); clients' window-manager requests (`WindowManagerRequested`, a default interface method; see "Window-manager requests" below); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` / `TryReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB cursors and glyph cursors from fonts other than `cursor`, its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`) |
+| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed) |
 
-Clipboard exchange is controlled by `X11ServerOptions.SyncClipboard` (CLIPBOARD, on by default) and `SyncPrimary`
-(PRIMARY, off by default).
+**Lifecycle**: the execution thread starts at construction, so an instance must be disposed with `DisposeAsync` even if `StartAsync`
+was never called. `StartAsync`'s failure modes are in §7 (a taken display number throws `SocketException` (`AddressAlreadyInUse`); being
+configured to listen yet getting no transport up throws `IOException`); on failure the listeners already opened are closed again and the same
+instance may try again. `StartAsync` and `DisposeAsync` are mutually exclusive, so racing them cannot leak a listener nobody closes.
+`DisposeAsync` may be called several times and concurrently: later calls return only after the first one has finished, and exceptions during
+shutdown are not rethrown; `Completion` completes when shutdown is done. `ServeAsync(stream, isLocal)` and `ServeAuthenticatedAsync(stream[, label])`
+throw invalid arguments (a null stream, a disposed server) on the spot rather than inside the returned task; `label` describes where the connection
+comes from (e.g. `user@host:22`), shows up in the log, `XClientInfo.Label` and the snapshot's `ClientLabel`, and is what "the same session" means
+when the clipboard follows the focus (§7).
 
-**Every top-level window owns a pixel buffer** (effectively always-on backing store + Composite): child windows draw
+**Handles**: an `XTopLevelWindow` is the same object from map until destruction (or until it is reparented away). It carries the server that
+issued it (`Server`; passing it to another server's methods throws `ArgumentException`) and `IsAlive` (false once the window is destroyed,
+reparented away or the server has shut down; it never turns back to true). A host using handles as dictionary keys compares them by reference,
+not by `Id` (the XID) — stop the server and start another right away and the new windows' XIDs coincide with the old ones, while the UI queue may
+still hold callbacks from the old server; callbacks should first check that `Server` is the one attached right now. Pixels: `ReadPixels` /
+`TryReadPixels` / `CopyPixels` get nothing once the window is destroyed or reparented away (`false` / `NoBuffer` / (0, 0)); unmapping does not
+count — the buffer is still there, holding what was drawn last before the unmap. InputOnly top-levels have no pixels.
+
+**Snapshot** (`XTopLevelSnapshot`; the server replaces it whole on every change and the host reads it into a local before reading fields; an
+unchanged shape or icon set keeps its list instance): geometry (`X` / `Y` are the top-left corner of the X window's **outer border edge**, `Width` /
+`Height` the content area, `BorderWidth`, `NeedsPlacement` and `PlaceInFrame` — see "Placement" below), title (`_NET_WM_NAME` first, else
+`WM_NAME` decoded by its type), `ClassName` / `InstanceName` (`WM_CLASS`), override-redirect, transient parent (`TransientFor`),
+`SupportsDeleteWindow`, the owning client (`ClientId` / `ClientLabel`), `InputOnly`, `HasAlpha`, `WindowType`, `States` (states the client set
+before mapping; with a `WM_HINTS` initial_state of IconicState the server adds `Hidden` at map time), `Decorated` (false when `_MOTIF_WM_HINTS`
+asks for no decorations), size constraints (min / max, increments, `BaseWidth` / `BaseHeight` — min and base default to each other,
+`MinAspect` / `MaxAspect`, all clamped to 0–32767), `WinGravity`, `UserPosition` / `ProgramPosition`, `WindowGroup`, `Functions` (the
+`_MOTIF_WM_HINTS` functions, `XWindowFunctions`), icons (`_NET_WM_ICON`, only its first 4 MB parsed; without it the `WM_HINTS` icon_pixmap /
+icon_mask are baked into one icon, at most 256 on a side; `XWindowIcon.Pixels` is a read-only `ReadOnlyMemory<uint>`), `Urgent`, `AcceptsFocus`, `Opacity`, `ClientFrameExtents`, process id / machine /
+role, `Shape` (the bounding shape), `InputShape` (SHAPE 1.1's input shape intersected with the bounding shape, null when not set) and `Strut`
+(`_NET_WM_STRUT_PARTIAL`, else `_NET_WM_STRUT`). Strings handed to the host are bounded (titles at most 4096 characters, class / machine / role
+at most 256) and stripped of C0 / C1 control characters and bidirectional formatting characters (an RLO can show a title backwards in the taskbar
+and fake a file extension); hint properties are read only as far as the values the specifications define.
+
+**Window-manager requests** (subclasses of `XWindowManagerRequest`; the host is the window manager and decides whether to honour them):
+`XMoveResizeRequest` (`_NET_WM_MOVERESIZE`: start a native move / resize; the server treats the held button as handed to the window manager only
+when the request comes from the client holding the pointer grab), `XStateChangeRequest` (`_NET_WM_STATE` additions and removals; also sent, removing
+`Hidden`, when a client maps a mapped normal top-level that is `Hidden` — ICCCM §4.1.4), `XActivateRequest` (`_NET_ACTIVE_WINDOW`, carrying
+EWMH's source indication `Source`, the timestamp `Timestamp` and the server's verdict `UserInitiated`: the source is a pager, or the timestamp is
+no earlier than the user's last key or button press in an X window; CurrentTime and stale timestamps do not count — a host should honour it only
+when it is true and the user is using X windows at that moment, and otherwise just draw attention), `XRaiseRequest` (a client sent a
+ConfigureWindow with stack-mode Above to a top-level: XRaiseWindow, XMapRaised, Java's toFront; stacking only, no focus asked for), `XFocusRequest`
+(a client moved the keyboard focus to this top-level itself, so keys now go there), `XNotRespondingRequest` (pinged on close, no `_NET_WM_PING`
+reply within 5 seconds; the host may ask the user whether to `KillTopLevelClient`), `XCloseRequest` (`_NET_CLOSE_WINDOW`) and `XMinimizeRequest`
+(ICCCM's `WM_CHANGE_STATE`). `_NET_MOVERESIZE_WINDOW` and `_NET_REQUEST_FRAME_EXTENTS` need no decision from the host and are handled by the
+server directly.
+
+**Placement**: the host does not draw X's border; the native window's content area goes at (`X + BorderWidth`, `Y + BorderWidth`), and the
+native frame stands in for the border. When `NeedsPlacement` is true (window creation, a client moving a top-level, reparenting to the root —
+the position is what the client asked for and no window manager has placed it yet), the host aligns the native window's **frame** (not its
+content area) with the requested position by `WinGravity`, per ICCCM §4.1.2.3: `PlaceInFrame(frame)` gives the position the X window should take
+once wrapped in a frame `frame` wide on each side (`Static` leaves the content area in place; for NorthWest the result does not depend on the frame
+size, so nothing jumps when the window is shown), and the host reports it back with `MoveTopLevel`, after which the flag is false. When the
+request is (0, 0) and not user-specified (no `UserPosition`), the host may choose a position; `xterm -geometry +0+0` carries USPosition and is
+honoured. Override-redirect windows are not placed by the window manager and never have the flag. `_NET_MOVERESIZE_WINDOW` is converted directly
+using the gravity (0 = the window's own win_gravity) and the frame the host reported; a width or height outside 1–32767 makes the whole request
+ignored, coordinates are clamped to 16 bits, and a growing buffer is checked against the memory account first.
+
+**Naming**: `Inject*` is synthesized user input; methods whose names contain `TopLevel` and take an `XTopLevelWindow` first are the host acting as
+window manager on that top-level, named "verb + TopLevel + object" (`MoveTopLevel`, `SetTopLevelStates`, `ChangeTopLevelStates`,
+`KillTopLevelClient`); `Set*` without `TopLevel` means something in the host's environment changed and is being pushed into the server (keymap,
+monitor layout, DPI, lock keys, clipboard contents). Renaming a public method is a breaking change for embedders: when a name does not fit the
+rule, fix how the rule is written first.
+
+Clipboard exchange is controlled by `X11ServerOptions.SyncClipboard` (CLIPBOARD, on by default), `SyncPrimary` (PRIMARY, off by default) and
+`ClipboardFollowsFocus` (exchange only with the session that has the keyboard focus, on by default; see §7).
+
+**Every top-level window owns a pixel buffer** (effectively always-on backing store + Composite; InputOnly top-levels have none): child windows draw
 into their top-level's buffer, clipped to their visible region. Content hidden behind other native windows is never
-lost, at the cost of memory — clients need not redraw whenever occlusion changes. Expose is only sent on map, growth,
-ClearArea(exposures) and when an unmapped child reveals its parent.
+lost, at the cost of memory (charged to the memory account, §7) — clients need not redraw whenever occlusion changes. Expose is only sent on map,
+growth, ClearArea(exposures) and when an unmapped child reveals its parent; when a top-level's bounding / clip shape changes only the newly revealed
+part is repainted, and changing the input shape repaints nothing. On resize the buffer moves rows in place when it can, and a new one gets a quarter
+extra (the slack is not charged).
 
 ## 7. Key trade-offs
 
@@ -179,91 +303,399 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   for RENDER); pixmaps may additionally have depth 1 / 4 / 8 / 15 / 16 (following X.Org's convention — Xt programs create
   depth-4 / 8 pixmaps and got BadValue while only 1 / 24 / 32 were allowed). Pixel values are RGB, AllocColor is just a
   conversion and colormaps never "run out"; writable colour cells (AllocColorCells) are always BadAlloc.
+  Colour names are looked up in X.Org's `rgb.txt` (an embedded resource parsed on first lookup; spaces and case are ignored, so
+  `dark slate gray` and `DarkSlateGray` are the same entry, and numbered variants such as `red3` and `VioletRed4` are all there).
 - **Software rasterization, not Skia**: core drawing semantics are **pixel-exact** (thin-line Bresenham endpoints,
   GXxor rubber bands, plane masks), which anti-aliasing 2D libraries cannot reproduce. The host receives 32-bit pixels;
-  how they reach the screen is the host's business.
+  how they reach the screen is the host's business. As the protocol specifies, integer coordinates are pixel centres: polygons, wide
+  lines and arcs sample row `row` at y = row, edges are closed at the top and open at the bottom, spans closed on the left and open on
+  the right (RENDER's coverage masks are centred at +0.5 as the RENDER specification says and are unaffected).
+- **Core drawing follows the protocol's details, and costs follow what is visible**:
+  - Intersect with the clip first: rectangles are intersected with the drawable area before rows are filled; a thin line only walks
+    the part that crosses the drawable area (for this Bresenham the minor-axis position at step k has a closed form, so the start is
+    found by bisection and the walk continues from there, producing the same pixels as walking from the beginning); clip tests bisect
+    the bands; coordinates accumulated in CoordModePrevious saturate at ±2³⁰; round caps / round joins of wide lines have at most 1024
+    vertices, and segments and joins whose bounding box misses the drawable area are skipped outright.
+  - Wide lines and arcs honour line-style, join-style and cap-style: Miter extends the two outer edges until they meet (falling back to
+    Bevel below 11°), Bevel adds the outer triangle, Round adds a disc; zero-length segments are dropped from the path, and a line that
+    collapses to a point draws a disc with Round and a square with Projecting. Dashes are measured along the line; OnOffDash draws only
+    the even dashes; DoubleDash draws the odd ones in the background — sourced per fill-style: Solid uses the background colour,
+    Stippled the background colour masked by the stipple, Tiled / OpaqueStippled the same source as the even dashes. A wide arc that is
+    not a full circle gets caps at both ends per cap-style, and its inner and outer boundaries are ellipses with the semi-axes plus / minus
+    half the line width, not rounded. PolyLine with three or more points whose first and last coincide is drawn as a closed path (a join
+    there rather than two caps; a thin line does not draw the end point twice). Joins between consecutive arcs in a PolyArc are not
+    implemented (each arc gets its own caps).
+  - CopyArea / CopyPlane: only the visible part of a source window can be copied (with ClipByChildren mapped children obscure it too, with
+    IncludeInferiors their contents are copied along); the parts that cannot be copied (obscured, unviewable, a child sticking out of its
+    top-level's buffer) are first painted with the destination window's background when it is not None, then reported one rectangle at a
+    time as GraphicsExposure, and NoExposure is sent only when everything was copied. CopyPlane with a bit-plane ≥ 2^source depth gets
+    BadValue. GetImage fills the part that sticks out of the top-level's buffer with 0 (obscured contents are undefined anyway).
+  - A failing request has no effect: CreateGC / ChangeGC read and check all values before writing any into the GC, and so do SetDashes and
+    RENDER's FreeGlyphs; out-of-range GC enums (function, line-style, cap-style, join-style, fill-style, fill-rule, subwindow-mode,
+    arc-mode…) get BadValue; PutImage in Bitmap / XYPixmap format with left-pad ≥ 32 gets BadMatch.
+  - With single-byte fonts a CHAR2B is read as a 16-bit number, high byte first; a non-zero byte1 is a missing glyph and uses default-char.
 - **Keycodes use evdev numbering (evdev + 8)**, like X.Org on modern Linux — most remote clients expect it. The host
-  translates physical keys to X keycodes; the keysym table comes from the library (US layout to start, replaceable).
-- **Authorization**: listens on `127.0.0.1` and Unix sockets by default. In order: ① a stream the caller has already
-  authenticated (`ServeAuthenticatedAsync`, used by the host's SSH connector — the fake cookie was already checked at the SSH layer)
-  is admitted; ② a correct `MIT-MAGIC-COOKIE-1` (compared in constant time) is admitted; ③ a peer known to be the user running the
-  server — the socket file set to 0600 between `bind` and `listen`, or an SO_PEERCRED uid equal to this process's — is admitted;
+  translates physical keys to X keycodes; the keysym table comes from the library (US layout to start, replaceable). `XKeycodes` also has
+  the keys of Japanese JIS / Brazilian ABNT2 / Korean keyboards (Ro, Yen, Henkan, Muhenkan, Hiragana_Katakana, KP_Equal, Hangul,
+  Hangul_Hanja), F13–F24 and the media keys, and the initial keysym table has keysyms for all of them.
+- **Keyboard: cadence and layout come from the host, semantics from the server**:
+  - The auto-repeat cadence is the host's system setting: when a key that is already down gets another press, the host marks it with
+    `InjectKey(keycode, true, repeat: true)`, and the server applies X's rules — with `xset r off`, auto-repeat turned off for that key, or a
+    modifier key (per-key repeat is on by default for everything except modifiers) it is dropped; otherwise core clients without XKB
+    DetectableAutoRepeat get a release / press pair, those with it get only the press, and XI2 KeyPress and RawKeyPress carry the KeyRepeat
+    flag; the release in between does not end passive grabs. XKB's RepeatKeys / PerKeyRepeat are the same settings as the core ones; the
+    repeat delay and interval are only recorded and reported.
+  - ChangeKeyboardControl takes effect: every item is checked before any takes effect (−1 restores the default, other negative values are
+    BadValue; led / key without mode is BadMatch); the bell's base volume / pitch / duration, the LEDs, key click and global and per-key
+    auto-repeat are recorded, and GetKeyboardControl reports them truthfully. After `xset b off` the computed bell volume is 0 and the host
+    stays silent.
+  - SetPointerMapping takes effect: 9 buttons (GetPointerMapping and XI report the same mapping); a wrong length or repeated non-zero
+    entries get BadValue, a button that would change while held gets Busy, and success sends MappingNotify. The host and XTEST supply
+    physical buttons; core and XI2 events, state bits and the implicit grab use the mapped numbers, and raw events report the physical ones.
+    SetModifierMapping gets BadValue for keycodes outside 8–255 and Busy when an affected key is held.
+  - `SetKeymap` changes only the keys whose keysyms differ from what the host supplied last time (a key a client changed with xmodmap and the
+    host did not change keeps the client's change); right Alt's keysym changes only when its role (AltGr / Alt_R) changes, and it only moves
+    between Mod1 and Mod5, leaving the rest of the modifier map alone; when nothing changed no MappingNotify / MapNotify is sent. The host
+    checks the system layout before every press in an X window (auto-repeats excluded) and, if it changed, pushes the new keymap before
+    injecting the key (on Windows only the layout handle is compared; on macOS / Linux computing the keymap is costlier, so at most once a
+    second; not when a layout is chosen in the settings).
+  - Lock keys: CapsLock / NumLock start off in the server, so the host pushes the system's real state whenever an X window gets the focus
+    (`SetLockState`, no synthesized key presses; Windows uses GetKeyState, macOS CGEventSourceFlagsState with NumLock treated as always on,
+    Linux reads the desktop X display's XKB lock modifiers on a background thread).
+  - Idle time: the host reports activity in its own UI through `NoteUserActivity`, so the idle time remote programs see through
+    MIT-SCREEN-SAVER / SYNC's IDLETIME no longer counts X input alone.
+  - On macOS, key combinations with Command may never get a KeyUp: the host remembers the keys pressed while Command is held and releases
+    the ones still down when Command goes up (if Avalonia does deliver the KeyUp, this does nothing).
+- **Authorization**: listens on `127.0.0.1` (TCP by default only with a cookie configured, §4) and Unix sockets. In order: ① a stream the caller
+  has already authenticated (`ServeAuthenticatedAsync`, used by the host's SSH connector — the fake cookie was already checked at the SSH layer)
+  is admitted; ② a correct `MIT-MAGIC-COOKIE-1` (compared in constant time) is admitted; ③ a peer known to be the user running the server is
+  admitted — when the peer uid is available (SO_PEERCRED on Linux, getpeereid on macOS / FreeBSD) the uid decides and must equal this process's
+  effective uid; only when it is not (Windows) does the socket file's 0600 mode, set between `bind` and `listen`, decide (a custom path on a file
+  system such as 9p / drvfs, where chmod silently does nothing, would otherwise let anyone in);
   ④ a peer whose uid is known and belongs to another user is refused (sockets in the Linux abstract namespace have no file
-  permissions, so without the uid check any local user could connect, read windows, log keystrokes and inject input through XTEST);
-  ⑤ with a configured cookie everything else is refused (loopback TCP included: any local process or user can reach that port);
-  without one, as with X.Org's host access control, only local connections are admitted.
-  The host's built-in server generates a fresh cookie on every start and writes it to the user's `.Xauthority` (`XAUTHORITY`
-  first; read-modify-write under xauth's lock-file convention, leaving unrecognised content alone; on stop it removes only its own
-  entry), so local X programs send it automatically through Xlib; programs that cannot read that file are refused.
+  permissions, so without the uid check any local user could connect, read windows, log keystrokes and inject input through XTEST), and
+  without a configured cookie the connection is closed right after accept; ⑤ with a configured cookie everything else is refused (loopback TCP
+  included: any local process or user can reach that port); without one, as with X.Org's host access control, only local connections are
+  admitted. The cookie must be 16–256 bytes (`MinAuthorizationCookieLength` / `MaxAuthorizationCookieLength`; an empty array used to admit any
+  cookie with empty data) and is copied at construction, so later changes to the caller's array do not affect authorization. The access policy
+  is fixed: ListHosts reports access control enabled with an empty host list, and ChangeHosts and SetAccessControl(Disable) get BadAccess —
+  they used to succeed silently, so `xhost +` looked effective while nothing changed.
+  The host's built-in server generates a fresh cookie on every start and writes it to the user's `.Xauthority` (`XAUTHORITY` first; encoded and
+  decoded with the SSH library's `XAuthority`, and a file the strict parser cannot fully read is not rewritten; xauth's lock convention — first
+  `-c`, then `-l`, and a lock younger than a minute is not treated as stale; on stop it removes only its own entry; when the network address
+  changes it checks the host name and, if it changed, re-registers under the new name and removes the old entry), so local X programs send it
+  automatically through Xlib; programs that cannot read that file are refused.
   ⚠️ A design-level caveat (not a defect): every SSH session with X11 forwarding shares this one trusted display — a compromised
   remote machine can, through its forwarding, see and operate X programs from other sessions (read window contents, log keystrokes,
-  inject input). That is what trusted X11 forwarding means; do not enable X11 forwarding for remote machines you do not trust.
-- **Every resource has a limit, and exceeding it gets BadAlloc (or GL's OUT_OF_MEMORY) instead of taking the process down**:
-  255 clients; windows nested at most 256 deep, 32768 windows per client (destruction and repainting walk an explicit stack,
-  not recursion); regions at most 16384 rectangles, with a merge budget for union / intersect / subtract; pixel buffers 2²⁶ pixels;
-  property values 32 MB, client-created atoms 2¹⁸ with 16 MB of names in total; XI2 device IDs up to 255; XC-MISC at most 65536 IDs
-  per request; GLX display lists 65536 / 64 MB, textures 65536 / 256 MB, 2¹⁹ vertices per primitive, line width and point size 64,
-  and a ReadPixels reply no larger than half the output backlog limit.
-- **Fonts**: core fonts come from the built-in BDFs (`fixed` / `6x13` / `9x15` / `10x20` and their XLFD names); later the
-  host may add more through a font-provider interface (e.g. rasterizing Cascadia Mono into bitmap fonts). The `cursor`
-  font is virtual: metrics only; the library derives a semantic shape (`XCursorShape`) from the glyph number and the host picks a system cursor for it. Modern toolkits do not use core
-  fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
-- **RENDER composites in integers on 8888 targets**: pixels are always premultiplied. For Src / Over / Add (without component
+  inject input). That is what trusted X11 forwarding means; do not enable X11 forwarding for remote machines you do not trust. What can be
+  tightened is under "Several sessions sharing one display" below. The library does not implement the SECURITY extension, so a remote `xauth`
+  cannot obtain an untrusted cookie: when the display comes from the built-in engine and the connection asks for untrusted mode, the host does
+  not set up X11 forwarding and prints one yellow line explaining why, with the two ways out (tick Trusted, or use an external X server).
+- **Listening and display numbers**:
+  - A display number whose names are taken is not used at all: when the Linux abstract name is already bound by someone, something listens
+    behind the socket file, a leftover socket file cannot be deleted (it belongs to another user, who could listen on it again at any time), or
+    bind collides again after deleting it, `StartAsync` throws `SocketException` (`AddressAlreadyInUse`) and withdraws the TCP and Unix listeners
+    already opened. It used to log a line and start on the other transports anyway — an attacker could bind the abstract name without listening,
+    wait for us to start, then listen and receive the cookie Xlib sends when it tries the abstract name first for `:N`.
+  - The directory holding the socket file (checked after it is created, in case someone created it first) must be a directory rather than a
+    symbolic link, owned by this user or by root with the sticky bit set; otherwise no socket file is opened and a line is logged (the owner comes
+    from statx on Linux, lstat on macOS). On macOS `/tmp/.X11-unix` usually does not exist, and whoever creates it first owns it.
+  - Probing whether a socket is in use (when the server starts, and when the host picks a display number) is always an asynchronous connect
+    limited to 300 ms; on Linux a non-blocking connect returning EAGAIN, or the time running out, counts as "someone is listening" and their socket
+    file is left alone — a blocking connect to a socket whose backlog is full waits forever, and the X Server button could never start again.
+    For the abstract name the host instead tries to bind it (atomic; released at once if it succeeds).
+  - On Unix-like systems the server holds `/tmp/.X{N}-lock` per Xserver(1) (contents: the PID right-aligned in ten characters plus a newline,
+    mode 0444) and deletes it on shutdown or when start fails half way; a live holder, or contents it cannot read, makes `StartAsync` throw
+    `SocketException` (`AddressAlreadyInUse`); a holder that is gone means a stale lock, which is replaced; an unwritable `/tmp` only logs a line.
+    Xvfb and `xvfb-run -a` look only at this file when picking a display number.
+  - Being configured to listen and getting neither TCP nor a Unix socket up throws `IOException`. When the host picks the display number
+    automatically and only finds out at start that it is taken (someone got in between the probe and the bind, or the lock file / abstract name
+    shows a use the probe cannot see), it retries with the next free number, up to 4 times; a number set by hand reports the error directly.
+  - On Windows the TCP listener sets `SO_EXCLUSIVEADDRUSE`: otherwise another process of the same user (low-integrity ones included) can still
+    bind a more specific address with SO_REUSEADDR and take over local connections (cookie included). When the host decides whether "another X
+    display is already in use", a listener behind `localhost:0` only counts if it is a process in the current user's session — on a terminal
+    server it may be another user's VcXsrv.
+- **Several sessions sharing one display — what is tightened** (without introducing the SECURITY extension):
+  - **The clipboard follows the session with the keyboard focus** (`X11ServerOptions.ClipboardFollowsFocus`, on by default): the host's text can be
+    read only by the client owning the focused top-level and by clients with the same connection label (`xclip` / `xsel` in the same SSH session;
+    labels come from `ServeAuthenticatedAsync(stream, label)`), and only copies from that session reach the host; with no X window focused nobody
+    can read it. Otherwise a password copied locally would be readable by every session as soon as the user clicked any X window, and programs in
+    background sessions could keep rewriting the local clipboard. While the server owns the clipboard on the host's behalf, XFIXES owner
+    notifications also go only to clients that can read it — other sessions could otherwise learn exactly when the local clipboard got new
+    content. What can still be seen: when the host takes a selection over from an X client, that client gets its SelectionClear as usual, and
+    GetSelectionOwner shows the owner changing to the server. Embedding scenarios with a single trusted client can turn it off.
+  - **`RestrictForwardedClients`** (off by default): connections that come in through `ServeAuthenticatedAsync` cannot see XTEST (synthesized input
+    is indistinguishable from the real keyboard, so a compromised remote machine could type commands into another session's xterm), receive no
+    XI2 raw key events (which would let a client log every key typed in every X window without taking the focus), and get BadAccess for
+    XIChangeHierarchy (which can disable physical input devices). It is off by default because remote tools such as xdotool rely on XTEST; the
+    host has a switch for it in its settings.
+  - **Focus-stealing prevention**: the server decides `XActivateRequest.UserInitiated` from the source and the timestamp (§6). The Avalonia host
+    activates only when it is true and the user is using an X window at that moment, and otherwise just flashes the taskbar entry;
+    override-redirect and "always on top" windows stay on top only while an X window is active, and drop behind when the user returns to a local
+    window — X's native windows live in the same process as the host's main window, so the system's foreground lock does not stand between them,
+    and a remote program used to be able to jump to the front while the user typed a sudo password, or cover the screen with a full-screen popup
+    that looks like a system credential prompt.
+  - **The server holds the root window's SubstructureRedirect and `WM_S0`**: another client selecting SubstructureRedirect on the root gets
+    BadAccess (as on a real desktop that already runs a window manager), so an openbox / xfwm4 started by mistake on a remote machine cannot take
+    over every session's new windows. save-set works as the protocol's "Connection Close" says: on disconnect, windows in the save-set that are
+    inferiors of the client's windows are reparented to the closest ancestor the client did not create (keeping root coordinates) and mapped if
+    unmapped, before resources are destroyed; core ChangeSaveSet on the client's own window gets BadMatch, and XFIXES ChangeSaveSet supports
+    the target and map flags.
+  - **The server's own windows are protected like the root**: `0x43` (shared by the clipboard bridge, XSETTINGS and the WM check) and Composite's
+    overlay window cannot be reparented, reconfigured or have windows created under them (BadMatch); ChangeWindowAttributes may only change event
+    selections (BadAccess otherwise); Map / Unmap are ignored; destruction skips them — reparenting one and then destroying its new parent used to
+    take down the whole display's clipboard bridge, XSETTINGS and window-manager check.
+  - **Selection timestamps are always checked**: a SetSelectionOwner with a time later than the server's current time, or earlier than the
+    selection's last ownership change, has no effect, and the last change time survives the owner going away — a malicious client that took
+    CLIPBOARD with a timestamp in the future no longer makes everyone else's real-time attempts silently fail. When the host takes ownership for
+    the user it uses max(current time, last change time).
+  - **Nobody else can break a drag**: only the client holding the pointer grab can make the server release the button and the implicit grab
+    through `_NET_WM_MOVERESIZE`; requests from anyone else are still passed to the host but leave button state and grabs alone.
+    `_NET_MOVERESIZE_WINDOW` geometry is checked against X's ranges (§6).
+  - **There is a way out of a hang**: the host's `BreakGrabs`, `DisconnectClient` by number and `KillTopLevelClient`; a GrabServer held too long
+    names its holder in the log (§5). At most 16 clients may keep their resources in Retain mode (any further one is treated as Destroy on
+    disconnect, with a log line), and X-Resource lists them — a loop of "connect → RetainPermanent → disconnect" 254 times used to use up every
+    client number, after which nobody could connect.
+  - GLX: any client can use another's context as a share list and MakeCurrent / CopyContext / DestroyContext another's context — consistent with
+    the core protocol's trust model, which does not isolate clients from each other (context tags are per client, so they cannot be forged); this
+    will be tightened together with a per-connection trust level, and the code marks the spots.
+- **Every resource has a per-item limit and an overall account; exceeding either gets BadAlloc (or GL's OUT_OF_MEMORY) instead of taking the
+  process down**:
+  - Per-item limits: 255 clients (connections still in setup are counted separately, at most 32); windows nested at most 256 deep, 32768 windows
+    per client (destruction and repainting walk an explicit stack, not recursion); regions at most 16384 rectangles, with a merge budget for
+    union / intersect / subtract; pixel buffers 2²⁶ pixels; property values 32 MB (XI device properties too); client-created atoms 2¹⁸ with 16 MB
+    of names in total (names from XFIXES SetCursorName go through the same gate); XI2 device IDs up to 255; XC-MISC at most 65536 IDs per
+    request; passive grabs (core and XI2) 4096 per window per client, with at most 1024 subtracted combinations per grab; XFIXES selection
+    listeners 1024 per client; 256 Damage objects per drawable; 256 queued Present requests per client and 64 entries per PRESENTNOTIFY; 16
+    clients retaining resources; GetImage replies 256 MB; clipboard text 16 MB; GLX below.
+  - Memory accounts: `X11ServerOptions.MaxClientMemory` (per client, 1 GiB by default) and `MaxTotalMemory` (all clients together, 2 GiB by
+    default) — with per-item limits alone, one 16-byte CreatePixmap is 256 MB, and a dozen of them exhaust the memory of the server and the host
+    process with it. Charged are: a fixed overhead per resource (64 bytes); pixmaps with a buffer of their own (not the kind NameWindowPixmap gives out, which borrows the window's buffer); top-level buffers (checked at map and
+    resize); DOUBLE-BUFFER back buffers; Composite pixmaps of subwindows, and pixmaps from NameWindowPixmap that keep the old buffer to
+    themselves after the top-level is resized or remapped (charged to the pixmap's owner); Present pixmaps freed before they were presented
+    (charged to the client that sent the request); property values and XI device properties (charged to the client that wrote them); RENDER
+    glyphs (charged to the client that added them, released when the last reference to the glyph set goes) and gradient stops; XFIXES regions;
+    GLX objects and a RenderLarge being assembled (see GLX below). Everything is refunded when a resource leaves the resource table, a property is
+    replaced or deleted, a window is destroyed or a client disconnects, and also when the server's own write replaces a value a client wrote.
+    Client requests are checked before allocating and get BadAlloc with no effect when over; resizes initiated by the host are charged but never
+    refused; the slack kept when resizing buffers is not charged. `XClientInfo.MemoryBytes` reports each client's account.
+  - On top of that each work item has a work budget (§5).
+- **Fonts**: core fonts come from the built-in BDFs (`fixed` / `6x13` / `9x15` / `10x20` and their XLFD names), and the aliases include the
+  other short names from the X.Org misc font directory's `fonts.alias` (`5x7` … `12x24`, each pointing at the built-in font of the nearest
+  height and the same weight); when a full 14-field XLFD has no exact match, the font with the nearest pixel height among those whose foundry,
+  family, weight, slant and charset match is used (the smaller one on a tie; by PIXEL_SIZE, else converted from POINT_SIZE and RESOLUTION_Y,
+  with no guessing when neither is given). Families that do not exist (`-adobe-helvetica-*` and the like) are still BadName — more families need
+  data shipped with the library, or a host font-provider interface later (e.g. rasterizing Cascadia Mono into bitmap fonts).
+  The `cursor` font is virtual: metrics only; the library derives a semantic shape (`XCursorShape`) from the glyph number and the host picks a
+  system cursor for it. Glyph cursors from other fonts (xterm's invisible pointer, a blank glyph of `nil2`) are baked into images as the
+  protocol specifies; one with no visible pixel reaches the host as `Hidden`, and an undefined glyph gets BadValue. Modern toolkits do not use
+  core fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
+- **RENDER composites in integers on 8888 and a8 targets**: pixels are always premultiplied. For Src / Over / Add (without component
   alpha) onto a8r8g8b8 / x8r8g8b8 targets, the source and the mask are each fetched as a row of 8-bit premultiplied pixels —
   gradients, transforms, repeat and every source format are handled while sampling (solid colours, 8888 and a8 are just
   rearranged, bilinear filtering uses 0–256 fixed-point weights, gradient colours are still computed in floating point and
   quantized once) — and then combined per pixel in integers, at most 2 away from all-floating-point. Of these, solid source +
   one-byte mask + Over (Xft text, cairo's anti-aliased shapes) and 8888 image Src / Over (image blits, window-to-window copies)
-  skip row sampling and work directly on the stored pixels. Other operators, component alpha and other target formats
-  composite per pixel in floating point (0–1 per channel). When the source or mask is the target's own buffer, the part to
-  be read is copied out first (the result must be as if the source were read before any write).
-  Alpha-only glyphs are stored one byte per pixel; one CompositeGlyphs request computes its target once
-  and records damage once. Trapezoids and triangles use 16 sub-scanlines per row with analytic horizontal coverage,
-  computed only over the writable part of the target. Source-picture clipping, alpha maps, poly-edge / poly-mode /
-  dither are accepted but have no effect.
-- **RANDR is read-only for clients; the host supplies the layout**: one CRTC / output / mode per monitor
-  (`X11ServerOptions.Monitors` or `SetScreenLayout` at runtime), with change events sent per SelectInput when the layout
-  changes; XINERAMA reports the same layout. Clients' configuration requests get Failed or BadAccess — in rootless mode
-  the host decides where windows go and how monitors are arranged.
+  skip row sampling and work directly on the stored pixels. On a8 targets (cairo building masks, Qt's alpha images) the 14 Porter-Duff
+  operators Clear … Saturate (without component alpha) are integer too, computing alpha only. a1 targets, Disjoint / Conjoint, the PDF blend
+  modes, component alpha and other target formats composite per pixel in floating point (0–1 per channel). When the source or mask is the
+  target's own buffer, the part to be read is copied out first (the result must be as if the source were read before any write): the area that
+  will actually be written is mapped back to source coordinates, using the bounding box of the transformed corners when there is a transform,
+  and folded back per repeat — the whole picture is not copied. Alpha-only glyphs are stored one byte per pixel; one CompositeGlyphs request
+  computes its target once and records damage once, and with a mask format the mask is allocated only for the writable part of the target.
+  Trapezoids and triangles use 16 sub-scanlines per row with analytic horizontal coverage, computed only over the writable part of the target.
+  Source / mask picture clipping also limits what is read when there is no transform and no repeat (RENDER 0.11 §7: the clip-mask "affects all
+  graphics requests, including sources"); with a transform or repeat, and for the sources of trapezoids and glyphs, only the target is clipped.
+  Alpha maps, poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be sorted (BadValue otherwise;
+  equal stops — hard transitions — are fine), and sampling finds the stop by bisection; CreateCursor with a hotspot outside the image gets
+  BadMatch; AddGlyphs bitmap sizes and glyph / stop counts are checked with arithmetic that cannot wrap around (BadLength when too large).
+- **RANDR is mostly read-only for clients; the host supplies the layout**: one CRTC / output / mode per monitor (`X11ServerOptions.Monitors` or
+  `SetScreenLayout` at runtime; every monitor must lie within the root window, at most 16, invalid ones throw `ArgumentException` on the spot).
+  CRTC / output IDs stay with a monitor's name (unplugging one does not shift the others' IDs so that a client's ID now points at another
+  monitor); change events are sent per SelectInput when the layout changes, a DPI change also sends ScreenChangeNotify, and a dot clock that
+  overflows 32 bits is saturated. XINERAMA reports the same layout, with QueryScreens and GetScreenSize in the same order. `XMonitor.WorkArea`
+  (the part of a monitor left for windows once the taskbar and docks are taken off) drives `_NET_WORKAREA`: what each monitor gives up at the edges
+  of the virtual desktop is subtracted from the root window (EWMH has a single work-area rectangle, so a taskbar between two monitors cannot be
+  subtracted), so menus, maximized windows and dialogs avoid the taskbar. Client configuration requests: SetScreenSize to the current size
+  succeeds and any other size gets BadValue; SetCrtcGamma and SetOutputPrimary validate their arguments and are silently accepted without effect
+  (BadAccess made colour-temperature tools and desktop sessions using Xlib's default error handler exit); the rest (SetScreenConfig,
+  SetCrtcConfig…) get Failed or BadAccess — in rootless mode the host decides where windows go and how monitors are arranged.
 - **The server doubles as the XSETTINGS manager**: it owns `_XSETTINGS_S0` and publishes `Xft/DPI`,
   `Gdk/WindowScalingFactor` and a few more, and publishes RESOURCE_MANAGER on the root window (`Xft.dpi`, read by Xft
   and Qt). Real desktops always run a settings daemon and GTK / Qt look for one at startup; a real daemon taking the
-  selection over is let through.
-- **The server does the protocol half of a window manager**: it maintains `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK`,
-  `_NET_CLIENT_LIST`, `_NET_ACTIVE_WINDOW`, the work area and per-top-level `WM_STATE` / `_NET_FRAME_EXTENTS` and so on;
-  requests in root-window ClientMessages become `XWindowManagerRequest`s for the host, which decides whether to honour
-  them and writes the result back with `SetTopLevelStates`. GTK3's HeaderBar and Qt's frameless windows depend on these
-  properties being present.
+  selection over is let through. When the host changes the DPI only the `Xft.dpi` / `antialias` / `hinting` / `hintstyle` / `rgba` entries in
+  RESOURCE_MANAGER are replaced; everything else the user merged with `xrdb -merge` (comments included) stays.
+- **The server does the protocol half of a window manager**: at start it owns `WM_S0` and holds the root window's SubstructureRedirect (above),
+  and it maintains `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK` (the check window's `_NET_WM_NAME` is `X11ServerOptions.WindowManagerName`,
+  `LG3D` by default — why is in §10), `_NET_CLIENT_LIST` (in order of first map), `_NET_ACTIVE_WINDOW`, `_NET_WORKAREA` and per-top-level
+  `WM_STATE` / `_NET_FRAME_EXTENTS` and so on; requests in root-window ClientMessages become `XWindowManagerRequest`s for the host (§6), which
+  decides whether to honour them and writes the result back with `SetTopLevelStates` / `ChangeTopLevelStates`. GTK3's HeaderBar and Qt's
+  frameless windows depend on these properties being present. ICCCM / EWMH details:
+  - `WM_HINTS`, `WM_NORMAL_HINTS` and `_MOTIF_WM_HINTS` are parsed in full, accepting only fields that are both flagged and actually present
+    (the old 15-value format included), with sizes, frame extents and process ids clamped to valid ranges; title-like properties are decoded by
+    their type (STRING / UTF8_STRING / COMPOUND_TEXT, ICCCM §2.7.1).
+  - Mapping from Withdrawn with an initial_state of IconicState writes `_NET_WM_STATE_HIDDEN` and `WM_STATE = Iconic` (`xterm -iconic`); a top-level
+    that is withdrawn loses `_NET_WM_STATE` and `_NET_WM_DESKTOP` (otherwise it would be remapped with a stale Hidden / Focused); InputOnly
+    top-levels get no `WM_STATE` and are not in the client list.
+  - Focus moving into an override-redirect popup (a menu grabbing the keyboard) does not change the active window, so the main window is not drawn
+    as inactive.
+  - On close, a window that lists `_NET_WM_PING` in `WM_PROTOCOLS` is pinged along with `WM_DELETE_WINDOW`; with no reply within 5 seconds an
+    `XNotRespondingRequest` is sent.
+  - When the host moves a window the server sends a real ConfigureNotify, as for any real move (clients with SubstructureNotify on the root and
+    Present get it, and the window under the pointer is recomputed), followed by ICCCM §4.1.5's synthetic one.
+  - Without client-side shadows (`ClientSideShadows`, off by default) GTK keeps a resize band about 4 pixels wide (times GTK's scale) along the
+    inside edge of the window and sends `_NET_WM_MOVERESIZE` (four edges and four corners) when it is pressed; the host starts a native resize on
+    the `XMoveResizeRequest` — undecorated windows with a self-drawn title bar can still be resized from their edges, the band is just narrow
+    (verified with gtk3-widget-factory).
+- **Core window requests follow the protocol's details**: DestroySubwindows destroys bottom-to-top in stacking order; CirculateWindow picks the
+  window by occlusion (RaiseLowest raises the lowest child that is obscured, LowerHighest lowers the highest child that obscures another;
+  occlusion uses the outer rectangles, ignores SHAPE, and InputOnly windows obscure nothing), sends only a CirculateRequest when a client has
+  SubstructureRedirect, and repaints after the move; the automatic remap in ReparentWindow counts as a MapWindow from the client that reparented;
+  ConfigureWindow with a stack-mode above 4 gets BadValue, a resize becomes a ResizeRequest to the client that selected ResizeRedirect, children
+  move per their win-gravity with a GravityNotify when the parent's inside size changes (Unmap gravity unmaps them), and TopIf / BottomIf /
+  Opposite are decided by occlusion; VisibilityNotify is sent — each top-level has its own native window and the server cannot know what covers
+  what on the host, so a mapped top-level counts as fully visible, and a host minimize does not report FullyObscured (lest xterm and the like stop
+  repainting and get no Expose when restored); ShapeCombine places the source shape using only the client's offset; SetCloseDownMode outside 0–2
+  gets BadValue; ConvertSelection with a property other than None checks that the atom exists (BadAtom). X's stacking order of top-levels does
+  not follow the native z-order: injected pointer events are first hit-tested in the top-level the host names (only when the pointer is outside
+  it — captured during a drag — is the root searched by stacking order), top-levels the host minimized take no part in the search from the root,
+  and `FocusTopLevel` raises the top-level above the other normal top-levels.
 - **XKB is derived from the core keymap**: there is no separately maintained XKB keymap — the four canonical types (plus two four-level types for the AltGr level),
   modifier actions, SymInterprets, indicators and key names are all computed from the core table; when the core table
   changes (xmodmap, the host's `SetKeymap`), XKB follows and sends MapNotify. XKB's SetMap writes the uploaded
   keysyms (in the §17 column order) and modifier map back into the core table, which is then derived as usual; SetCompatMap,
-  SetNames and the other mapping-change requests are not supported.
+  SetNames and the other mapping-change requests are not supported. ALPHABETIC covers every letter with case (besides Latin also Cyrillic,
+  Greek, Latin-2 / 3 / 4 / 9 and Unicode keysyms, with case decided by code point — the Russian and Greek layouts the host supplies are exactly
+  Unicode keysyms); a group with a single keysym that is a cased letter expands to two levels, lower and upper (core protocol section 5;
+  xmodmap often writes a single column); FOUR_LEVEL_ALPHABETIC has six map entries (Shift + Lock + Mod5 → level 3). A latched modifier is
+  cleared after one use.
+- **Grabs, focus and the pointer follow the protocol**:
+  - Timestamps: the server keeps a last-pointer-grab and last-keyboard-grab time (an active grab takes the request's time, passive and implicit
+    grabs the time of the event that activated them); a Grab* with a time earlier than the last grab or later than now gets InvalidTime, and a
+    device frozen by another client's grab gets Frozen; stale Ungrab*, ChangeActivePointerGrab and AllowEvents have no effect. A device can be
+    frozen by several grabs at once and continues only when all of them let go.
+  - Passive grabs conflict when they share any combination (AnyModifier / AnyButton / AnyKey count as registering every combination): a core
+    conflict fails the whole request with BadAccess, while XI2 lists each conflicting combination in the reply (AlreadyGrabbed). An Ungrab that
+    covers only part of a grab subtracts that part (at most 1024 subtracted combinations per grab, BadAlloc beyond); core Ungrab requests do not
+    touch XI2 passive grabs and vice versa; out-of-range modifier combinations, event masks and details get BadValue. A replayed press
+    (ReplayPointer / ReplayKeyboard) reports the state from before the event.
+  - Implicit grabs (on a button press) also send Grab / Ungrab-mode crossing events when they activate and end: the Grab ones before the
+    ButtonPress and only to the grabbing client, the Ungrab ones after the ButtonRelease; the grab ends only when all buttons are up (buttons 6
+    and above are not in the state mask, and releasing button 6 used to end it).
+  - Focus: SetInputFocus (and XI's SetDeviceFocus and XISetFocus) honours timestamps — one earlier than the last-focus-change time or later than now
+    has no effect, so a SetInputFocus arriving late over SSH no longer pulls the focus back to a window the user has left; the host's
+    `FocusTopLevel` advances that time too, and WM_TAKE_FOCUS carries the same time. RevertToParent reverting all the way up gives the focus to the
+    root (that is, PointerRoot); XISetFocus accepts PointerRoot and reverts like RevertToParent when the focus window becomes unviewable. When a
+    client moves the focus to another top-level, the host gets an `XFocusRequest`.
+  - WarpPointer: honours the source window and source rectangle (a zero width / height is converted as the protocol says), clamps the result to the
+    root window and, with an active pointer grab that has a confine-to, to the nearest edge of the confine-to window; it is queued while frozen;
+    core and XI share one implementation. The host does not know about warps: the server's pointer and the real cursor can diverge, and confine-to
+    only constrains warps, not the user's mouse — that needs the host's cooperation and is not done.
+  - When the pointer leaves all top-levels, the last position is kept and the pointer counts as on the root (child None); QueryPointer and the
+    root coordinates in events report that last position.
 - **XInput2's device topology can change, but this is not full multi-pointer X**: it starts with master pointer 2 / master
   keyboard 3, each with one slave (4, 5); XIChangeHierarchy adds and removes master devices and attaches slaves to other
   masters or floats them (a floating slave reports only slave XI2 events and generates no core events). Pointer position,
   focus and grabs remain single — the host has one set of physical input, so full MPX would buy nothing. XI2 events travel
   the same propagation path as core events — on a given window, a core selection receives core events and an XI2 selection
-  receives XI2 events.
-- **MIT-SHM is for the local machine only**: it is registered only on Linux and is visible only to clients connected over a
-  Unix socket — a shmid from a remote client forwarded over SSH means nothing on this machine. Segment size and owner come
-  from `/proc/sysvipc/shm` and the peer uid from SO_PEERCRED; a peer that is neither owner nor creator, on a segment not
-  opened to others, gets BadAccess (otherwise a local client could read and write someone else's shared memory through the
-  server); when another client refers to a segment by its XID (not the one that attached it), the check runs again.
+  receives XI2 events; the core do-not-propagate mask stops only core events, not XI2. XI2 selections are stored per (client, window, deviceid)
+  and delivered by merging the master / slave masks for the current device hierarchy, recomputed when it changes; a client selecting
+  XIAllDevices gets one copy for the master and one for the slave. A change of the root window size sends XI_DeviceChanged; XIQueryPointer resets
+  the motion hint like the core QueryPointer; XI_RawMotion carries the pointer device's absolute position (consistent with the Abs X / Abs Y axes
+  XIQueryDevice declares), is sent only when the host or XTEST moved it, and not for warps — programs doing relative mouse input with "raw motion
+  + warp back to the centre" no longer jitter. Crossing events when a passive button / key grab activates use Grab mode (as XI 2.2 says;
+  XIPassiveGrabNotify is only for Enter / FocusIn passive grabs, which are not implemented). XI device properties are validated like core
+  properties (BadAtom / BadValue / BadLength / BadMatch), stored in native byte order, charged to the memory account, and changes send
+  XI_PropertyEvent.
+- **MIT-SHM is for the local machine only**: it is registered only on Linux and is visible only to clients connected over a Unix socket from the
+  server's own IPC namespace — a shmid from a remote client forwarded over SSH means nothing on this machine, and once `/tmp/.X11-unix` is mounted
+  into a container, a shmid from a client in it refers to a segment on the host side (the `/proc/<pid>/ns/ipc` of the SO_PEERCRED pid is compared
+  with the server's own; different or unverifiable means hidden). Segment size and owner are looked up line by line in `/proc/sysvipc/shm`
+  (stopping at the match) and the peer uid comes from SO_PEERCRED; a peer that is neither owner nor creator, on a segment not opened to others,
+  gets BadAccess (otherwise a local client could read and write someone else's shared memory through the server); when another client refers to a
+  segment by its XID (not the one that attached it), the check runs again; after 16 failed Attach requests from one client within a second, its
+  further Attach requests in that second get BadAccess without reading the table. QueryVersion reports the server's effective uid / gid.
   Shared pixmaps and 1.2's fd passing are not implemented.
 - **Two GLX paths**: without DRI3 / DRI2, Mesa defaults to drisw — the client renders with llvmpipe (GL 4.5) and sends
   pixels with PutImage, so the server only has to register configs, contexts and drawables; programs forwarded over SSH
-  work the same way. With `LIBGL_ALWAYS_INDIRECT` forced, the software GL in `Gl/` executes a subset of the fixed-function
-  pipeline and honestly reports version 1.1 (3D textures are not implemented); evaluators, the accumulation buffer,
-  selection / feedback, mipmap LOD and stippling are not implemented. A GLX surface is at most 4096 × 4096 pixels, and one
-  request may expand at most 4 million display-list commands (lists calling each other expand exponentially; every CallList counts).
-  After each Render request, a single-buffered front buffer copies only the bounding rectangle drawn since the last copy into the
-  window and records damage for just that — no full-window copy, and X drawing elsewhere in the window is not overwritten.
-  Surfaces are released with their drawable and their client (a reused XID gets a fresh surface); GL_EXT_abgr, advertised in the
-  extension string, is implemented.
-- **Clipboard**: host → X, the server itself owns CLIPBOARD and answers per ICCCM; X → host, the server fetches the text
-  with a hidden InputOnly window as requestor (UTF8_STRING with STRING fallback, INCR supported). When the host writes
-  back the text it just received, the server does not take the selection, so the two sides never fight over it.
+  work the same way. The extension string advertises GLX_ARB_create_context and GLX_ARB_create_context_profile: CreateContextAttribsARB
+  (request 34) only registers direct contexts (version, flags and profile are handled by the client's driver), so programs that need a core
+  profile (3.2+) — GLFW / SDL / Qt's CoreProfile, Blender… — get a context on the direct path; SetClientInfoARB / SetClientInfo2ARB (33 / 35)
+  are accepted and ignored. With `LIBGL_ALWAYS_INDIRECT` forced, the software GL in `Gl/` executes a subset of the fixed-function pipeline and
+  honestly reports version 1.1 with only the compatibility profile: an indirect context asking for a core profile from 3.2 on gets
+  GLXBadProfileARB, a version above 1.1 GLXBadFBConfig, an undefined version or 1.x with forward-compatible BadMatch, and unknown attributes /
+  flag bits BadValue.
+  - Not implemented: 3D textures, evaluators, the accumulation buffer, selection / feedback, mipmap LOD, stippling, pixel-transfer scale / bias
+    and PixelMap, DrawPixels and CopyPixels in depth / stencil / colour-index formats, point / line / polygon smoothing, Hint. The first use of
+    selection / feedback mode or evaluators in each context logs one line (GL behaviour is unchanged and no GL error is raised). Edge flags (the
+    GLU tessellator's interior diagonals are not drawn under PolygonMode(LINE)), GL_CLAMP with LINEAR blending in the border colour,
+    GL_EXT_texture_object's vendor-private requests (11–14, handled as the core texture commands), PolygonOffsetEXT's bias in depth-range units,
+    and GL_EXT_abgr as advertised in the extension string are all implemented.
+  - GL errors follow the specification: Enable / Disable / IsEnabled accept only 1.1's capabilities and those of advertised extensions, anything
+    else records INVALID_ENUM; invalid enums in state commands record INVALID_ENUM and leave the state alone; between Begin / End only vertex
+    attributes (plus CallList(s) and End) are allowed, anything else records INVALID_OPERATION and is not executed. DrawArrays reads each vertex's
+    data in the order the ARRAY_INFO entries appear (as Mesa's indirect GLX sends it; the encoding specification's VERTEX_DATA section lists a fixed
+    order, while the ARRAY_INFO list itself is unordered). New names from GenLists / GenTextures continue after the largest name used. A bound
+    texture name no longer in the share group is treated as "deleted, so binding reverts to 0".
+  - Limits and memory: a GLX surface is at most 4096 × 4096 pixels — for a larger window (an 8K screen, maximized across monitors) the surface
+    is clamped and covers only the lower-left part of the window (GL window coordinates start at the bottom left), with one log line the first
+    time, instead of BadAlloc; one request may expand at most 4 million display-list commands (lists calling each other expand exponentially;
+    every CallList counts), and render commands are also charged to the work budget (§5); 2¹⁹ vertices per primitive, line width and point size
+    64, and ReadPixels / GetTexImage replies no larger than half the output backlog limit. GL memory goes into the per-client memory account: an
+    indirect context itself counts 64 KB, with its default texture and primitive buffer charged to the context's client; a share group's lists and
+    named textures are charged to the client that created the group (each share group also keeps its limits of 64 MB of display lists and
+    65536 textures / 256 MB), each display list costs another 64 bytes (empty lists too, replacing the former limit of 65536 list names);
+    surfaces are charged per pixel to the first client that needs them (13 bytes per pixel double-buffered, 9 single-buffered); a RenderLarge
+    being assembled is charged by its declared length. A context leaving the resource table and no longer current releases its GL objects and
+    refunds the account.
+  - Presenting: the front buffer of a single-buffered surface after each Render request, and a double-buffered one on swap, compare the drawn
+    range row by row with the pixels actually in the window and write — and damage — only the span that differs; no full-window copy, and X
+    drawing elsewhere in the window is not overwritten, while parts changed by core drawing are restored on the next swap.
+  - Drawables: surfaces are released with their drawable and their client (a reused XID gets a fresh surface), and a GLX pixmap's surface with
+    FreePixmap. When the current drawable is gone, Render and non-rendering commands run as usual (drawing nowhere), while WaitGL / WaitX /
+    SwapBuffers with a tag / CopyContext / UseXFont get GLXBadCurrentWindow / GLXBadCurrentDrawable. A surface for the GLX 1.2 style (an X window
+    used directly as the drawable) takes the config of the window's visual. Known and not fixed: indirect GLX cannot pick a single-buffered visual
+    (GetVisualConfigs lists only each visual's double-buffered config; a single-buffered X visual would have to be added).
+- **Present and SYNC queue and time things as the specifications say**:
+  - Present: PresentPixmap waits for its wait-fence to trigger (or be destroyed), then picks the frame by target-msc / divisor / remainder — the
+    MSC is derived from the server clock at 60 Hz, a past target with divisor 0 means now, and with PresentOptionUST the three are converted from
+    microseconds to frames; due presents are shown in request order, and earlier ones on the same window not yet shown complete with
+    CompleteModeSkip, so old content never overwrites new. The pixmap is held until presented (the specification allows FreePixmap right after
+    the request). An idle-fence / wait-fence that is not a fence gets SYNC's BadFence. Present's and DAMAGE's QueryVersion report the highest
+    version the server supports, but no higher than the client asked for.
+  - SYNC: a trigger keeps its value-type and wait-value as given, and the test value computed at initialization is stored separately (QueryAlarm
+    still reports Relative); Relative with counter None gets BadMatch, a test value outside INT64 BadValue; CreateAlarm without a test-type defaults
+    to PositiveComparison (the specification's default table); a comparison alarm that fires advances in one closed-form step and is disabled only
+    when the advance would overflow INT64; AlarmNotify reports the updated state; DestroyCounter, or the disconnect of the counter's creator, sends
+    an AlarmNotify with state Inactive to the alarms on it; Await sends CounterNotify per trigger by event-threshold (checked even when the
+    condition already holds when the request runs); an empty Await gets BadValue, an empty AwaitFence returns at once, a trigger with counter None
+    is always true, and destroying a fence releases the AwaitFence waiting on it; positive transitions on SERVERTIME / IDLETIME that have already
+    been crossed no longer schedule timers (they used to wake up every millisecond).
+- **Other extensions**: DAMAGE — after DamageSubtract the remaining damage is re-reported per level (rectangle by rectangle for Raw / Delta, the
+  bounding box for BoundingBox / NonEmpty), and Damage objects are released by DamageDestroy or when the client's resources are destroyed;
+  drawing only looks at the windows in the same top-level that carry a Damage. DOUBLE-BUFFER — the Background swap action paints the window
+  background (a background pixmap tiled from its origin, ParentRelative looked up through the ancestors, None left alone), and a window listed
+  twice gets BadMatch. Composite — pixmaps from NameWindowPixmap keep their contents after the top-level is resized, remapped or destroyed (from
+  then on they keep the old buffer to themselves); while they still share the buffer, drawing into them is also recorded as damage on the
+  top-level, so the host sees it. XFIXES — GetCursorImage / GetCursorImageAndName return the real image and hotspot of the cursor under the
+  pointer (glyph cursors of the `cursor` font and the invisible pointer have no image and stay 1×1 transparent); ChangeCursor /
+  ChangeCursorByName take effect (windows using the cursor change with it, the host gets CursorChanged and listeners get CursorNotify);
+  DestroyPointerBarrier accepts only pointer barriers. Extension cleanup hooks come in two kinds: connection closed (event selections, timers,
+  waiting requests) and a client's resources destroyed (in Retain mode this comes later than the disconnect, when KillClient destroys the
+  leftover resources).
+- **Clipboard**: host → X, the server itself owns CLIPBOARD (and PRIMARY with `SyncPrimary`) and answers per ICCCM: TARGETS includes MULTIPLE
+  (pairs converted one by one, a pair that cannot be converted gets its property written back as None) and COMPOUND_TEXT (Latin-1 as is,
+  everything else in UTF-8 segments); the TEXT target answers STRING when the text fits in Latin-1 and UTF8_STRING otherwise; text over
+  256 KB goes as ICCCM §2.5 INCR (256 KB chunks, a transfer whose requestor does not fetch the next chunk within 10 seconds is abandoned, at most
+  32 transfers at once); encoding happens once, on first request. X → host, the server fetches the text with a hidden InputOnly window as
+  requestor, each selection independently (properties `_VELASHELL_CLIPBOARD` / `_VELASHELL_PRIMARY`), giving up on a transfer when a step
+  (waiting for SelectionNotify, waiting for the next INCR chunk) takes more than 10 seconds, and decodes by the type the owner returned
+  (UTF8_STRING with STRING fallback; COMPOUND_TEXT only for its ASCII, Latin-1 and UTF-8 segments, other character sets becoming U+FFFD).
+  Both directions are limited to `X11Server.MaxClipboardBytes` (16 MB of UTF-8). When the host writes back the text it just received, the server
+  does not take the selection, so the two sides never fight over it; when a synchronized selection loses its X owner (the owner gives it up, the
+  owner window is destroyed, the owner disconnects), the server takes it over on the host's behalf with the text last handed to the host, much
+  like a clipboard manager — before, once an X program exited, other X programs could no longer paste what it had just copied. Exchanging only
+  with the focused session (`ClipboardFollowsFocus`) is described above.
 
 ## 8. Milestones
 
@@ -280,9 +712,11 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
 - **Unit tests** (`tests/VelaShell.XServer.Tests/`): in-memory duplex streams as transport, plus a minimal "protocol
   client" that builds requests byte by byte and parses replies and events. Drawing cases assert framebuffer pixels
   directly.
-- **Interop** (`[TestCategory("Interop")]`, skipped by default): `scripts/xserver/interop/` builds a container with
-  x11-apps; the tests start the server locally, let real clients in the container connect via
-  `host.docker.internal:N`, save top-level pixels as PNG for humans and make coarse assertions (non-background pixels).
+- **Interop** (`[TestCategory("Interop")]`, skipped by default): `scripts/xserver/interop/` builds a container with real clients
+  (the `velashell-xclients` image: x11-apps, xterm, xdotool, xinput, mesa-utils and more, plus default-jdk — the Swing cases run
+  straight from source with `java X.java` to check how Java judges the window manager); the tests start the server locally, let real
+  clients in the container connect via `host.docker.internal:N`, save top-level pixels as PNG for humans and make coarse assertions
+  (non-background pixels). Rebuild the image after changing its Dockerfile.
 - When the specification and the implementation disagree, **the specification wins**: fix the implementation and
   record it in §10.
 
@@ -360,6 +794,9 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   **content area**; the system title bar and borders lie outside it and their size reaches clients through
   `_NET_FRAME_EXTENTS`. Ordinary windows mapped without a position (at 0,0) are placed the way a window manager would: dialogs
   centered over their parent, everything else centered in the primary monitor's work area.
+  (Corrected in 2026-10: the snapshot's X / Y are the outer edge of the X border; a position the client asked for aligns the native
+  window's **frame** by ICCCM's gravity, and only (0, 0) that is not user-specified gets centred — the frame, too; see "Placement" in §6.
+  A window asking for y = 0 used to get its title bar pushed off screen.)
 - **M3: the engine is selectable, built-in by default**: `ILocalXServer` is implemented by a selector that forwards to the
   built-in engine or VcXsrv per the settings, the running one taking precedence (changing the setting never stops an X server
   that is showing windows). VcXsrv exists only on Windows; other platforms only have the built-in engine.
@@ -367,7 +804,11 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   `X11ForwardOptions.LocalConnector` (`velashell-docs/en/ssh/spec/07` §7.5.9) gets an in-memory duplex stream pair per channel and
   hands one end to `X11Server.ServeAsync`. The fake-cookie check is unchanged; the server admits the stream as a local connection
   (since 2026-09-26 it is handed to `ServeAuthenticatedAsync` and not checked again, see §7).
-  Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP. The server keeps listening
+  Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP (since 2026-10, untrusted mode
+  with the built-in engine does not set up forwarding at all: the library has no SECURITY extension, so `xauth` cannot get an untrusted
+  cookie; see "Authorization" in §7). Added in 2026-10: the connector passes the SSH session's `user@host:port` as the connection label
+  to `ServeAuthenticatedAsync(stream, label)`; once the built-in engine has stopped (say, after switching to VcXsrv), x11 channels of
+  existing sessions go over local TCP to whichever X server is running now instead of being refused. The server keeps listening
   on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N` (since 2026-09-26 they
   need the cookie the host writes to `.Xauthority`).
   **Two corrections on 2026-09-24**: ① the connector picks the server that is running **at the moment** each channel arrives,
@@ -379,16 +820,21 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   up until the whole SSH session ended.
 - **M3: the keyboard layout follows Windows**: the host injects X keycodes by physical key (scan code); on Windows the system's
   `ToUnicodeEx` computes the unshifted and Shift levels of the main key block for the current layout, which replace the
-  server's keymap (recomputed the next time an X window is activated after a layout switch). The AltGr level is not generated
+  server's keymap (recomputed the next time an X window is activated after a layout switch; since 2026-10 it catches up on the next key
+  press in an X window, see "Keyboard" in §7). The AltGr level is not generated
   yet — the server's XKB description only derives two levels; other platforms use US.
 - **Fixed while verifying M3 on real windows**: ① destroying the Damage objects on a pixmap when the pixmap was freed was wrong —
   `FreePixmap` only drops the ID, and xeyes' Present-based frame swap follows it with `DamageDestroy`, which then got BadDamage
   and the client exited; Damage objects are now released by `DamageDestroy` or client disconnect. ② The Unix-socket listener
   deleted an existing socket file before binding — the desktop's own Xorg usually has TCP off, so the TCP-side check cannot see
-  it, and the desktop's socket got deleted; it now tries to connect first and leaves the file alone if anyone answers.
+  it, and the desktop's socket got deleted; it now tries to connect first and leaves the file alone if anyone answers (since 2026-10
+  this probe is asynchronous with a 300 ms limit, and a display number whose names are taken is not used at all; see "Listening and
+  display numbers" in §7).
   ③ Host side: resizing a shown native window takes `Width` / `Height` (setting `ClientSize` only changes the property value);
   the `Resized` caused by our own resize may arrive a beat later, so only user drags and window-state changes are reported to
-  the server — otherwise the old size would overwrite the one the client just set.
+  the server — otherwise the old size would overwrite the one the client just set. (Corrected in 2026-10: Avalonia's X11 backend always
+  reports `Unspecified` in ConfigureNotify, so a user resizing by the border on Linux was never reported; the host now remembers the last size
+  it set from the server's geometry and reports a `Resized` whose size differs from it (within one pixel counts as equal) as a user resize.)
 - **M3 acceptance (2026-09-24)**: headless UI tests (map → native window size, title, pixels; close button → client
   disconnected → window gone); `scripts/xserver/host-demo/demo.cs` opens real native windows, and xterm, xeyes, gedit (GTK3,
   self-drawn title bar, menu popups) and qt5ct (Qt5) from a container render correctly with matching geometry; X-side
@@ -466,7 +912,7 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   and `XErrorCode` went back to internal. `XServerOptions` / `IXServerHost` became `X11ServerOptions` / `IX11ServerHost`, sharing the `X11Server`
   prefix and no longer clashing with the host application's own `XServerOptions`; the options are a sealed class validated once at construction
   (invalid values throw `ArgumentException`).
-  ② **Consistent naming**: host methods fall into three groups — `Inject*` (synthesized input), `*TopLevel` (window-manager actions), `Set*`
+  ② **Consistent naming** (in 2026-10 the rule was rewritten to match the existing public surface, see "Naming" in §6): host methods fall into three groups — `Inject*` (synthesized input), `*TopLevel` (window-manager actions), `Set*`
   (configuration); callbacks are all "subject + past participle" (`Bell` → `BellRequested`, `WindowManagerRequest` → `WindowManagerRequested`).
   Windows are named by their `XTopLevelWindow` handle instead of an XID.
   ③ **Window properties are an immutable snapshot**: `XTopLevelWindow`'s two dozen properties used to be written one by one on the execution
@@ -519,3 +965,47 @@ ClearArea(exposures) and when an unmapped child reveals its parent.
   composites and GLX single-buffered small triangles — and a bytes-allocated-per-request column): linear-gradient Over
   4.2k → 7.2k per second, 2× bilinear upscale 2.2k → 4.0k, ARGB + a8 mask 3.8k → 19.3k; GLX single-buffered one small triangle
   per request 4.2k → about 46k; full-window PutImage 1.1k → 1.6k (40% less CPU).
+- **Fixes from the second library-wide review (2026-10)**: the security, correctness, performance and API findings of the review were fixed one by
+  one, each with a test first confirmed to fail with the fix reverted; behaviour and limits are already written into §2–§7, so this entry only
+  records the trade-offs and why.
+  ① **Resources went from "per-item limits only" to "per-item limits + memory accounts"**, plus a work budget per work item and time-limited pixel
+  reads for the host (§5, §7): the previous round's limits were all per item — one 16-byte CreatePixmap was 256 MB and a dozen of them exhausted
+  the memory of the server and the host process; one request whose cost was out of proportion to its bytes could freeze the host UI for minutes.
+  ② **The clipboard follows the session with the keyboard focus** (`ClipboardFollowsFocus`, on by default): exchange used to be automatic in both
+  directions, so a password copied locally was readable by every session as soon as the user clicked any X window, and remote programs could keep
+  rewriting the local clipboard. The host's "Copy on selection" now defaults to off, matching the library's `SyncPrimary` default (the host used to
+  default it to on and map it to PRIMARY sync, the opposite of the library).
+  ③ **`RestrictForwardedClients` is off by default**: remote tools such as xdotool rely on XTEST, so the default keeps today's behaviour (a product
+  decision), and the host's settings have a switch. A per-connection trust level and "one display per session" are new features for later.
+  ④ **`ListenTcp` became `bool?`, and a zero-value configuration does not listen on TCP**: it used to default to true with no cookie configured, so
+  `new X11Server()` + `StartAsync()` let any local user connect over loopback TCP (TCP cannot tell which user the peer is), contrary to the SSH
+  library's "zero values are the safe values" rule. The host always configures a cookie, so nothing changes there;
+  `scripts/xserver/host-demo/demo.cs`, which serves a container through forwarding without a cookie, turns it on explicitly.
+  ⑤ **The window-manager name defaults to `LG3D`**: once the server holds `WM_S0` and the root window's SubstructureRedirect, Java (AWT / Swing)
+  concludes there is a window manager and decides from the check window's `_NET_WM_NAME` whether it reparents into a frame — any name it does not
+  know is assumed to reparent, so Java keeps waiting for ReparentNotify and ignores ConfigureNotify. Measured with a Swing probe on OpenJDK 17:
+  before the change Java saw no window manager and could not maximize; holding the selections without renaming (`VelaShell`) made it Other WM,
+  assuming a 25-pixel title bar, with no relayout after maximize / resize; with `LG3D` it is recognised as LookingGlass (no frame), insets 0, and
+  maximize and resize relayout as usual. Before renaming `X11ServerOptions.WindowManagerName`, verify with a Swing program; the interop image gained
+  default-jdk and Swing cases for this.
+  ⑥ **Untrusted X11 forwarding with the built-in engine is not set up, and the reason is stated** ("Authorization" in §7) instead of leaving the user
+  with an `xauth` error; the "Trusted" hint now explains that all forwarded sessions share one display.
+  ⑦ **GLX surfaces larger than 4096² are clamped with one log line** instead of BadAlloc — GL windows on 8K screens or maximized across monitors used
+  to get an error for every GL request.
+  ⑧ **Checked against the specifications and left as is**: crossing events when an XI2 passive button / key grab activates stay in Grab mode (XI 2.2
+  says so); GenericEvent delivery is not gated on a prior GEQueryVersion (whether every client library sends it first cannot be verified under the
+  clean-room rules, and gating it could leave programs hanging without their events; only the write-only field was removed); public methods are
+  not renamed to fit the naming rule — the rule's wording was fixed instead ("Naming" in §6); no "read several windows under one lock" API (the
+  benchmark says it is not needed, §5); edge resizing of GTK windows without client-side shadows works as measured (§7); using another client's
+  GLX context is consistent with the trust model (§7).
+  ⑨ **Left for later** (all need new features): closing an X popup menu when the user clicks a local window or the desktop (needs a global pointer
+  hook; today a click in any X window reaches the menu's grabbing client and closes it, and popups stay on top only while the user is in X, so they
+  never cover local programs); WarpPointer moving the host's real cursor, and confine-to constraining the user's mouse; joins between consecutive
+  arcs in PolyArc; alpha maps on source pictures; more core font families and sizes; the last pixel column possibly clipped under fractional
+  scaling on the host side (needs checking on real machines per platform); a single-buffered visual for indirect GLX; passing a video player's
+  ForceScreenSaver / Suspend on to the host to inhibit the system screen saver; a host UI entry for "unstick" (the library side, `BreakGrabs` and
+  `DisconnectClient`, is complete).
+  ⑩ Host-side behaviour (force quit when an X program is not responding, confirming before stopping the X Server, focus-stealing prevention, no
+  native window for desktop and InputOnly windows, click-through outside a shape…) is in
+  [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.3, the settings in
+  [`../../host/settings-audit.md`](../../host/settings-audit.md) (eleventh batch), troubleshooting in [`../troubleshooting.md`](../troubleshooting.md).

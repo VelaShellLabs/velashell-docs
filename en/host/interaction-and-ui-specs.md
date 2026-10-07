@@ -191,9 +191,71 @@ Moved from the terminal toolbar to the far right of the menu bar as **quick acce
 | `columns-2` | Split Pane | Split the current session horizontally/vertically (VelaDock split) |
 | `route` | **Tunnel** | Open the tunnel management panel in §10 (★user specified) |
 | `zap` | **Quick Commands** | Open the command palette (§8), or the quick command menu |
-| `app-window` | **X Server** | Start / stop the local X server: by default the **built-in X server** (ships with the app, works on every platform, one native window per X window); on Windows the “X Server” page in §14 can switch it to launching the VcXsrv the user installed. The icon turns accent-colored while running and the tooltip shows the display (e.g. `localhost:0.0`); the button is disabled while starting so a double click cannot start two. **Shown on every platform**, last in this group. Failures such as the display number being taken or VcXsrv not being found raise an error toast with a “Settings” button that lands on the X Server page. Same command in the palette: `tools.xserver` |
+| `app-window` | **X Server** | Start / stop the local X server: by default the **built-in X server** (ships with the app, works on every platform, one native window per X window); on Windows the “X Server” page in §14 can switch it to launching the VcXsrv the user installed. The icon turns accent-colored while running and the tooltip shows the display (e.g. `localhost:0.0`); the button is disabled while starting so a double click cannot start two. **Shown on every platform**, last in this group. Failures such as the display number being taken or VcXsrv not being found raise an error toast with a “Settings” button that lands on the X Server page; with the display number on “auto”, a number found taken only at the moment of starting is retried with the next free one (up to 4 times), and any exception during start is cleaned up (the server released, back to not running) before the error is reported, so it never gets stuck in “starting”. When stopping while X programs are still connected (only the built-in engine can count them; clients that disconnected in Retain mode and left only resources do not count), a warning-style confirmation “Stop X Server” comes first — it says how many X program connections will be dropped, that all their windows will close and that unsaved work will be lost, with a “Stop” button; with no programs connected it stops right away, and stopping because the main window really closes asks nothing. Same command in the palette: `tools.xserver` |
 
 > Multi-terminal synchronized input no longer occupies a title bar icon. It has been refactored into the “Sync Input” channel in the tab context menu (see §6.1).
+
+### 4A.3 X windows (native windows of the built-in X Server)
+
+Every X top-level window of the built-in X Server is an Avalonia native window (library and interface: [X Server architecture](../xserver/design/architecture.md) §6). The host is the window manager and behaves as follows:
+
+- **Windows that get no native window**: desktop windows (`_NET_WM_WINDOW_TYPE_DESKTOP`: the desktops drawn by xfdesktop, caja, pcmanfm, as large as
+  the bounding box of all monitors) — in rootless mode there is no "desktop layer" to put them in, and as a native window one would cover every
+  local program as soon as it was activated; a window that becomes a desktop after mapping has its native window closed, and it reappears if the type
+  changes back. InputOnly top-levels (GTK's GtkInvisible holding selections and receiving drag-and-drop) are invisible and get none either (they used
+  to show up as a black window).
+- **Placement**: the native window's content area lines up with the X window's inside (X's border is not drawn; the native frame stands in for it).
+  When the client gave a position, the native window's **frame** is aligned with the requested position by ICCCM window gravity (with NorthWest the
+  frame's top-left corner sits on the requested coordinates), and once the window is shown and the frame measured, the X window's position is reported
+  back to the server; only a request for (0, 0) that is not user-specified (no USPosition) gets centred — dialogs over their parent's content area,
+  everything else in the primary monitor's work area, centring the frame; `xterm -geometry +0+0` carries USPosition and stays at (0, 0). System frame
+  sizes can only be measured once a window is open, so before showing, the frame measured on the most recent decorated window is used as an estimate,
+  and the first frame no longer starts at 0 and then jumps. When a monitor layout change moves the root origin (plugging a secondary screen on the left
+  or above, a dock, waking from sleep), every window's X coordinates are reported again from its current native position. The work area is handed to the
+  X Server from the system's `Screen.WorkingArea`, so menus, maximized windows and dialogs avoid the taskbar.
+- **Mapping honours the states the client set**: a window that set maximized / full screen before mapping is shown maximized / full screen; one with a
+  `WM_HINTS` initial_state of IconicState (`xterm -iconic`) is minimized as soon as it maps and does not take the foreground. These states came from the
+  client and are not reported back. Later, when the user maximizes / minimizes, only the states the native window manages (maximized, full screen,
+  minimized, always on top) change; "skip taskbar", "modal", "sticky" and the like set by the client stay. When a maximized / full-screen window's
+  client resizes itself, the native window's current size is pushed back, and the client redraws at the size the system gives it. Whether a native
+  size change came from the user is no longer judged by the `Resized` reason (Avalonia's X11 backend always reports `Unspecified`): it is reported
+  when it differs by more than a pixel from the last size set from the server's geometry.
+- **Buttons follow the Motif hints**: resize / minimize / maximize missing from the `_MOTIF_WM_HINTS` functions disable the corresponding buttons of the
+  native window (a dialog that cannot be resized, a splash screen that must not be minimized). Undecorated windows (GTK's HeaderBar, Electron) get a
+  borderless native window, and GTK's windows start a native edge resize when pressed within about 4 pixels of their inside edge.
+- **Activation and staying on top (focus-stealing prevention)**: when a remote program asks for its window to be activated (`_NET_ACTIVE_WINDOW`), it comes
+  to the front only if the request was caused by what the user just did in an X window and the user is using an X window right now; otherwise the
+  taskbar entry just flashes (FlashWindowEx on Windows; nothing on other platforms) — so the keys of a sudo password typed in a terminal cannot be taken
+  by a remote window that jumped to the front. A client raising its own window (XRaiseWindow, Java's toFront) is honoured only while another X window
+  is active; when a client moves the keyboard focus to another top-level itself, that native window is activated, provided the user is using X windows,
+  so the user can see where the keyboard went. Menus, tooltips (override-redirect) and "always on top" windows stay on top only while an X window is
+  active and drop behind when the user returns to a local window. When `WM_HINTS` urgency or `_NET_WM_STATE_DEMANDS_ATTENTION` turns on and the window
+  is not the active one, the taskbar entry flashes.
+- **Shapes and transparency**: outside its shape a non-rectangular window (SHAPE: xeyes, irregular popups) is drawn fully transparent; on Windows,
+  undecorated windows of this kind also get a window region that trims hit testing to the bounding shape, so clicks outside the shape go through to
+  the window underneath (other platforms have no equivalent, and the area outside the shape still catches the mouse). A window with
+  `_NET_WM_WINDOW_OPACITY` below 1 gets a transparent background, so the windows behind it show through.
+- **Closing**: the native close button asks the client to close itself (`WM_DELETE_WINDOW`); menus and tooltips do not pass a close on. When a program
+  is stuck — it advertises `_NET_WM_PING` and did not reply within 5 seconds — a warning-style confirmation “Not Responding” appears: "“title” is not
+  responding. Force quit this X program? Its other windows will close too, and unsaved work will be lost.", with a danger button “Force Quit” that
+  disconnects the program. Ownership between native windows comes only from `WM_TRANSIENT_FOR` (popups no longer borrow "the currently active X window"
+  as their owner, which could make closing A's window take B's along): when the host closes a window it closes the windows it owns too, and those still
+  mapped in X are shown again without an owner; when the user clicks the owner's close button its owned windows do not close with it — instead the
+  owner's program is asked to close; application exit and system logoff / shutdown always go through. When the main window really closes (not just to
+  the tray), the built-in X Server is stopped.
+- **Keyboard and mouse**: X keycodes are injected by physical key, with the layout following the system (or the one chosen in the settings); before
+  every press in an X window the system layout is checked and a layout switch takes effect right away (at most once a second on platforms other than
+  Windows). Another press of a key that is already down is passed on as auto-repeat, at the system's cadence. When an X window gets the focus, the
+  system's real CapsLock / NumLock state is pushed to X (on Linux the desktop's keymap and lock keys are read on a background thread, so activating a
+  window no longer stalls the UI). On macOS, if key combinations with Command never get a KeyUp, releasing Command releases them too. Pointer
+  coordinates are clamped to X's 16-bit range before injection. Each window keeps the 16 most recently used image cursors, releasing the least recently
+  used beyond that and all of them when the window closes. Typing and clicking in the host's own UI are reported to the X Server too, so the idle time
+  remote programs see no longer counts X input alone.
+- **Restarting right after a stop**: callbacks the old server delivers while shutting down are ignored (windows are recognised by handle, not by XID),
+  so they neither create windows from old handles nor close the new server's windows.
+
+The clipboard exchanging only with the focused session and "Restrict programs from SSH sessions" are covered under the “X Server” page in §14 and
+in [settings-audit.md](settings-audit.md), eleventh batch; what users run into and what to do is in [X Server troubleshooting](../xserver/troubleshooting.md).
 
 ---
 
@@ -762,16 +824,22 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
       side by side on the second row, each vertically centred:
       - **Local X display**: when empty, tried in order: ① the local X server managed by VelaShell (its display if it
         is running; if not, and “Start automatically for X11 forwarding” is on, it is started first — unless another X
-        server is already in use (on Windows something listens on `localhost:0`; elsewhere `DISPLAY` is set) or VcXsrv
+        server is already in use (on Windows a process in the current user's session listens on `localhost:0` — another user's on a
+        terminal server does not count; elsewhere `DISPLAY` is set) or VcXsrv
         is selected but not installed, in which case it stays out of the way silently) ② the `DISPLAY` environment
         variable ③ `localhost:0.0` (almost nobody sets `DISPLAY` on Windows, and those X servers listen on TCP 6000 by
         default). The placeholder shows the last two. A failed auto-start only writes a yellow line and never blocks the
         shell. **A filled-in value is used as is**; the local X server stays out of it. When the display comes from the
         built-in X server and the mode is trusted, x11 channels **go straight into the in-process server** without a
-        local port.
+        local port, and the session's `user@host:port` is handed to the server as the connection label (the log, the client list
+        and "the clipboard follows the focused session" all recognise sessions by it). If the built-in engine is stopped later
+        (say, after switching to VcXsrv), X programs started from this session go over local TCP to whichever X server is running now.
       - **Trusted (`-Y`)**, **checked by default**: untrusted mode needs a local `xauth` and an X server with the
-        SECURITY extension, and Windows usually has neither. The cost (remote X clients get full access to the local
-        display) is in the tooltip.
+        SECURITY extension; Windows usually has neither, and **the built-in X server has no SECURITY extension either** — when the
+        display comes from the built-in X server and this is unticked, forwarding is not set up, and a yellow line at the top of the
+        terminal explains why with the two ways out (tick Trusted, or use an external X server) instead of running an `xauth` that
+        cannot succeed. The tooltip states the cost: remote X clients get full access to the local display, and all forwarded
+        sessions share that one display — they can see each other's windows, read the clipboard and send input.
       - Forwarding **lasts for the whole session** with no expiry — “new windows stop opening after half an hour” only
         makes people think forwarding is broken.
     - **A refusal does not take the session down**: `X11Forwarding no`, a missing xauth, no local agent running and
@@ -934,7 +1002,7 @@ The left side contains navigation sections and the right side shows the correspo
 | File Transfer | `HGwa7` | Paths/editor/concurrency/conflict policy/hidden files/bandwidth limits/transfer logs (conditionally visible); unimplemented resume features are hidden |
 | Security Audit | `glqQE` | Session recording toggle + playback center entry, host trust policy, trusted host management (address redaction), alert channels (in-app/sound/Webhook), audit log (“View” opens the audit log window, see §15; retention days, default 180) |
 | Proxy | — (new) | One proxy shared by every outbound connection: none / follow system (default) / HTTP / SOCKS5, plus “resolve DNS through the proxy” |
-| X Server | — (new, 2026-09-23) | The local X server. The first section is the **Engine**: built-in (default, ships with the app, every platform) or VcXsrv (installed by the user on Windows; **not bundled**); the section only appears on Windows, other platforms only have the built-in one. With built-in selected a note below explains that each X window is a native window and SSH X11 forwarding connects straight into the built-in server without a local port. Shared by both: **Display** (display number: auto or :0–:15) / **Clipboard** (enable, copy on selection) / **Keyboard layout** (auto = follow the system's current layout, or pick one of 27 common XKB layouts) / **Startup** (start with VelaShell, start automatically for X11 forwarding). VcXsrv-only, shown only when VcXsrv is selected: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found), window mode (multiple windows / one large window / no title bar / fullscreen / rootless), **Keyboard** (model, capture special Windows keys), **Extensions** (native OpenGL, disable access control), **Advanced** (additional arguments + a “Help” dialog documenting every VcXsrv command-line argument in five languages, filterable; the command line for the next start is previewed live below), show tray icon. With the keyboard layout on “auto” the built-in engine follows the system's current layout (Windows, macOS, and Linux with a desktop X display; including the AltGr level, which is the Option level on macOS); a chosen layout uses the keymap tables shipped with the app. Changes apply the next time the X server starts |
+| X Server | — (new, 2026-09-23) | The local X server. The first section is the **Engine**: built-in (default, ships with the app, every platform) or VcXsrv (installed by the user on Windows; **not bundled**); the section only appears on Windows, other platforms only have the built-in one. With built-in selected a note below explains that each X window is a native window and SSH X11 forwarding connects straight into the built-in server without a local port. Shared by both: **Display** (display number: auto or :0–:15) / **Clipboard** (enable — the built-in engine exchanges only with the session that has the keyboard focus, as the description says; copy on selection — off by default, with the description saying that when on, whatever is copied locally can be pasted into X programs with a middle click) / **Keyboard layout** (auto = follow the system's current layout, or pick one of 27 common XKB layouts) / **Startup** (start with VelaShell, start automatically for X11 forwarding). VcXsrv-only, shown only when VcXsrv is selected: **Program** (VcXsrv location, empty = auto-detect; offers `winget install marha.VcXsrv` when not found), window mode (multiple windows / one large window / no title bar / fullscreen / rootless), **Keyboard** (model, capture special Windows keys), **Extensions** (native OpenGL, disable access control), **Advanced** (additional arguments + a “Help” dialog documenting every VcXsrv command-line argument in five languages, filterable; the command line for the next start is previewed live below), show tray icon. Shown only with the built-in engine: **Restrict programs from SSH sessions** (below the keyboard layout, off by default; when on, programs forwarded over SSH cannot simulate input, listen to every key typed in X windows or change input devices, and the description names the cost: tools such as xdotool on those servers stop working). With the keyboard layout on “auto” the built-in engine follows the system's current layout (Windows, macOS, and Linux with a desktop X display; including the AltGr level, which is the Option level on macOS); a chosen layout uses the keymap tables shipped with the app. Changes apply the next time the X server starts |
 | Snippets | `HBNhv` | Common command snippet library with collapsible groups (shared by command palette/completion suggestions through SonnetDB `quick_commands/commands` v2); supports adding, editing, deleting, and changing group assignment, built-in commands included (with restore to default); groups and commands can be reordered by dragging; command text may contain variable placeholders (see §14.2) and span several lines (see §14.4) |
 | Cloud Sync | — (new) | GitHub Gist multi-device sync: token/Gist binding, end-to-end encryption passphrase, sync scope, version history, and restore (see plan.md §13.C) |
 | About | `Nwoks` | Version/runtime environment/dependencies/contributors (clickable GitHub avatars)/dual licensing and authenticity statement; Check for Updates is an honest placeholder |

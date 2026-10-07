@@ -2648,6 +2648,27 @@ Two things were compared: how time spent waiting for a person during connection 
 - Pausing this connection's timer during authentication as well. Authentication already has a timer of its own, and the server's `LoginGraceTime` keeps running regardless; pausing on the client does not give the user any more time to think.
 - Accepting another, equally trusted key on rekeying. The decision in `spec/03` §8.4 stands: there is no legitimate reason to change host keys in the middle of a connection.
 
+### 11.2.27 `.Xauthority` encoding and decoding made public for the host (2026-10-07)
+
+Why: to register the built-in X server's cookie, the host has to rewrite the user's `.Xauthority`, and it had written its own parser for that;
+this library has one too, for finding cookies. The two followed different rules — one rejected the whole file at a truncation, the other used
+what came before it — and the display-number encoding and the default path were written twice as well. That breaks rule 4.6 of the host repository's
+[`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md): "what the library has, the host must not
+write again; if the library's version does not fit, fix the library".
+
+**Done (two more public types, used by the host):**
+
+| Type | Public members |
+| --- | --- |
+| `XAuthority` (static class) | The address-family constants `FamilyLocal` / `FamilyWild` / `FamilyInternet` / `FamilyInternet6` (`ushort`); `MitMagicCookie1`; `DefaultPath` (`XAUTHORITY` first, else `~/.Xauthority`); `TryDecode` (strict: succeeds only when every record is complete and display numbers and protocol names are ASCII, empty content being zero records — use it before rewriting the file) and `Encode` (the reverse) |
+| `XAuthorityEntry` | No longer a positional record holding `byte[]`: `Family` is a `ushort`, `Address` / `Data` are `ReadOnlyMemory<byte>`, plus `DisplayNumber` and `Name`; the constructor checks that every field fits in the file (≤ 65535 bytes) and that the display number and protocol name are ASCII, throwing `ArgumentException` otherwise — a record that cannot be encoded should not exist |
+
+- **The cookie-finding path is unchanged**: the lenient parser is now called `Decode` and stays internal (it uses whatever precedes a truncation and
+  skips non-ASCII records); `FindCookie` / `LoadAsync` / `ResolveHostAddressesAsync` stay internal. Which parser is used where: [`spec/07`](../spec/07-forwarding.md) §7.5.7.
+- **The host keeps only "how to rewrite safely"**: xauth's lock convention, temporary file + atomic replace, picking records by host name and display
+  number; encoding, decoding and the default path come from this library, and a file `TryDecode` cannot fully read is not rewritten. This library
+  never touches the file — locking and atomic replacement are the caller's job.
+
 ### 11.3 Switch-over strategy with VelaShell
 
 1. VelaShell's `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`

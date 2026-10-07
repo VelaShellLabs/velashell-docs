@@ -2585,6 +2585,24 @@ X11 见 §11.2.23；终端尺寸见 §11.2.16（行列为 0 合法，照 RFC 425
 - 认证期间也给本连接停表。认证本来就有自己的计时器，而服务端的 `LoginGraceTime` 照样在走，客户端停表并不能让用户多想一会儿。
 - 重协商时接受另一把同样受信任的密钥。维持 `spec/03` §8.4 的决定：连接中途换主机密钥没有正当的场景。
 
+### 11.2.27 `.Xauthority` 的编解码公开给宿主（2026-10-07）
+
+起因：宿主给内置 X 服务端登记 cookie 时要改写使用者的 `.Xauthority`，自己另写了一份解析；本库找 cookie 也有一份。两份规则不同 ——
+一份遇到截断就整个不认，一份截断前的照常用；显示号的编码、默认路径也各写一遍。这违反宿主仓库
+[`src/VelaShell.Ssh/AGENTS.md`](https://github.com/joesdu/VelaShell/blob/main/src/VelaShell.Ssh/AGENTS.md) 4.6「库里有的，宿主不许再写一份；库里的不合用，就改库」。
+
+**做了的（公开面多了两个类型，宿主在用）：**
+
+| 类型 | 公开的成员 |
+| --- | --- |
+| `XAuthority`（静态类） | 地址族常量 `FamilyLocal` / `FamilyWild` / `FamilyInternet` / `FamilyInternet6`（`ushort`）；`MitMagicCookie1`；`DefaultPath`（`XAUTHORITY` 优先，否则 `~/.Xauthority`）；`TryDecode`（严格：每一条都完整、显示号与协议名是 ASCII 才成功，空内容是零条记录 —— 改写文件之前用）与 `Encode`（反过程） |
+| `XAuthorityEntry` | 不再是带 `byte[]` 的位置 record：`Family` 是 `ushort`，`Address` / `Data` 是 `ReadOnlyMemory<byte>`，另有 `DisplayNumber` 与 `Name`；构造时查每个字段放得进文件（≤ 65535 字节）、显示号与协议名是 ASCII，不合格抛 `ArgumentException` —— 编码不出来的记录不该存在 |
+
+- **找 cookie 的那条路不变**：宽容的解析改名 `Decode`，仍是 internal（截断前的照常用，非 ASCII 的记录跳过）；`FindCookie` / `LoadAsync` /
+  `ResolveHostAddressesAsync` 仍是 internal。宽、严两种解析各自用在哪见 [`spec/07`](../spec/07-forwarding.md) §7.5.7。
+- **宿主那一份只留「怎样安全地改写」**：xauth 约定的锁、临时文件 + 原子替换、按主机名与显示号挑记录；编解码与默认路径都用本库的，
+  `TryDecode` 认不全的文件不改写。本库不碰文件 —— 上锁与原子替换由调用方负责。
+
 ### 11.3 与 VelaShell 的切换策略
 
 1. VelaShell 的 `ISshClientWrapper` / `ISftpClientWrapper` / `IShellStreamWrapper`
