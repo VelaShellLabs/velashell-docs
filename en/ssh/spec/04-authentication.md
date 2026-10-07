@@ -425,6 +425,11 @@ with `NeedsPassphrase = true` — the user kept re-entering the correct passphra
 ② the public key derived from the private part must be the same key as `Public-Lines`, otherwise `KeyFormatInvalid` — the MAC key of an unencrypted `.ppk` is public,
 so after altering the public part the MAC can simply be recomputed and still match; without this check the result is "not the key you think it is", and the only symptom is the server saying "this public key is not accepted".
 
+〔Decision〕**The structure of a `.ppk` is checked before the passphrase is derived**: `Private-MAC` is present with the right length (20 bytes of HMAC-SHA-1 in v2, 32 bytes of HMAC-SHA-256 in v3),
+the file has every line that `Public-Lines` / `Private-Lines` announce, and an encrypted private part is a multiple of 16 bytes —— if any of these fails it is `KeyFormatInvalid` on the spot, without running Argon2 first.
+Such gaps mean the file is incomplete (most often the last lines were lost in copy and paste) and have nothing to do with the passphrase. 〔History〕This used to be found only at the MAC, after derivation: a truncated encrypted `.ppk` first cost one
+Argon2 run (v3 parameters can be heavy, and on CI a case that truncates at every position went past 30 seconds), and the error then said "the passphrase is probably wrong", making people re-enter the correct passphrase again and again.
+
 〔Decision〕**The Ed25519 private key in a `.ppk` is the 32-byte seed at fixed length (the RFC 8032 private key, bytes as is), not an mpint**: no leading zero is added when the first byte is ≥ 0x80.
 The basis is real `puttygen` (0.83) output — every one of 80 keys was 32 bytes, 47 of them with a first byte ≥ 0x80; samples are kept in the tests together with the public keys exported by `ssh-keygen -y`.
 Files written by mpint rules (one leading zero, or shorter than 32 bytes with leading zeros dropped) are accepted too and normalized to 32 bytes; a misreading is caught on the spot by check ② above.
