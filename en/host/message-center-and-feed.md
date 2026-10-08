@@ -73,6 +73,15 @@ index, and `SettingsSectionKeyTests` pins the two together — inserting a page 
 section list without updating the enum fails the test outright instead of silently landing on the
 neighbouring page.
 
+**Manual updates on Linux (from 2026-10-08)**: when About → Check for updates finds a newer version
+with a package for the current platform, it opens the GitHub Releases list in the default browser.
+The user chooses a deb, rpm or portable package to download and install. Linux no longer checks
+whether the installation directory is writable, downloads packages automatically or replaces the
+running installation. The status includes the new version and release-page address, which remains
+available if the browser cannot start. The releases list includes prereleases for the preview channel.
+Startup checks still only post a notification and never open the browser automatically.
+The Windows and macOS update flows are unchanged.
+
 ## 3. Feed contract (what the backend publishes)
 
 > **An official implementation now exists**: [velashell-feeds](https://github.com/VelaShellLabs/velashell-feeds),
