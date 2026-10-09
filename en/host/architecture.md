@@ -98,7 +98,11 @@ hijack `Ctrl+C`, multiline paste, and the whole-line redraw behaviour of Linux p
 
 The renderer also offers a **line-number / timestamp gutter**
 (`Terminal/Rendering/GutterLayout` + `GutterFoldModel`): two independently toggled side columns
-with fold markers and blank-gap handling, wired to keyboard shortcuts.
+with a separator line, fold markers and blank-gap handling, wired to keyboard shortcuts. The
+separator line and the fold markers share the fold column but have separate switches (Settings →
+Terminal / the gutter's context menu): with only the line on, that column just draws the line and
+clicking it never folds; the fold click target is the fold column alone, not the blank gap to its
+right (joesdu/VelaShell#586).
 
 **Ten terminal profiles** (vt52 / 100 / 102 / 220 / 320 / 340 / 420 / 520 / xterm /
 xterm-256color), each with its own TERM name and Device Attributes reply, live in
