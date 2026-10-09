@@ -271,7 +271,7 @@ Execution rules:
 
 ## VIII. Appendix: Remote + remote dual pane (2026-09-28, #524)
 
-WinSCP's Commander interface can point both panes at remote servers, and FileZilla can drag between two remote tabs; VelaShell's dual pane used to be fixed at "local + remote", so moving files between two servers meant downloading and uploading again. Now Ctrl-select two connections in the explorer and right-click "Open in dual-pane SFTP" to get a file tab with each pane connected to a different machine. Interaction details are in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §3 (Ctrl pair selection) and §6.2.
+WinSCP's Commander interface can point both panes at remote servers, and FileZilla can drag between two remote tabs; VelaShell's dual pane used to be fixed at "local + remote", so moving files between two servers meant downloading and uploading again. Now Ctrl-select two connections in the explorer and right-click "Open in dual-pane SFTP" to get a file tab with each pane connected to a different machine. Interaction details are in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §3 (multi-select) and §6.2.
 
 ### 8.1 Why "streamed through this computer"
 

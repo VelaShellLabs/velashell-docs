@@ -47,6 +47,7 @@ zh/                    en/                    内容
 | 改 X11 服务端库(本机显示远端图形程序) | [X 服务端库](zh/xserver/) · [X server library](en/xserver/) |
 | 远端图形程序经 SSH 转发启动慢、卡、打不开 | [X Server 排障](zh/xserver/troubleshooting.md) · [X Server troubleshooting](en/xserver/troubleshooting.md) |
 | 把 Xshell / WinSCP / `~/.ssh/config` 的会话搬过来 | [会话导入](zh/host/会话导入.md) · [Session import](en/host/session-import.md) |
+| 导出 / 导入连接,用 Excel 一次添加几百台设备 | [会话导入](zh/host/会话导入.md) 第七节 · [Session import](en/host/session-import.md) section 7 |
 | 看整个生态怎么拼起来 | 下面这张图 |
 
 ## 生态地图
