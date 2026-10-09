@@ -88,7 +88,9 @@ flowchart LR
 选区不劫持 `Ctrl+C`、多行粘贴，以及 Linux 进度条那种整行重绘。
 
 渲染器另带**行号 / 时间侧栏**（`Terminal/Rendering/GutterLayout` + `GutterFoldModel`）：
-两列独立开关、带折叠标记与空白间隔、接快捷键切换。
+两列独立开关、带分隔线、折叠标记与空白间隔、接快捷键切换。分隔线与折叠标记共用折叠列，
+但各有开关（设置 → 终端 / 侧栏右键菜单）：只开分隔线时那一列只画线、点上去不折叠；
+折叠的点击区只认折叠列本身，不含右侧的空白间隔（joesdu/VelaShell#586）。
 
 **十种终端 profile**（vt52 / 100 / 102 / 220 / 320 / 340 / 420 / 520 / xterm / xterm-256color）
 各自的 TERM 名与 Device Attributes 应答在 `TerminalType.cs`，默认 xterm-256color。
