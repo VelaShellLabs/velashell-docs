@@ -69,9 +69,12 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
    and no OpenGL / GLX implementation's source either (Mesa and the like).
 3. Constants from the specifications (opcodes, event codes, error codes, predefined atoms, mask bits) take their
    specified values — they are protocol facts, not copyrightable, and must not be changed to "look different".
-4. **Data is not code**: the built-in bitmap fonts are BDF files from X.Org's `font-misc-misc` (copyright notice:
-   "Public domain font. Share and enjoy."), and the colour-name table is X.Org `rgb`'s `rgb.txt` as is (MIT / X11 licence);
-   both ship as data files with their source and licence recorded in `NOTICE.md`.
+4. **Data is not code**: the built-in bitmap fonts are X.Org's BDF files as is — `font-misc-misc` ("Public domain font. Share and enjoy."),
+   `font-cursor-misc` ("These glyphs are unencumbered"), `font-adobe-75dpi` / `100dpi` (Adobe / DEC's permissive notice) — plus GNU Unifont
+   (dual-licensed; used under the SIL OFL 1.1); the colour-name table is X.Org `rgb`'s `rgb.txt` as is (MIT / X11 licence). All ship as data
+   files with their source and licence recorded in `NOTICE.md`, and the fonts' licence texts are embedded in the assembly with the data.
+   The font data is generated only by `scripts/xserver/fonts/build-fonts.cs` from pinned upstream commits (BDF byte for byte, Brotli-compressed),
+   never edited by hand.
 
 ## 4. Layering
 
@@ -107,8 +110,8 @@ Drawing/      32-bit software framebuffer, y-banded regions, rasterizer: 16 rast
               blend modes, sources (image / solid / gradients with repeat, transform, filter), trapezoid coverage
 Gl/           Software GL for GLX indirect rendering: render-command decoding, display lists, matrix stacks, lighting,
               clipping, triangle (scan-line) / line / point rasterization, textures, per-fragment operations, queries
-Fonts/        BDF parsing, built-in misc-fixed fonts, XLFD name matching (including the fonts.alias short names and the
-              nearest-size fallback), synthesized cursor and nil2 fonts
+Fonts/        BDF parsing, the bundled X.Org bitmap fonts and GNU Unifont, XLFD name matching (fonts.dir / fonts.alias,
+              derived single-byte charsets, the nearest-size fallback)
 Input/        Keycode ↔ keysym table (evdev-style keycodes), keysym case (KeysymCase), XKB evdev key names, modifier mapping,
               grab data structures (core and XI2; PassiveGrabTable buckets passive grabs by detail)
 ```
@@ -119,7 +122,8 @@ not fit a socket address throws at construction) or disables it. TCP is governed
 when an `AuthorizationCookie` is configured, `true` always listens (logging a warning at start when there is no cookie), `false`
 never does. While listening on a transport tied to the display number, the server holds `/tmp/.X{N}-lock` on Unix-like systems per
 the Xserver(1) convention (see §7). A host font-provider interface does not exist yet: core fonts only serve older programs, modern
-toolkits use RENDER with client-side rasterization, and no program has needed it since the host integration.
+toolkits use RENDER with client-side rasterization, and the bundled X.Org bitmap fonts and GNU Unifont (§7 "Fonts") already cover the
+families older programs commonly use as well as CJK.
 
 ## 5. Threading model
 
@@ -221,7 +225,8 @@ The library defines the interface and the host implements it; notifications flow
 
 | Direction | Content |
 | --- | --- |
-| Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle"; all are made on the execution thread after the lock is released, coalesced per batch as in §5) | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction and being reparented away count as unmapping; **not sent one by one at shutdown** — the host closes its native windows itself when it stops the server); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: `Geometry` — position, size, `BorderWidth`, `NeedsPlacement`; `Title` — title, `ClassName`, `InstanceName`; `States`; `Icons`; `Shape` — bounding and input shapes; `Hints` — everything else). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` (see "Snapshot" below); clients' window-manager requests (`WindowManagerRequested`, a default interface method; see "Window-manager requests" below); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` / `TryReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB cursors and glyph cursors from fonts other than `cursor`, its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`) |
+| Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle"; all are made on the execution thread after the lock is released, coalesced per batch as in §5) | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction and being reparented away count as unmapping; **not sent one by one at shutdown** — the host closes its native windows itself when it stops the server); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: `Geometry` — position, size, `BorderWidth`, `NeedsPlacement`; `Title` — title, `ClassName`, `InstanceName`; `States`; `Icons`; `Shape` — bounding and input shapes; `Hints` — everything else). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` (see "Snapshot" below); clients' window-manager requests (`WindowManagerRequested`, a default interface method; see "Window-manager requests" below); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` / `TryReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB / glyph cursors — except glyphs of the `cursor` font that have a matching system cursor, for which the
+host picks the system cursor by shape — its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`) |
 | Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed) |
 
 **Lifecycle**: the execution thread starts at construction, so an instance must be disposed with `DisposeAsync` even if `StartAsync`
@@ -323,8 +328,16 @@ extra (the slack is not charged).
     Stippled the background colour masked by the stipple, Tiled / OpaqueStippled the same source as the even dashes. A wide arc that is
     not a full circle gets caps at both ends per cap-style, and its inner and outer boundaries are ellipses with the semi-axes plus / minus
     half the line width, not rounded. PolyLine with three or more points whose first and last coincide is drawn as a closed path (a join
-    there rather than two caps; a thin line does not draw the end point twice). Joins between consecutive arcs in a PolyArc are not
-    implemented (each arc gets its own caps).
+    there rather than two caps; a thin line does not draw the end point twice). Arcs in a PolyArc whose end point coincides with the next
+    one's start point "join correctly" as the protocol says: "coincide" means less than half a pixel apart on each axis (with 1/256 pixel
+    of slack) — the end points are real numbers, so exact equality is too strict and rounding to the same pixel is unstable at .5; the last
+    arc joining back to the first closes the chain. A chain of joined wide arcs is one path: consecutive arcs get a join per join-style
+    (built on the real corners of the two bands' end faces, since an ellipse's end face is not necessarily perpendicular to the tangent),
+    caps go only at the two ends of the chain and none when it is closed, and the whole chain is filled in one active edge table (no seam
+    drawn twice under GXxor); consecutive pieces of the same ellipse are merged into one (four 90° arcs make exactly the pixels of one
+    360° arc). Dashes are measured along the whole chain and carry across joins; each unjoined chain restarts at the dash-offset. A thin
+    chain is one thin polyline whose joints are drawn once. A wide chain is filled in batches of at most 2²⁰ vertices. A single arc and
+    unjoined arcs draw the same pixels as before (200,000 random comparisons).
   - CopyArea / CopyPlane: only the visible part of a source window can be copied (with ClipByChildren mapped children obscure it too, with
     IncludeInferiors their contents are copied along); the parts that cannot be copied (obscured, unviewable, a child sticking out of its
     top-level's buffer) are first painted with the destination window's background when it is not None, then reported one rectangle at a
@@ -489,25 +502,50 @@ extra (the slack is not charged).
     Client requests are checked before allocating and get BadAlloc with no effect when over; resizes initiated by the host are charged but never
     refused; the slack kept when resizing buffers is not charged. `XClientInfo.MemoryBytes` reports each client's account.
   - On top of that each work item has a work budget (§5).
-- **Fonts**: core fonts come from the built-in BDFs (`fixed` / `6x13` / `9x15` / `10x20` and their XLFD names), and the aliases include the
-  other short names from the X.Org misc font directory's `fonts.alias` (`5x7` … `12x24`, each pointing at the built-in font of the nearest
-  height and the same weight); when a full 14-field XLFD has no exact match, the font with the nearest pixel height among those whose foundry,
-  family, weight, slant and charset match is used (the smaller one on a tie; by PIXEL_SIZE, else converted from POINT_SIZE and RESOLUTION_Y,
-  with no guessing when neither is given). Families that do not exist (`-adobe-helvetica-*` and the like) are still BadName — more families need
-  data shipped with the library, or a host font-provider interface later (e.g. rasterizing Cascadia Mono into bitmap fonts).
-  The `cursor` font is virtual: metrics only; the library derives a semantic shape (`XCursorShape`) from the glyph number and the host picks a
-  system cursor for it. Glyph cursors from other fonts (xterm's invisible pointer, a blank glyph of `nil2`) are baked into images as the
-  protocol specifies; one with no visible pixel reaches the host as `Hidden`, and an undefined glyph gets BadValue. Modern toolkits do not use
-  core fonts (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
-- **RENDER composites in integers on 8888 and a8 targets**: pixels are always premultiplied. For Src / Over / Add (without component
-  alpha) onto a8r8g8b8 / x8r8g8b8 targets, the source and the mask are each fetched as a row of 8-bit premultiplied pixels —
-  gradients, transforms, repeat and every source format are handled while sampling (solid colours, 8888 and a8 are just
-  rearranged, bilinear filtering uses 0–256 fixed-point weights, gradient colours are still computed in floating point and
-  quantized once) — and then combined per pixel in integers, at most 2 away from all-floating-point. Of these, solid source +
-  one-byte mask + Over (Xft text, cairo's anti-aliased shapes) and 8888 image Src / Over (image blits, window-to-window copies)
-  skip row sampling and work directly on the stored pixels. On a8 targets (cairo building masks, Qt's alpha images) the 14 Porter-Duff
-  operators Clear … Saturate (without component alpha) are integer too, computing alpha only. a1 targets, Disjoint / Conjoint, the PDF blend
-  modes, component alpha and other target formats composite per pixel in floating point (0–1 per channel). When the source or mask is the
+- **Fonts**: core fonts are the X.Org bitmap fonts and GNU Unifont bundled with the library (xs_plan CP-16 / F21 option A): the whole misc-fixed set
+  (`4x6` … `10x20` in regular / bold / oblique, the CJK `12x13ja` / `18x18ja` / `18x18ko` and JIS X 0208 `k14`), `nil2`, `cursor`; Adobe's 75 / 100 dpi
+  Courier, Helvetica, New Century Schoolbook, Symbol and Times (8–24 pt); GNU Unifont 18 (16 pixels, the whole Basic Multilingual Plane).
+  The 233 BDF files as is, Brotli-compressed, take about 5 MB (the library DLL grows by about 4.5 MB), laid out like X.Org's installed font
+  directories as misc / 75dpi / 100dpi (their order is the font path order), each with an mkfontdir-style `fonts.dir`. An ISO10646-1 font also
+  appears under the names of the single-byte charsets it covers **completely** (as `mkfontdir -e` does): ISO8859-1 is the first 256 code points of
+  Unicode; ISO8859-2 / 3 / 4 / 5 / 6 / 7 / 8 / 9 / 13 / 15 and KOI8-R / U are derived through the bundled mapping tables (exported from .NET's code
+  page tables; no ISO8859-10 / 11 / 14 / 16), and a derived font's CHARSET_REGISTRY / CHARSET_ENCODING change with it — 1877 names in all.
+  Aliases follow the X.Org misc directory's `fonts.alias` verbatim (`fixed`, `variable` — Helvetica Bold 12 pt —, `5x7` …); aliases whose targets are
+  not bundled (Sony, JIS, ISAS and OPEN LOOK fonts) are not listed and get BadName; `9x18` / `9x18bold` are also accepted, and `8x16` / `12x24`
+  (Sony) fall back to the nearest misc-fixed. When a full 14-field XLFD has no exact match, the font with the nearest pixel height among those
+  whose foundry, family, weight, slant and charset match is used (the smaller one on a tie; by PIXEL_SIZE, else converted from POINT_SIZE and
+  RESOLUTION_Y, with no guessing when neither is given). Families that are not bundled (B&H's Lucida — its licence requires particular notices in
+  user documentation and code comments —, Bitstream, scalable fonts) are still BadName. The name table is built once on first use; a font is
+  decompressed and parsed the first time it is opened, and the result is shared by the whole process (several server instances parse it once);
+  glyph bitmaps are packed by row (1 bit per pixel). Measured (Debug): the name table plus `fixed` 35 ms, Unifont's first open 180 ms and 9.6 MB,
+  every name opened once (`xlsfonts -l`) 870 ms and 58 MB in all. None of this happens on the execution thread: when OpenFont or
+  ListFontsWithInfo needs fonts that are not built yet, they are decompressed and parsed on the thread pool while this client's request and
+  the ones after it are held (the same mechanism as SYNC's Await) and put back in order once the fonts are ready — other clients and the
+  host UI do not wait on the pixel lock meanwhile. A quoted BDF property value is a string (an atom in QueryFont), even when it
+  looks like a number (`CHARSET_ENCODING "1"`).
+  Glyph cursors are baked into images as the protocol specifies (the origins of the source and mask glyphs coincide at the hotspot); one with
+  no visible pixel (xterm's invisible pointer, a blank glyph of `nil2`) reaches the host as `Hidden`, and an undefined glyph gets BadValue.
+  Glyphs of the `cursor` font (X.Org's cursor.bdf) also record the glyph number: those with a matching system cursor (left_ptr, xterm, watch, the
+  resize edges and corners …) reach the host as a shape without an image — the system cursor follows the desktop's theme and scaling —, the rest
+  (pencil, gumby, dotbox …) hand the host the image; XFIXES GetCursorImage always returns the baked image. Modern toolkits do not use core fonts
+  (they use RENDER with client-side rasterization), so core fonts only need to cover older programs.
+- **RENDER composites in integers on 8888, a8 and a1 targets**: pixels are always premultiplied. Onto a8r8g8b8 / x8r8g8b8 / a8 / a1
+  targets, all 53 operators (Porter-Duff, Disjoint / Conjoint, the PDF blend modes, with or without component alpha) first fetch the
+  source and the mask each as a row of 8-bit premultiplied pixels — gradients, transforms, repeat and every source format are handled
+  while sampling (solid colours, 8888 and a8 are just rearranged, bilinear filtering uses 0–256 fixed-point weights, gradient colours
+  are still computed in floating point and quantized once) — and then combine per pixel in integers. Src / Over / Add have dedicated
+  code; the other Porter-Duff and the Disjoint / Conjoint operators compute source × Fa + destination × Fb per channel, with factors
+  in 0–255 when there is no division, while the ones with a division (Saturate, Disjoint / Conjoint's min(1, n / d) and
+  max(1 − n / d, 0)) use the unrounded source alpha × mask in units of 1/65025 and round once per channel at the end. The blend modes
+  do not divide out cs = Cs / αs first; αs·αd·B(cs, cd) is rearranged into an integer expression in the 8-bit Cs, αs, Cd and αd (soft
+  light's square root comes from a table, the four HSL modes multiply both sides by αs·αd), and the three terms are summed in units of
+  1/255³ and rounded once. With component alpha the factors are per channel, from that channel's own source alpha. The alpha-only a8 / a1
+  targets compute just the alpha channel (the blend modes' alpha is αs + αd − αs·αd, and component alpha does not affect it); a1 is 1
+  for ≥ 0.5. With 8-bit pixel sources the result is at most 1 away from per-pixel floating-point compositing, and a1 is bit for bit
+  identical (checked exhaustively); bilinear and gradient sources are quantized to 8 bits first, at most 2 away from all-floating-point.
+  Of these, solid source + one-byte mask + Over (Xft text, cairo's anti-aliased shapes) and 8888 image Src / Over (image blits,
+  window-to-window copies) skip row sampling and work directly on the stored pixels. Other target formats such as r5g6b5, x1r5g5b5 and
+  a4 composite per pixel in floating point (0–1 per channel). When the source or mask is the
   target's own buffer, the part to be read is copied out first (the result must be as if the source were read before any write): the area that
   will actually be written is mapped back to source coordinates, using the bounding box of the transformed corners when there is a transform,
   and folded back per repeat — the whole picture is not copied. Alpha-only glyphs are stored one byte per pixel; one CompositeGlyphs request
@@ -515,7 +553,10 @@ extra (the slack is not charged).
   Trapezoids and triangles use 16 sub-scanlines per row with analytic horizontal coverage, computed only over the writable part of the target.
   Source / mask picture clipping also limits what is read when there is no transform and no repeat (RENDER 0.11 §7: the clip-mask "affects all
   graphics requests, including sources"); with a transform or repeat, and for the sources of trapezoids and glyphs, only the target is clipped.
-  Alpha maps, poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be sorted (BadValue otherwise;
+  A source picture's alpha map takes effect (RENDER 0.11 §7: the source's alpha is taken from the alpha map's pixel at "the coordinate minus the
+  alpha origin", is 0 outside the alpha map's own clip, and the alpha map must be an alpha-only format without an alpha map of its own, else
+  BadMatch); a destination's alpha map and poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be
+  sorted (BadValue otherwise;
   equal stops — hard transitions — are fine), and sampling finds the stop by bisection; CreateCursor with a hotspot outside the image gets
   BadMatch; AddGlyphs bitmap sizes and glyph / stop counts are checked with arithmetic that cannot wrap around (BadLength when too large).
 - **RANDR is mostly read-only for clients; the host supplies the layout**: one CRTC / output / mode per monitor (`X11ServerOptions.Monitors` or
@@ -663,8 +704,8 @@ extra (the slack is not charged).
   - Drawables: surfaces are released with their drawable and their client (a reused XID gets a fresh surface), and a GLX pixmap's surface with
     FreePixmap. When the current drawable is gone, Render and non-rendering commands run as usual (drawing nowhere), while WaitGL / WaitX /
     SwapBuffers with a tag / CopyContext / UseXFont get GLXBadCurrentWindow / GLXBadCurrentDrawable. A surface for the GLX 1.2 style (an X window
-    used directly as the drawable) takes the config of the window's visual. Known and not fixed: indirect GLX cannot pick a single-buffered visual
-    (GetVisualConfigs lists only each visual's double-buffered config; a single-buffered X visual would have to be added).
+    used directly as the drawable) takes the config of the window's visual. GetVisualConfigs publishes a single-buffered and a double-buffered
+    config for each of the two visuals, so indirect GLX can pick a single-buffered visual too.
 - **Present and SYNC queue and time things as the specifications say**:
   - Present: PresentPixmap waits for its wait-fence to trigger (or be destroyed), then picks the frame by target-msc / divisor / remainder — the
     MSC is derived from the server clock at 60 Hz, a past target with divisor 0 means now, and with PresentOptionUST the three are converted from
@@ -687,7 +728,7 @@ extra (the slack is not charged).
   twice gets BadMatch. Composite — pixmaps from NameWindowPixmap keep their contents after the top-level is resized, remapped or destroyed (from
   then on they keep the old buffer to themselves); while they still share the buffer, drawing into them is also recorded as damage on the
   top-level, so the host sees it. XFIXES — GetCursorImage / GetCursorImageAndName return the real image and hotspot of the cursor under the
-  pointer (glyph cursors of the `cursor` font and the invisible pointer have no image and stay 1×1 transparent); ChangeCursor /
+  pointer (glyph cursors of the `cursor` font included; the invisible pointer has no image and stays 1×1 transparent); ChangeCursor /
   ChangeCursorByName take effect (windows using the cursor change with it, the host gets CursorChanged and listeners get CursorNotify);
   DestroyPointerBarrier accepts only pointer barriers. Extension cleanup hooks come in two kinds: connection closed (event selections, timers,
   waiting requests) and a client's resources destroyed (in Retain mode this comes later than the disconnect, when KillClient destroys the
@@ -746,6 +787,7 @@ extra (the slack is not charged).
   redraw, one missing means a dirty patch on screen.
 - **Synthesized fonts**: `cursor` (metrics only; cursor shapes are derived from the glyph numbers) and `nil2` (xterm's
   invisible pointer, all-blank glyphs) do not come from BDF files.
+  (Since 2026-10-09 both are X.Org's BDF files as is; see §7 "Fonts" and "Wrapping up the second review's leftovers" at the end of this section.)
 - **M1 acceptance (2026-09-23)**: 40 unit tests; real clients `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` cause
   zero protocol errors and draw content; keyboard injection round-trips through xterm to `sh` in the container.
 - **Extension numbering**: major opcodes are assigned from 128 in implementation order — BIG-REQUESTS 128, XC-MISC 129,
@@ -1013,8 +1055,39 @@ extra (the slack is not charged).
   arcs in PolyArc; alpha maps on source pictures; more core font families and sizes; the last pixel column possibly clipped under fractional
   scaling on the host side (needs checking on real machines per platform); a single-buffered visual for indirect GLX; passing a video player's
   ForceScreenSaver / Suspend on to the host to inhibit the system screen saver; a host UI entry for "unstick" (the library side, `BreakGrabs` and
-  `DisconnectClient`, is complete).
+  `DisconnectClient`, is complete). (2026-10-09: the PolyArc joins, alpha maps, more core font families and the single-buffered visual are done;
+  see the next entry.)
   ⑩ Host-side behaviour (force quit when an X program is not responding, confirming before stopping the X Server, focus-stealing prevention, no
   native window for desktop and InputOnly windows, click-through outside a shape…) is in
   [`../../host/interaction-and-ui-specs.md`](../../host/interaction-and-ui-specs.md) §4A.3, the settings in
   [`../../host/settings-audit.md`](../../host/settings-audit.md) (eleventh batch), troubleshooting in [`../troubleshooting.md`](../troubleshooting.md).
+- **Wrapping up the second review's leftovers (2026-10-09)**: the items in ⑨ above that need no new feature, and the ones the review left partly
+  done, are finished; the behaviour is in §6 and §7, and only the trade-offs and their reasons are recorded here.
+  ① **Core fonts ship as data with the library instead of waiting for a host font provider** (xs_plan F21 option A): the option originally meant
+  rasterizing Liberation and the like at 75 / 100 dpi; X.Org's own Adobe bitmaps are used instead — font names and metrics match a real X server,
+  the licence is just as permissive, and no TrueType rasterizer has to be written. CJK and the other scripts come from GNU Unifont (dual-licensed,
+  taken under the OFL) and misc-fixed's ja / ko fonts. B&H's Lucida is left out: its licence requires particular notices in user documentation
+  and code comments. The data is generated by a script from pinned upstream commits and kept byte for byte; moving to a new version only changes
+  the commit ids and hashes in the script. The cost is about 4.5 MB more in the library's DLL.
+  ② **Fonts are built on the thread pool while the request is held**: with the full set bundled, a real client's `xlsfonts -l "*"` first parsed
+  for 1.5 seconds on the execution thread while holding the pixel lock, and the host UI froze along with it. Parsing fonts is pure computation
+  with no I/O, so running it on the thread pool is not fake async; holding requests reuses the mechanism of SYNC Await and XTEST delays, a
+  request that has been put back is not checked a second time, and if building fails in the background the request runs as usual and gets the
+  usual error.
+  ③ **Cursor-font glyphs with a matching system cursor still show the system cursor**: GetCursorImage returns the baked X bitmap, but locally the
+  system cursor is used — it follows the desktop's theme and scaling and is clearer than a 16-pixel X bitmap; only glyphs without a match hand
+  the image to the host.
+  ④ **"Joined" in PolyArc means less than half a pixel apart**: the protocol only says the end points "coincide", but they are real numbers —
+  exact equality is too strict (adjacent pieces of the same ellipse differ in the last few bits), and rounding to the same pixel is unstable at
+  .5; end points at multiples of 90° all sit on the half-pixel grid, where the criterion is exact equality. A single arc and unjoined arcs draw
+  the same pixels as before (200,000 random comparisons).
+  ⑤ **RENDER's integer paths cover every operator on a1 / a8 / 8888 targets**: at most 1 away from per-pixel floating-point compositing, a1 bit
+  for bit identical (checked exhaustively), the combinations that used floating point about 2–12 times faster. Along the way a NaN in the floating-point
+  ClipColor was fixed (a grey source in the four HSL modes on a target with αd = 0 came out with colour 0). r5g6b5, x1r5g5b5 and a4 targets
+  are rare and still use floating point.
+  ⑥ Selections isolated per session (other sessions see no owner changes and get no SelectionClear for them), alpha maps on source pictures
+  and the single-buffered visual for indirect GLX were done in the same round (§7).
+  ⑦ **Still left**: closing an X popup menu when the user clicks a local window or the desktop (needs a global pointer hook); new features
+  such as WarpPointer / confine-to, passing the screen saver on to the host and a host entry for "unstick"; the last pixel column under
+  fractional scaling (needs checking on real machines per platform); a wide arc whose bounding box has zero width or height is drawn at only
+  half the line width (it was like that before the review and is unchanged in this round).

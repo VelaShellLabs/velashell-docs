@@ -24,6 +24,7 @@ English: [`../../en/xserver/troubleshooting.md`](../../en/xserver/troubleshootin
 | 远端的 `xdotool` 之类模拟输入的工具不工作,或者报没有 XTEST 扩展 | 设置里打开了「限制经 SSH 转发来的程序」:经 SSH 转发来的程序看不到 XTEST、收不到原始按键事件、不能改动输入设备 | 只连你信任的服务器、又需要这些工具时,在 设置 → X Server 关掉它(这是全局设置,对所有会话生效) |
 | 点了 X 窗口的关闭按钮,程序没反应;几秒后弹出「程序无响应,要强制结束吗」 | 程序卡住了:它声明了 `_NET_WM_PING`,关闭时服务端随关闭请求 ping 它,5 秒内没回 | 「强制结束」断开这个程序 —— 它的其它窗口一起关闭,未保存的内容会丢。没声明 `_NET_WM_PING` 的程序卡住时不弹这个框,断开它所在的 SSH 会话即可关掉 |
 | 所有 X 窗口都点不动、打不了字(常见于远端程序的菜单开着时 SSH 断网、笔记本睡眠、远端进程被挂起) | 那个程序还抓着鼠标 / 键盘(或者用 GrabServer 抓着整个服务端),它的连接没断,抓取就一直在 | 断开那个 SSH 会话(或者等 SSH 保活超时),连接一断抓取就解除。GrabServer 抓着超过 10 秒时,VelaShell 的日志里会点名是哪个连接(带 `user@host:端口`)。宿主界面上「解除卡住」的入口还没有 |
+| 老程序启动时报 `Cannot convert string "-b&h-lucida-…" to type FontStruct` 之类,界面退回等宽的 `fixed` | 内置 X Server 随库带的核心字体是 X.Org 的 misc-fixed、cursor、Adobe 75 / 100 dpi 的 Courier / Helvetica / New Century Schoolbook / Symbol / Times 与 GNU Unifont;B&H 的 Lucida(许可要求附带特定声明)、Bitstream 等其余字体与可缩放字体没有带,请求它们照旧 BadName | 在远端的 X 资源(`~/.Xresources`)里把字体换成 `-adobe-helvetica-*` / `-adobe-times-*` / `-adobe-courier-*`;同一字族里没有的字号会退到最接近的。非要那几个字体时改用外部 X 服务器 |
 
 **已修的缺陷**
 
@@ -33,6 +34,8 @@ English: [`../../en/xserver/troubleshooting.md`](../../en/xserver/troubleshootin
 | 远端程序退出了,本机窗口却一直不关 | 宿主缺陷:远端的 EOF 没传给 X Server | 已修(同上;[SSH spec 07 §7.5.9](../ssh/spec/07-forwarding.md#759-本机显示经连接器接入)) |
 | 在设置里把引擎换成 VcXsrv 之后,已经开着的 SSH 会话里新开的 X 程序报 `Failed to open display` | 宿主缺陷:会话开 shell 时绑定的连接器只认内置引擎 | 已修(同上):内置引擎停了之后,老会话的 x11 通道改走本机 TCP,连此刻在运行的那个 X 服务端 |
 | Java(Swing / AWT)程序不能最大化;或者最大化、改尺寸之后内容不重排,像是给一个并不存在的标题栏留了位置 | Java 按窗口管理器的名字决定它会不会给窗口套外框,不认得的名字一律当成会套,于是一直等外框、不理尺寸变化 | 已修:内置 X Server 以 `LG3D` 自称(Java 认得的「不套外框」的名字),最大化与改尺寸都照常重排([architecture.md](design/architecture.md) 决策记录「第二轮全库审查的修复」⑤)。把本库嵌进别的程序时别改 `X11ServerOptions.WindowManagerName`;要改先用 Swing 程序验一遍 |
+| Motif / Xaw / 不带 Xft 的 Tk 程序界面字体全退回 `fixed`、错位;默认字体的 `xterm` 里中文、希腊文、西里尔文显示不出来 | 库的缺陷:核心字体原先只有 5 个裁剪过的 misc-fixed(只有拉丁字母与制表符),请求 `-adobe-helvetica-*` 一律 BadName | 已修:随库带 X.Org 的整套 misc-fixed(含中日韩的 `12x13ja` / `18x18ja` / `18x18ko`)、Adobe 75 / 100 dpi 字体与 GNU Unifont,别名照 X.Org 的 `fonts.alias`([architecture.md](design/architecture.md) §7「字体」) |
+| 录屏 / 远程桌面(`x11vnc`、`ffmpeg -f x11grab`)录不到老程序的鼠标光标;老程序要的铅笔、靶心之类光标在本机显示成箭头 | 库的缺陷:cursor 字体只有度量、没有字形,XFIXES 的 GetCursorImage 回 1×1 的透明像素 | 已修:cursor 字体是 X.Org 的 cursor.bdf,GetCursorImage 给出真实的光标图像;有对应系统光标的(箭头、I 形、沙漏……)本机仍显示系统光标,没有对应的显示 X 的位图 |
 | Windows 终端服务器(多个用户同时登录)上,远端程序的窗口、键盘与剪贴板落到了别的用户的桌面上 | 宿主缺陷:判断「本机已经有别的 X 显示在用」时只看 `localhost:0` 有没有人在听,而那可能是别的用户开着的 VcXsrv | 已修:只有当前用户会话里的进程在听才算;否则照常自动启动内置引擎(换一个空闲的显示号) |
 
 ## 一、启动慢,一次 25 秒
