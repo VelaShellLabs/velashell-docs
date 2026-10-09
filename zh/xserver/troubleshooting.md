@@ -13,6 +13,7 @@ English: [`../../en/xserver/troubleshooting.md`](../../en/xserver/troubleshootin
 | 终端里打出 `libEGL warning: DRI3 error: Could not get DRI3 device` | Mesa 先试 DRI3 硬件加速。DRI3 要在同一台机器上传文件描述符,经 SSH 转发不可能做到 | **无害**,Mesa 随即退回软件渲染。不想看见就在远端设 `LIBGL_ALWAYS_SOFTWARE=1` |
 | GTK4 程序要等 25 秒、50 秒才出窗口,期间几乎不占 CPU | 桌面门户(`xdg-desktop-portal`)起不来,程序对它的 D-Bus 调用各等满 25 秒超时 | 见[一](#一启动慢一次-25-秒) |
 | 窗口出来了,但操作掉帧、不流畅 | GTK4 默认 GL 渲染,远端没有 GPU 时退到 llvmpipe,每一帧把**整窗像素**经 SSH 发过来 | 见[二](#二操作卡) |
+| 运行 GTK 程序(实测 `gnome-calculator`)之后终端停住、本机不出窗口,按 Ctrl+C 才回到提示符;VelaShell 的日志里什么也没有 | 远端机器上这个用户正登录着 Wayland 桌面。SSH 会话里没有 `WAYLAND_DISPLAY`,但 `XDG_RUNTIME_DIR` 与桌面是同一个目录,里面有桌面的 `wayland-0`;GTK 先试 Wayland,就连上了它 —— 窗口开到了远端机器自己的屏幕上,没走 X11 转发 | 见[四](#四窗口开到了远端机器自己的桌面上) |
 
 **内置 X Server 有意的行为**
 
@@ -104,3 +105,33 @@ X Server 这一侧没法替客户端选渲染器 —— Mesa 的软件 EGL 只�
   菜单、「总在最前」的窗口只在你正用着 X 窗口时置顶,回到本机窗口时退到后面 —— 免得你在终端里输 sudo 口令时,按键被跳到前台的
   远端窗口接走。
 - **远端误跑的窗口管理器**(openbox、xfwm4……)接管不了别的会话的窗口:内置 X Server 自己占着窗口管理器的位置。
+
+## 四、窗口开到了远端机器自己的桌面上
+
+远端机器上同一个用户正登录着 Wayland 桌面时(比如一台装了 Ubuntu 桌面版、开机自动登录的虚拟机),经 SSH 运行 GTK 程序,
+终端停住、本机却不出窗口。确认:
+
+```bash
+ls $XDG_RUNTIME_DIR | grep wayland                              # 有 wayland-0:这个用户在那台机器上开着 Wayland 桌面
+systemctl --user is-active graphical-session.target             # active
+WAYLAND_DEBUG=1 gnome-calculator 2>&1 | grep -m1 wl_display     # 有输出:程序连的是 Wayland,不是转发来的 X11 显示
+```
+
+SSH 会话里没有 `WAYLAND_DISPLAY`,但登录时 `XDG_RUNTIME_DIR` 被设成与桌面同一个目录(`/run/user/<uid>`)。GTK 先试 Wayland 后端,
+而没有 `WAYLAND_DISPLAY` 时 Wayland 的客户端库默认去连这个目录里的 `wayland-0` —— 正好是那台机器的桌面。于是窗口开在远端的屏幕上
+(看一眼那台机器的控制台就能看到),`DISPLAY` 指向的 X11 转发根本没用上,内置 X Server 那边也就什么都没收到。换 VcXsrv / MobaXterm 也一样。
+
+在远端的 `~/.bashrc` 里加:
+
+```bash
+# 经 SSH 转发 X11 时,让 GTK 程序用转发来的显示,而不是这台机器自己桌面的 Wayland(wayland-0)。
+if [ -n "$SSH_CONNECTION" ] && [ -n "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    export GDK_BACKEND=x11
+fi
+```
+
+- 只在 SSH 登录、开了 X11 转发(有 `DISPLAY`)时生效,不影响那台机器的本地桌面。
+- 与[一](#一启动慢一次-25-秒)里那段不冲突:那段在有桌面会话时什么也不做(门户本来就起得来),这段正是给有桌面会话的情况用的,两段都加上即可。
+- 只想临时试一次:`GDK_BACKEND=x11 gnome-calculator`。
+- 用 `G_MESSAGES_DEBUG=all gnome-calculator 2>&1 | head` 看日志时注意:`head` 读够行数就退出,程序下一次往终端写就会被系统结束 ——
+  窗口还没来得及出来,看上去像是没起来。
