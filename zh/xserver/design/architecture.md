@@ -374,8 +374,9 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   9 / 13 / 15 与 KOI8-R / U 按随库的映射表派生(.NET 的代码页表导出;没有 ISO8859-10 / 11 / 14 / 16),派生字体的 CHARSET_REGISTRY / CHARSET_ENCODING 跟着换;
   一共 1877 个名字。别名照 X.Org misc 目录的 `fonts.alias` 原文(`fixed`、`variable` —— Helvetica Bold 12 磅 ——、`5x7` …),目标没有随库带的
   (Sony、JIS、ISAS、OPEN LOOK 的字体)不列出、打开 BadName;另认 `9x18` / `9x18bold`,`8x16` / `12x24`(Sony)退到最接近的 misc-fixed。
-  完整的 14 字段 XLFD 没有完全匹配时,在 foundry、family、weight、slant、charset 都对得上的里面取像素高度最接近的(一样近取小的;按 PIXEL_SIZE,
-  没给时按 POINT_SIZE 与 RESOLUTION_Y 换算,都没给不猜)。没有随库带的字族(B&H 的 Lucida —— 许可要求在用户文档与代码注释里附特定声明 ——、
+  完整的 14 字段 XLFD 没有完全匹配时,在 foundry、family、weight、slant、charset 都对得上的里面取像素高度最接近的(按 PIXEL_SIZE,
+  没给时按 POINT_SIZE 与 RESOLUTION_Y 换算,都没给不猜);一样近时,给了 AVERAGE_WIDTH 的先挑平均宽度最接近的,再取小的 —— 把平均宽度翻倍要双宽字体的
+  `-misc-fixed-medium-r-semicondensed--13-120-75-75-c-120-iso10646-1` 拿到 12x13ja,而不是 7x13;平均宽度只在一样近的里面比,不会为了字宽换到更远的字号。没有随库带的字族(B&H 的 Lucida —— 许可要求在用户文档与代码注释里附特定声明 ——、
   Bitstream、可缩放字体)照旧 BadName。名字表在第一次用到时建一次,字体第一次打开时才解压、解析,解析结果整个进程共享(多个服务端实例只解析一次);
   字形位图按行打包(每像素 1 位)。量下来(Debug):名字表加 `fixed` 35 ms,Unifont 第一次打开 180 ms、9.6 MB,全部名字打开一遍(`xlsfonts -l`)
   870 ms、共 58 MB。这些都不在执行线程上做:OpenFont 与 ListFontsWithInfo 要用到还没建好的字体时,字体在线程池上解压、解析,
@@ -400,7 +401,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   源 / 遮罩 picture 的裁剪在没有变换、不重复时也限制读取(RENDER 0.11 §7:clip-mask「affects all graphics requests, including sources」);
   有变换或重复时、以及梯形与字形的源,仍只裁目标。源 picture 的 alpha-map 生效(RENDER 0.11 §7:源的 alpha 取自 alpha-map 在
   「坐标减 alpha 原点」处的像素,alpha-map 自己的裁剪之外 alpha 为 0;alpha-map 必须是只有 alpha 的格式、不能再带 alpha-map,否则 BadMatch);
-  目标的 alpha-map、poly-edge / poly-mode / dither 接受但不生效。
+  alpha-map 只作用一层:先挂上、再给作 alpha-map 用的那张挂 alpha-map 时,后者在合成时不算 —— 否则一张张接下去的长链每一环递归一层,
+  约六千多环就栈溢出,把宿主进程整个带崩。目标的 alpha-map、poly-edge / poly-mode / dither 接受但不生效。
   渐变的色标要在 0–1 之间并按大小排好(否则 BadValue,相等的硬过渡照收),取样时二分找色标;CreateCursor 的热点不在图里回 BadMatch;
   AddGlyphs 的位图大小与字形、色标个数按不会回绕的算法核对(超了 BadLength)。
 - **RANDR 对客户端基本只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`X11ServerOptions.Monitors` 或运行中的
