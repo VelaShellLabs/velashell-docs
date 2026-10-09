@@ -628,8 +628,12 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   protocol is (file / terminal / workspace is only known after activation), so plugin items carry no kind label and
   all use the plug icon. With no plugin protocols the group is not shown. The rail only grows downwards and scrolls on
   its own when it runs out of room.
-  - The selected item is `bg-active` with an accent icon and name; hover applies `bg-hover` synchronously rather than animating the button itself (the icon shares the button foreground, and animating both flickers on Windows high-DPI displays). Keyboard focus draws an accent
-    border only under `:focus-visible` — a mouse click never leaves a stuck outline.
+  - The selected item is `bg-active` with an accent icon and name; hover applies `bg-hover` directly, with no brush
+    transition: the rest background is `Transparent` (`#00FFFFFF`, fully transparent *white*), and Avalonia
+    interpolates unpremultiplied ARGB per channel, so a fade passes through half-transparent white and flashes bright
+    grey on every pointer enter and exit on dark themes (joesdu/VelaShell#577 — nothing to do with display scaling;
+    the rule is in the host's [`DESIGN.md`](https://github.com/joesdu/VelaShell/blob/main/DESIGN.md) §6.1).
+    Keyboard focus draws an accent border only under `:focus-visible` — a mouse click never leaves a stuck outline.
   - “Get more protocols…” at the bottom opens the plugin manager (modeless; a protocol enabled there arrives in the
     rail right away through the registry's `Changed` event, no need to reopen the dialog). It only appears when the
     main window supplied the callback.
@@ -645,8 +649,8 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   | Forwarding | SSH only (interactive shell) | ssh-agent forwarding (and its two restrictions), X11 forwarding |
   | Advanced | FTP, or a plugin protocol that declares `IsAdvanced` fields | FTP default remote path; plugin tuning fields |
 
-  - The selected tab's foreground turns `text-primary`; hover is applied synchronously, and a 2px accent underline slides between tabs (180ms, no motion
-    on first placement).
+  - The selected tab's foreground turns `text-primary`; hover applies directly for the same reason (the rest background
+    is `Transparent` here too), and a 2px accent underline slides between tabs (180ms, no motion on first placement).
   - **An accent dot next to a tab = that page has non-default values.** When editing a saved profile, what was filled
     in must not hide behind another tab and look lost — this replaces the old “auto-expand Advanced options on edit”;
     a new connection is all defaults and shows no dots.
