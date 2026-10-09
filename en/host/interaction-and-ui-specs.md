@@ -628,7 +628,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   protocol is (file / terminal / workspace is only known after activation), so plugin items carry no kind label and
   all use the plug icon. With no plugin protocols the group is not shown. The rail only grows downwards and scrolls on
   its own when it runs out of room.
-  - The selected item is `bg-active` with an accent icon and name; hover is `bg-hover`. Keyboard focus draws an accent
+  - The selected item is `bg-active` with an accent icon and name; hover applies `bg-hover` synchronously rather than animating the button itself (the icon shares the button foreground, and animating both flickers on Windows high-DPI displays). Keyboard focus draws an accent
     border only under `:focus-visible` — a mouse click never leaves a stuck outline.
   - “Get more protocols…” at the bottom opens the plugin manager (modeless; a protocol enabled there arrives in the
     rail right away through the registry's `Changed` event, no need to reopen the dialog). It only appears when the
@@ -645,7 +645,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   | Forwarding | SSH only (interactive shell) | ssh-agent forwarding (and its two restrictions), X11 forwarding |
   | Advanced | FTP, or a plugin protocol that declares `IsAdvanced` fields | FTP default remote path; plugin tuning fields |
 
-  - The selected tab's foreground turns `text-primary`; a 2px accent underline slides between tabs (180ms, no motion
+  - The selected tab's foreground turns `text-primary`; hover is applied synchronously, and a 2px accent underline slides between tabs (180ms, no motion
     on first placement).
   - **An accent dot next to a tab = that page has non-default values.** When editing a saved profile, what was filled
     in must not hide behind another tab and look lost — this replaces the old “auto-expand Advanced options on edit”;
