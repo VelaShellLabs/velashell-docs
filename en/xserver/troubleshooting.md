@@ -14,6 +14,7 @@ Ubuntu desktop install). There are three groups: problems in the **remote enviro
 | The terminal prints `libEGL warning: DRI3 error: Could not get DRI3 device` | Mesa tries DRI3 hardware acceleration first. DRI3 passes file descriptors on the same machine, which is impossible over SSH forwarding | **Harmless**; Mesa falls back to software rendering right away. To hide it, set `LIBGL_ALWAYS_SOFTWARE=1` on the remote side |
 | A GTK4 program takes 25 or 50 seconds to show its window, using almost no CPU meanwhile | The desktop portal (`xdg-desktop-portal`) cannot start, and each of the program's D-Bus calls to it waits for the full 25-second timeout | See [1](#1-slow-start-25-seconds-at-a-time) |
 | The window shows up, but interaction drops frames and is not smooth | GTK4 renders with GL by default; without a GPU on the remote side it falls back to llvmpipe and sends the **whole window's pixels** over SSH for every frame | See [2](#2-sluggish-interaction) |
+| After starting a GTK program (seen with `gnome-calculator`) the terminal hangs and no window appears locally until you press Ctrl+C; VelaShell's log shows nothing | The same user is logged in to a Wayland desktop on the remote machine. The SSH session has no `WAYLAND_DISPLAY`, but its `XDG_RUNTIME_DIR` is the desktop's directory, which holds the desktop's `wayland-0`; GTK tries Wayland first and connects to it — the window opens on the remote machine's own screen, bypassing X11 forwarding | See [4](#4-the-window-opens-on-the-remote-machines-own-desktop) |
 
 **Deliberate behaviour of the built-in X Server**
 
@@ -118,3 +119,37 @@ sharing one display — what is tightened"):
   terminal cannot be taken by a remote window that jumped to the front.
 - **A window manager started by mistake on a remote machine** (openbox, xfwm4…) cannot take over the other sessions' windows: the built-in
   X Server holds the window manager's place itself.
+
+## 4. The window opens on the remote machine's own desktop
+
+When the same user is logged in to a Wayland desktop on the remote machine (for example a VM with Ubuntu Desktop that logs in
+automatically at boot), a GTK program started over SSH leaves the terminal hanging while no window appears locally. To confirm:
+
+```bash
+ls $XDG_RUNTIME_DIR | grep wayland                              # wayland-0 present: this user has a Wayland desktop open on that machine
+systemctl --user is-active graphical-session.target             # active
+WAYLAND_DEBUG=1 gnome-calculator 2>&1 | grep -m1 wl_display     # any output: the program talks Wayland, not the forwarded X11 display
+```
+
+The SSH session has no `WAYLAND_DISPLAY`, but at login its `XDG_RUNTIME_DIR` is set to the same directory as the desktop's
+(`/run/user/<uid>`). GTK tries the Wayland back end first, and without `WAYLAND_DISPLAY` the Wayland client library connects to
+`wayland-0` in that directory by default — which is that machine's desktop. So the window opens on the remote screen (look at that
+machine's console to see it), the X11 forwarding that `DISPLAY` points at is never used, and the built-in X Server never hears from the
+program. VcXsrv / MobaXterm behave the same.
+
+Add this to `~/.bashrc` on the remote side:
+
+```bash
+# With SSH X11 forwarding: make GTK programs use the forwarded display instead of this machine's own Wayland desktop (wayland-0).
+if [ -n "$SSH_CONNECTION" ] && [ -n "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    export GDK_BACKEND=x11
+fi
+```
+
+- It only applies to SSH logins with X11 forwarding (`DISPLAY` set), and leaves that machine's local desktop alone.
+- It does not conflict with the snippet in [1](#1-slow-start-25-seconds-at-a-time): that one does nothing when a desktop session exists
+  (the portal can start anyway), and this one is exactly for that case — add both.
+- To try it just once: `GDK_BACKEND=x11 gnome-calculator`.
+- When reading logs with `G_MESSAGES_DEBUG=all gnome-calculator 2>&1 | head`, note that `head` exits once it has its lines, and the
+  program is killed the next time it writes to the terminal — before its window has had a chance to appear, so it looks as if it never
+  started.
