@@ -568,26 +568,27 @@ for work the host cannot see.
 
 ## 10. Tunnel Management Panel ★User specified (opened by clicking “Tunnel”)
 
-**Trigger**: click the menu bar `route` (Tunnel) button (§4A.2), select Tools → Tunnel Manager, or choose Open Tunnel Manager in the command palette. Show it as a floating panel near the button (320px wide, `bg-surface` + small shadow).
+**Trigger**: click the menu bar `route` (Tunnel) button (§4A.2), select Tools → Tunnel Manager, or choose Open Tunnel Manager in the command palette. Show it as a floating panel near the button (380px wide, `bg-surface` + small shadow).
 
 **Structure**:
-- **Header (32px, bottom divider)**: left = `route` (accent) + “Tunnels” + active tunnel count badge; right = `plus` (expand new form) + `x` (close panel).
+- **Header (40px, bottom divider)**: left = `route` (accent) + “Tunnels” + tunnel count badge (same colouring as the Create button: `accent-dim` background + `accent` text; never a solid `accent` fill, where accent-coloured text disappears); right = `plus` (expand new form) + `x` (close panel). The header doubles as a drag handle: drag the panel out of the way and it remembers the spot on release, reopening there next time (the same mechanism as the transfer panel and the message centre: an offset from the default anchor, clamped back into view when the window shrinks).
 - **Tunnel list, one row per tunnel**:
-  - First row: status dot (green = active) + tunnel name, such as `MySQL Forwarding` + type label on the right (`Local` with `accent-dim` / `Remote` with an `info` background / `Dynamic`, extensible) + an outlined `AUTO` badge when automatic reconnect is on.
-  - Detail row (10px muted monospaced): `L 3306 → db-prod-01:3306` / `R 6379 → localhost:6379`.
+  - First row: status dot (green = active) + tunnel name, such as `MySQL Forwarding` + type label on the right (`Local` with `accent-dim` / `Remote` with an `info` background / `Dynamic`, extensible) + an outlined `AUTO` badge when automatic reconnect is on, and an outlined `STARTUP` badge when “Set up automatically when VelaShell starts” is on. When the row runs out of room the tunnel name is truncated; the badges always stay whole.
+  - Detail row (11px monospaced; the route line in `text-secondary`, the other descriptions in `text-tertiary`): `L 3306 → db-prod-01:3306` / `R 6379 → localhost:6379`.
   - Status row: uptime while active, otherwise the status text.
-  - **Statistics row** (10px muted monospaced; the description row the `fuXS7` draft reserved): `3 conns · 1.4 MB`, calling out the live count when connections are transferring (`3 conns (2 live) · 1.4 MB`), and “No connections yet” before anything has connected. The byte figure combines both directions.
-  - On hover, show actions: enable/disable toggle, edit, delete.
+  - **Statistics row** (11px `text-tertiary` monospaced; the description row the `fuXS7` draft reserved): `3 conns · 1.4 MB`, calling out the live count when connections are transferring (`3 conns (2 live) · 1.4 MB`), and “No connections yet” before anything has connected. The byte figure combines both directions.
+  - On hover, show actions: enable/disable toggle, edit, delete. Starting and stopping go over the network and take a moment: while one is in flight the start/stop button is replaced by a spinning progress ring (not a button, so it cannot be clicked again), edit and delete are disabled, and the status row reads “Starting tunnel…” / “Stopping tunnel…”; when it finishes the matching button comes back. The same applies while automatic reconnect is rebuilding a tunnel, so a manual start in the meantime does not create a second copy.
 - **New Tunnel form (`plus` expands, `tunNewForm`)**:
   - Title: `circle-plus` + “New Tunnel”.
   - One row with three fields: **Type** drop-down (Local L / Remote R / Dynamic D, 80px) + **Local Port** input + **Remote Address** input (`host:port`).
-  - Check boxes: “Forward to the server itself” (locks the target to 127.0.0.1) and “Reconnect automatically after a dropout” (**off by default**).
-  - Button row, right aligned: `Cancel` (outlined) / `Create` (solid accent, `plus` + “Create”).
+  - Check boxes: “Forward to the server itself” (locks the target to 127.0.0.1), “Reconnect automatically after a dropout” (**off by default**) and “Set up automatically when VelaShell starts” (**off by default**).
+  - Button row, right aligned: `Cancel` (outlined) / `Create` (`accent-dim` pill: light background + accent outline/icon/text, `plus` + “Create”).
 - **Interaction logic**:
   - Attempt to establish forwarding immediately after creation. Success = green dot + increment badge; failure = red dot + error message.
   - Local and dynamic forwards run a **local port-occupancy precheck** before binding, reporting “local port 27017 is already in use by another program” instead of a low-level socket error.
   - A tunnel does **not** follow the lifecycle of a terminal tab: creating or starting one while disconnected opens a background connection dedicated to tunnels, and that connection is dropped once the server's last tunnel is removed.
   - When the host session drops, its tunnels are marked stopped; those with “reconnect automatically after a dropout” are redialed and rebuilt on their own (failures back off from 10s to 5min), and the rest wait for a one-click start. **A tunnel the user stopped by hand is never brought back up automatically.**
+  - **Running state is never persisted**: only the tunnel configuration is saved, so after a restart every tunnel is stopped and waits for a manual start. Only tunnels with “Set up automatically when VelaShell starts” are connected and set up in the background at launch (without holding up startup; a missing credential still brings up the login prompt). A failure during that automatic setup (the server is unreachable, the local port is taken, the credential prompt was cancelled) raises an error toast in the bottom-right corner naming the server and the tunnel; one server failing does not stop the others, one tunnel failing does not stop the rest on the same server, and if none came up the background connection opened for them is dropped again.
   - Type descriptions: local forwarding (`-L`), remote forwarding (`-R`), dynamic SOCKS (`-D`).
 
 ---
