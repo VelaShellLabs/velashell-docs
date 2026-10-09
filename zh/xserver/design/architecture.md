@@ -62,7 +62,7 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 4. **数据不等于代码**:内置位图字体是 X.Org 的 BDF 原样 —— `font-misc-misc`("Public domain font. Share and enjoy.")、
    `font-cursor-misc`("These glyphs are unencumbered")、`font-adobe-75dpi` / `100dpi`(Adobe / DEC 的宽松许可)—— 与 GNU Unifont
    (双许可,取 SIL OFL 1.1);颜色名表是 X.Org `rgb` 的 `rgb.txt` 原样(MIT / X11 许可)。都以数据文件随库分发,在 `NOTICE.md` 里注明来源与许可,
-   字体的许可原文随数据嵌进程序集。字体数据只由 `scripts/xserver/fonts/build-fonts.cs` 从固定的上游提交生成(BDF 逐字节不动、Brotli 压缩),不手改。
+   字体的许可原文随数据嵌进程序集。字体数据只由 `scripts/xserver/fonts/build-fonts.cs` 从固定的上游提交生成(BDF 逐字节不动、Brotli 压缩),不手改;下载的内容按脚本里固定的 SHA-256 核对(X.Org 的仓库核对从归档里挑出来的文件 —— GitLab 现做的归档不保证逐字节稳定),全部对上才动数据目录。
 
 ## 4. 分层
 
@@ -247,7 +247,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   - 宽线与弧按 line-style、join-style、cap-style 画:Miter 把两条外沿延长到相交(夹角小于 11° 时退成 Bevel),Bevel 补外侧的三角,
     Round 补圆;端点重合的段从路径里拿掉,整条缩成一点时 Round 画圆、Projecting 画方块。虚线沿线按长度量,OnOffDash 只画偶数段;
     DoubleDash 的奇数段按背景 —— 源按 fill-style:Solid 用背景色、Stippled 用背景色按点画遮、Tiled / OpaqueStippled 与偶数段相同。
-    宽弧不是整圆时两端按 cap-style 加端帽,内外边界是半轴各加 / 减半个线宽的椭圆,不取整。PolyLine 三个点以上、首尾重合时按闭合路径画
+    宽弧不是整圆时两端按 cap-style 加端帽,内外边界是半轴各加 / 减半个线宽的椭圆,不取整。外接框宽或高为 0 的弧是一条线段,协议说这时边界不由实现决定、就是与路径相距半个线宽的两条线:每段单调的走位画满一个线宽,在两端之间折返的地方(宽为 0 的在 ±90°、高为 0 的在 0° / 180°)绕着线段的一头转半圈,补一个直径为线宽的圆。PolyLine 三个点以上、首尾重合时按闭合路径画
     (那里是接头而不是两个端帽,细线不画第二遍终点)。PolyArc 里前一条的终点与后一条的起点重合的弧按协议「join correctly」:
     「重合」按各轴相差都不到半个像素(留 1/256 像素的余量)判 —— 端点是实数,逐位相等太苛刻,取整到同一个像素在 .5 上又不稳;
     最后一条接回第一条时整串闭合。相接的一串宽弧当一条路径:相邻两条之间按 join-style 加接头(搭在两条环带真实的端面角上,
@@ -375,8 +375,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   一共 1877 个名字。别名照 X.Org misc 目录的 `fonts.alias` 原文(`fixed`、`variable` —— Helvetica Bold 12 磅 ——、`5x7` …),目标没有随库带的
   (Sony、JIS、ISAS、OPEN LOOK 的字体)不列出、打开 BadName;另认 `9x18` / `9x18bold`,`8x16` / `12x24`(Sony)退到最接近的 misc-fixed。
   完整的 14 字段 XLFD 没有完全匹配时,在 foundry、family、weight、slant、charset 都对得上的里面取像素高度最接近的(按 PIXEL_SIZE,
-  没给时按 POINT_SIZE 与 RESOLUTION_Y 换算,都没给不猜);一样近时,给了 AVERAGE_WIDTH 的先挑平均宽度最接近的,再取小的 —— 把平均宽度翻倍要双宽字体的
-  `-misc-fixed-medium-r-semicondensed--13-120-75-75-c-120-iso10646-1` 拿到 12x13ja,而不是 7x13;平均宽度只在一样近的里面比,不会为了字宽换到更远的字号。没有随库带的字族(B&H 的 Lucida —— 许可要求在用户文档与代码注释里附特定声明 ——、
+  没给时按 POINT_SIZE 与 RESOLUTION_Y 换算 —— RESOLUTION_Y 留空时按屏幕分辨率 `X11ServerOptions.Dpi`,都没给不猜);一样近时,给了 AVERAGE_WIDTH 的先挑平均宽度最接近的,再取小的 —— 把平均宽度翻倍要双宽字体的
+  `-misc-fixed-medium-r-semicondensed--13-120-75-75-c-120-iso10646-1` 拿到 12x13ja,而不是 7x13;平均宽度只在一样近的里面比,不会为了字宽换到更远的字号。按磅数要、分辨率留空的名字(POINT_SIZE 是数字,PIXEL_SIZE 与 RESOLUTION_Y 不是;`variable` 就是这样),匹配上的里面先挑 RESOLUTION_Y 离屏幕分辨率最近的 —— XLFD 的 POINT_SIZE 是物理尺寸,96 dpi 的屏幕上 12 磅取 100 dpi 的那份(17 像素),而不是按名字的先后取到 75 dpi 的 12 像素;退到最接近的字号时一样近的也再比分辨率。没有随库带的字族(B&H 的 Lucida —— 许可要求在用户文档与代码注释里附特定声明 ——、
   Bitstream、可缩放字体)照旧 BadName。名字表在第一次用到时建一次,字体第一次打开时才解压、解析,解析结果整个进程共享(多个服务端实例只解析一次);
   字形位图按行打包(每像素 1 位)。量下来(Debug):名字表加 `fixed` 35 ms,Unifont 第一次打开 180 ms、9.6 MB,全部名字打开一遍(`xlsfonts -l`)
   870 ms、共 58 MB。这些都不在执行线程上做:OpenFont 与 ListFontsWithInfo 要用到还没建好的字体时,字体在线程池上解压、解析,
@@ -399,10 +399,14 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   再按 repeat 折回 —— 不整张拷。只有 alpha 的字形按每像素一字节存;一个 CompositeGlyphs 请求只算一次目标、只记一次损伤,
   带遮罩格式时遮罩只按目标上可写的一块分配。梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率,只算目标上可写的那一块。
   源 / 遮罩 picture 的裁剪在没有变换、不重复时也限制读取(RENDER 0.11 §7:clip-mask「affects all graphics requests, including sources」);
-  有变换或重复时、以及梯形与字形的源,仍只裁目标。源 picture 的 alpha-map 生效(RENDER 0.11 §7:源的 alpha 取自 alpha-map 在
-  「坐标减 alpha 原点」处的像素,alpha-map 自己的裁剪之外 alpha 为 0;alpha-map 必须是只有 alpha 的格式、不能再带 alpha-map,否则 BadMatch);
-  alpha-map 只作用一层:先挂上、再给作 alpha-map 用的那张挂 alpha-map 时,后者在合成时不算 —— 否则一张张接下去的长链每一环递归一层,
-  约六千多环就栈溢出,把宿主进程整个带崩。目标的 alpha-map、poly-edge / poly-mode / dither 接受但不生效。
+  有变换或重复时、以及梯形与字形的源,仍只裁目标。alpha-map 照 RENDER 0.11「CreatePicture」:它的 alpha 通道取代
+  drawable 的 alpha 通道(颜色通道照原样 —— 像素一律是预乘的),原点相对 drawable 原点,读写都受 alpha-map 的范围与裁剪限制。当源时,变换与过滤作用在
+  drawable 与 alpha-map 拼好的那张上,alpha-map 本身不变换、不重复,有变换时 alpha-map 之外取到的 alpha 为 0;drawable 范围之外又不重复的像素整个透明。
+  当目标时,要写的那一块(请求的范围 ∩ 可写区域)拼成一张临时的 a8r8g8b8 合成,颜色写回 drawable(drawable 自己的 alpha 通道不动)、alpha 写回 alpha-map
+  并记 DAMAGE。挂了 alpha-map 的源与目标是同一块缓冲(drawable 或 alpha-map 就是目标)时同样先拷出要读的部分。alpha-map 必须是像素图上的 picture
+  (否则 BadMatch),格式不限;已经带 alpha-map 的不能再挂上去(规范说结果未定义,这里回 BadMatch)。alpha-map 只作用一层:先挂上、再给作 alpha-map
+  用的那张挂 alpha-map 时,后者在合成时不算 —— 否则一张张接下去的长链每一环递归一层,约六千多环就栈溢出,把宿主进程整个带崩。
+  poly-edge / poly-mode / dither 接受但不生效。
   渐变的色标要在 0–1 之间并按大小排好(否则 BadValue,相等的硬过渡照收),取样时二分找色标;CreateCursor 的热点不在图里回 BadMatch;
   AddGlyphs 的位图大小与字形、色标个数按不会回绕的算法核对(超了 BadLength)。
 - **RANDR 对客户端基本只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`X11ServerOptions.Monitors` 或运行中的
@@ -761,4 +765,18 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   快约 2–12 倍。顺带修了浮点版 ClipColor 的一处 NaN(灰色的源在 αd = 0 的目标上做 HSL 四种模式,颜色成了 0)。r5g6b5、x1r5g5b5、a4 目标少见,仍走浮点。
   ⑥ 选区按会话隔离(别的会话看不到属主变化、收不到因此发的 SelectionClear)、源 picture 的 alpha-map、间接 GLX 的单缓冲视觉同在这一轮补上(§7)。
   ⑦ **仍留着的**:点本机窗口或桌面就收起 X 的弹出菜单(要全局指针钩子);WarpPointer / confine-to、屏保转告宿主、「解除卡住」的宿主入口等新功能;
-  分数缩放下最后一列像素(要各平台实机核对);外接框宽或高为 0 的宽弧只画出一半线宽(审查之前就如此,这一轮没有动)。
+  分数缩放下最后一列像素(要各平台实机核对);外接框宽或高为 0 的宽弧只画出一半线宽(审查之前就如此,这一轮没有动;2026-10-10 已改,见下一条)。
+- **审查清单的最后一轮收尾(2026-10-10)**:对着第二次审查的清单(xs_plan)逐条核过一遍,不靠新功能、不靠实机的几项补完;行为写进了 §6、§7。
+  ① **外接框宽或高为 0 的宽弧画满整个线宽**:协议只在宽高都不为 0 且不相等时把宽弧的边界交给实现,有一个为 0 时就是理想的那两条线。
+  折返处补半个圆,取的是宽(或高)趋于 0 的椭圆在那一头的极限,与宽为 1 的椭圆在那一头同样伸出半个线宽。宽高都不为 0 的弧像素不变。
+  ② **RENDER 的 alpha-map 按「换掉 alpha 通道」理解,源与目标一致**:原先当源时把颜色先按 drawable 的 alpha 除、再乘 alpha-map 的 alpha,
+  写进挂了 alpha-map 的目标、再当源读回来就不是同一个像素;规范说的只是 alpha 通道被取代。目标侧不改合成器,先拼成一张临时的 a8r8g8b8 再写回 ——
+  这种目标极少见(cairo、Qt、Java 都不用),换来合成器的各条快路径不用知道 alpha-map;临时缓冲只按请求的范围分配,工作量按两遍拷贝扣。
+  ③ **按磅数要字体时按屏幕分辨率挑 75 / 100 dpi**:同一个磅数在两份里的像素高度不同,原先按名字的先后总取 75 dpi 的;现在取 RESOLUTION_Y 离
+  `X11ServerOptions.Dpi` 最近的。给了分辨率或像素高度的名字与原来完全一样。
+  ④ **字体脚本核对 X.Org 字体的内容**:对挑出来的文件算摘要(按文件名排序,每个文件一行「文件名 内容的 SHA-256」再整体算),不对归档算;
+  全部下载、核对完才动数据目录。按固定的摘要重跑一遍,生成的数据与仓库里的逐字节相同。
+  ⑤ **`.Xauthority` 与真实的 xauth 对过**:互操作镜像里的 xauth 列得出我们登记的那条,两边改写都留着对方的记录;我们用的锁文件名 xauth 认得、看见就不写。
+  ⑥ **仍留着的**:点本机窗口或桌面就收起 X 的弹出菜单(要全局指针钩子);新功能(按会话隔离、X 程序清单的界面、WarpPointer、屏保转告、合成管理器、托盘、单窗口模式……);
+  要实机核对的分数缩放下最后一列像素、macOS 上 Command 组合键的 KeyUp、macOS / FreeBSD 经 getpeereid 取对端 uid;互操作靶场扩到 GTK3 / GTK4、浏览器、
+  Motif / Tk / Emacs、桌面会话、托盘与 fcitx5。这些都记在宿主仓库的 `feature-plan.md`「H. 内置 X 服务端」。

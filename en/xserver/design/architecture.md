@@ -74,7 +74,8 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
    (dual-licensed; used under the SIL OFL 1.1); the colour-name table is X.Org `rgb`'s `rgb.txt` as is (MIT / X11 licence). All ship as data
    files with their source and licence recorded in `NOTICE.md`, and the fonts' licence texts are embedded in the assembly with the data.
    The font data is generated only by `scripts/xserver/fonts/build-fonts.cs` from pinned upstream commits (BDF byte for byte, Brotli-compressed),
-   never edited by hand.
+   never edited by hand; what it downloads is checked against SHA-256 values pinned in the script (for the X.Org repositories, over the files
+   picked out of the archive — GitLab's on-the-fly archives are not byte-stable), and the data directory is touched only once everything matches.
 
 ## 4. Layering
 
@@ -327,7 +328,10 @@ extra (the slack is not charged).
     the even dashes; DoubleDash draws the odd ones in the background — sourced per fill-style: Solid uses the background colour,
     Stippled the background colour masked by the stipple, Tiled / OpaqueStippled the same source as the even dashes. A wide arc that is
     not a full circle gets caps at both ends per cap-style, and its inner and outer boundaries are ellipses with the semi-axes plus / minus
-    half the line width, not rounded. PolyLine with three or more points whose first and last coincide is drawn as a closed path (a join
+    half the line width, not rounded. An arc whose bounding box has zero width or height is a line segment; the protocol leaves the outline
+    to the implementation only when both are nonzero, so here it is the ideal one, the two lines half the line width from the path: each
+    monotonic stretch is drawn the full line width, and where the path turns back between its ends (at ±90° for zero width, at 0° / 180° for
+    zero height) the outline goes half a turn around that end of the segment, adding a disc one line width across. PolyLine with three or more points whose first and last coincide is drawn as a closed path (a join
     there rather than two caps; a thin line does not draw the end point twice). Arcs in a PolyArc whose end point coincides with the next
     one's start point "join correctly" as the protocol says: "coincide" means less than half a pixel apart on each axis (with 1/256 pixel
     of slack) — the end points are real numbers, so exact equality is too strict and rounding to the same pixel is unstable at .5; the last
@@ -513,10 +517,13 @@ extra (the slack is not charged).
   Aliases follow the X.Org misc directory's `fonts.alias` verbatim (`fixed`, `variable` — Helvetica Bold 12 pt —, `5x7` …); aliases whose targets are
   not bundled (Sony, JIS, ISAS and OPEN LOOK fonts) are not listed and get BadName; `9x18` / `9x18bold` are also accepted, and `8x16` / `12x24`
   (Sony) fall back to the nearest misc-fixed. When a full 14-field XLFD has no exact match, the font with the nearest pixel height among those
-  whose foundry, family, weight, slant and charset match is used (by PIXEL_SIZE, else converted from POINT_SIZE and RESOLUTION_Y, with no
-  guessing when neither is given); on a tie, when AVERAGE_WIDTH is given, the closest average width wins first, then the smaller size — so
+  whose foundry, family, weight, slant and charset match is used (by PIXEL_SIZE, else converted from POINT_SIZE and RESOLUTION_Y — the
+  screen resolution `X11ServerOptions.Dpi` when RESOLUTION_Y is left open —, with no guessing when neither is given); on a tie, when AVERAGE_WIDTH is given, the closest average width wins first, then the smaller size — so
   `-misc-fixed-medium-r-semicondensed--13-120-75-75-c-120-iso10646-1`, a double-width request made by doubling the average width, gets 12x13ja
-  rather than 7x13. The average width only breaks ties and never trades a closer size for a closer width. Families that are not bundled (B&H's Lucida — its licence requires particular notices in
+  rather than 7x13. The average width only breaks ties and never trades a closer size for a closer width. For a name that asks by point size with the
+  resolution left open (POINT_SIZE is a number, PIXEL_SIZE and RESOLUTION_Y are not; `variable` is one), the match whose RESOLUTION_Y is
+  closest to the screen resolution is taken first — XLFD's POINT_SIZE is a physical size, so on a 96 dpi screen 12 pt gets the 100 dpi font
+  (17 pixels) rather than, by name order, the 75 dpi one (12 pixels); when falling back to the nearest size, ties are broken by resolution too. Families that are not bundled (B&H's Lucida — its licence requires particular notices in
   user documentation and code comments —, Bitstream, scalable fonts) are still BadName. The name table is built once on first use; a font is
   decompressed and parsed the first time it is opened, and the result is shared by the whole process (several server instances parse it once);
   glyph bitmaps are packed by row (1 bit per pixel). Measured (Debug): the name table plus `fixed` 35 ms, Unifont's first open 180 ms and 9.6 MB,
@@ -555,11 +562,18 @@ extra (the slack is not charged).
   Trapezoids and triangles use 16 sub-scanlines per row with analytic horizontal coverage, computed only over the writable part of the target.
   Source / mask picture clipping also limits what is read when there is no transform and no repeat (RENDER 0.11 §7: the clip-mask "affects all
   graphics requests, including sources"); with a transform or repeat, and for the sources of trapezoids and glyphs, only the target is clipped.
-  A source picture's alpha map takes effect (RENDER 0.11 §7: the source's alpha is taken from the alpha map's pixel at "the coordinate minus the
-  alpha origin", is 0 outside the alpha map's own clip, and the alpha map must be an alpha-only format without an alpha map of its own, else
-  BadMatch). An alpha map applies one level only: if the picture used as an alpha map is given an alpha map of its own afterwards, that one is
-  ignored when compositing — otherwise a long chain built one link at a time would recurse once per link and overflow the stack at around six
-  thousand links, taking the whole host process down. A destination's alpha map and poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be
+  Alpha maps follow RENDER 0.11 "CreatePicture": the alpha map's alpha channel
+  replaces the drawable's (the colour channels stay as they are — pixels are always premultiplied), its origin is relative to the drawable's,
+  and both reading and writing are clipped to the alpha map's extent and clip. As a source, the transform and filter apply to the picture the
+  drawable and the alpha map make together; the alpha map itself is not transformed or repeated, and with a transform the alpha read outside it
+  is 0; a pixel outside the drawable with no repeat is fully transparent. As a destination, the area to be written (the request ∩ the writable
+  region) is assembled into a temporary a8r8g8b8 image and composited there, then the colour is written back to the drawable (whose own alpha
+  channel is left alone) and the alpha to the alpha map, with DAMAGE noted. A source with an alpha map that shares a buffer with the destination
+  (the drawable or the alpha map is the target) is likewise copied out before writing. The alpha map must be a picture on a pixmap (else
+  BadMatch), in any format; one that already has an alpha map cannot be attached (the spec leaves that undefined; here it is BadMatch). An alpha
+  map applies one level only: if the picture used as an alpha map is given an alpha map of its own afterwards, that one is ignored when
+  compositing — otherwise a long chain built one link at a time would recurse once per link and overflow the stack at around six thousand links,
+  taking the whole host process down. poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be
   sorted (BadValue otherwise;
   equal stops — hard transitions — are fine), and sampling finds the stop by bisection; CreateCursor with a hotspot outside the image gets
   BadMatch; AddGlyphs bitmap sizes and glyph / stop counts are checked with arithmetic that cannot wrap around (BadLength when too large).
@@ -1094,4 +1108,28 @@ extra (the slack is not charged).
   ⑦ **Still left**: closing an X popup menu when the user clicks a local window or the desktop (needs a global pointer hook); new features
   such as WarpPointer / confine-to, passing the screen saver on to the host and a host entry for "unstick"; the last pixel column under
   fractional scaling (needs checking on real machines per platform); a wide arc whose bounding box has zero width or height is drawn at only
-  half the line width (it was like that before the review and is unchanged in this round).
+  half the line width (it was like that before the review and is unchanged in this round; changed on 2026-10-10, see the next item).
+- **The last round on the review list (2026-10-10)**: the second review's list (xs_plan) was checked item by item once more and the items that
+  need neither new features nor real machines were finished; the behaviour is in §6 and §7.
+  ① **A wide arc whose bounding box has zero width or height is drawn the full line width**: the protocol hands a wide arc's outline to the
+  implementation only when width and height are both nonzero and unequal; with one of them zero it is the ideal pair of lines. The half disc
+  where the path turns back is the limit of an ellipse as its width goes to zero, and like an ellipse one pixel wide it reaches half the line
+  width past that end. Arcs with both width and height nonzero are pixel for pixel unchanged.
+  ② **RENDER alpha maps read as "the alpha channel is replaced", the same for source and destination**: as a source, the colour used to be
+  divided by the drawable's alpha and multiplied by the alpha map's, so a pixel written through an alpha map and read back through it was not
+  the same pixel; the spec only says the alpha channel is replaced. On the destination side the compositor is left alone — the area is assembled
+  into a temporary a8r8g8b8 image and written back. Such destinations are rare (cairo, Qt and Java do not use them), and in exchange none of the
+  compositor's fast paths has to know about alpha maps; the temporary image covers only the request, and the work is charged for two copies.
+  ③ **Point-size font requests pick 75 / 100 dpi by the screen resolution**: the same point size has different pixel heights in the two, and
+  name order always gave the 75 dpi one; now the one whose RESOLUTION_Y is closest to `X11ServerOptions.Dpi` is taken. Names that give a
+  resolution or a pixel size resolve exactly as before.
+  ④ **The font script checks the X.Org fonts' content**: a digest over the picked files (sorted by name, one line "name SHA-256 of the
+  content" per file, then hashed as a whole), not over the archive; everything is downloaded and checked before the data directory is touched.
+  Rerun with the pinned digests, the generated data is byte for byte the same as the repository's.
+  ⑤ **`.Xauthority` checked against the real xauth**: the xauth in the interop image lists the entry we add, each side keeps the other's entries
+  when rewriting, and xauth recognises the lock file names we use and does not write while they exist.
+  ⑥ **Still left**: closing an X popup menu when the user clicks a local window or the desktop (needs a global pointer hook); new features
+  (per-session isolation, a UI for the X client list, WarpPointer, passing the screen saver on, a compositing manager, a tray, a one-window
+  mode…); on real machines, the last pixel column under fractional scaling, KeyUp for Command combinations on macOS, and the peer uid through
+  getpeereid on macOS / FreeBSD; extending the interop range to GTK3 / GTK4, browsers, Motif / Tk / Emacs, desktop sessions, the tray and fcitx5.
+  All of these are recorded in the host repository's `feature-plan.md`, "H. Built-in X server".
