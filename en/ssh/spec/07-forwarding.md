@@ -1218,10 +1218,13 @@ how the local end is reached. Once the check passes, the cookie in the setup mes
 "local cookie" (empty if none was given) and the message is written into the stream.
 Access control is the connector side's responsibility: the stream it hands out counts as an already-trusted local connection.
 
-〔Decision〕**Trusted mode only.** Untrusted mode needs `xauth` to connect to the local display with full authorization and sign a
-restricted cookie (§7.5.7), and there may be no display behind the connector for `xauth` to reach. When both are set, the X11
-forwarding request fails (handled per the two cases of §7.5.8) instead of silently falling back to trusted mode — that would
-quietly loosen the isolation the caller asked for.
+〔Decision〕**Both trusted and untrusted mode can go through the connector.** In untrusted mode **`xauth` is not run**: there may
+be no display behind the connector for `xauth` to reach, and none is needed — signing a restricted cookie (§7.5.7) exists only to
+make the X server treat this client as untrusted, and the connector side can admit it that way directly (the host's embedded X
+server takes the stream in at the SECURITY extension's untrusted level). The caller therefore has to know which mode a channel is in
+when handing it to the connector, and the restriction is the connector side's job; the library sends `x11-req` as usual and the
+cookie in the setup message is still replaced with the "local cookie". (Before 2026-10-10 only trusted mode was supported: with both
+set, the X11 forwarding request failed.)
 
 〔Decision〕The screen number and diagnostics still come from the display address (`DISPLAY` or the one the caller gave), so a
 display address is still required in connector mode.
