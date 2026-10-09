@@ -513,8 +513,10 @@ extra (the slack is not charged).
   Aliases follow the X.Org misc directory's `fonts.alias` verbatim (`fixed`, `variable` — Helvetica Bold 12 pt —, `5x7` …); aliases whose targets are
   not bundled (Sony, JIS, ISAS and OPEN LOOK fonts) are not listed and get BadName; `9x18` / `9x18bold` are also accepted, and `8x16` / `12x24`
   (Sony) fall back to the nearest misc-fixed. When a full 14-field XLFD has no exact match, the font with the nearest pixel height among those
-  whose foundry, family, weight, slant and charset match is used (the smaller one on a tie; by PIXEL_SIZE, else converted from POINT_SIZE and
-  RESOLUTION_Y, with no guessing when neither is given). Families that are not bundled (B&H's Lucida — its licence requires particular notices in
+  whose foundry, family, weight, slant and charset match is used (by PIXEL_SIZE, else converted from POINT_SIZE and RESOLUTION_Y, with no
+  guessing when neither is given); on a tie, when AVERAGE_WIDTH is given, the closest average width wins first, then the smaller size — so
+  `-misc-fixed-medium-r-semicondensed--13-120-75-75-c-120-iso10646-1`, a double-width request made by doubling the average width, gets 12x13ja
+  rather than 7x13. The average width only breaks ties and never trades a closer size for a closer width. Families that are not bundled (B&H's Lucida — its licence requires particular notices in
   user documentation and code comments —, Bitstream, scalable fonts) are still BadName. The name table is built once on first use; a font is
   decompressed and parsed the first time it is opened, and the result is shared by the whole process (several server instances parse it once);
   glyph bitmaps are packed by row (1 bit per pixel). Measured (Debug): the name table plus `fixed` 35 ms, Unifont's first open 180 ms and 9.6 MB,
@@ -555,7 +557,9 @@ extra (the slack is not charged).
   graphics requests, including sources"); with a transform or repeat, and for the sources of trapezoids and glyphs, only the target is clipped.
   A source picture's alpha map takes effect (RENDER 0.11 §7: the source's alpha is taken from the alpha map's pixel at "the coordinate minus the
   alpha origin", is 0 outside the alpha map's own clip, and the alpha map must be an alpha-only format without an alpha map of its own, else
-  BadMatch); a destination's alpha map and poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be
+  BadMatch). An alpha map applies one level only: if the picture used as an alpha map is given an alpha map of its own afterwards, that one is
+  ignored when compositing — otherwise a long chain built one link at a time would recurse once per link and overflow the stack at around six
+  thousand links, taking the whole host process down. A destination's alpha map and poly-edge / poly-mode / dither are accepted but have no effect. Gradient stops must lie in 0–1 and be
   sorted (BadValue otherwise;
   equal stops — hard transitions — are fine), and sampling finds the stop by bisection; CreateCursor with a hotspot outside the image gets
   BadMatch; AddGlyphs bitmap sizes and glyph / stop counts are checked with arithmetic that cannot wrap around (BadLength when too large).
