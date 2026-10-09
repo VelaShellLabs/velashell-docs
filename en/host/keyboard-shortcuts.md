@@ -34,6 +34,7 @@ Find the right place by scope, then come back and update the table:
 | Search bar (matched against the keymap), completion popup, disconnected-state keys | `src/VelaShell/Views/TerminalTabView.axaml.cs` |
 | Command palette / file manager / process manager / editor / dialogs | each view's own `OnKeyDown` |
 | Esc cancelling a dock drag | `src/VelaShell/Docking/Controls/DockDragController.cs` |
+| Explorer multi-select and dragging | `src/VelaShell/Views/SessionTreeView.axaml.cs` (rules in `src/VelaShell.Presentation/ViewModels/SessionTreeViewModel.cs`) |
 | AI assistant panel | `plugins/VelaShell.Plugin.Ai/Ui/ChatPanelView*.cs` |
 
 ## Platform differences
@@ -49,7 +50,7 @@ never stolen by copy.
 ## Reading the table
 
 - An "Applies when" of `—` means the shortcut is unconditional.
-- `Left Click` / `Right Click` / `Middle Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Command mark` / `Title Bar` / `Tab` / `Tab strip` / `Splitter` in the key column are mouse gestures, not keyboard keys. `Command mark` is the narrow gutter column that shows one marker per command; it only appears once the remote shell emits OSC 133 marks.
+- `Left Click` / `Right Click` / `Middle Click` / `Double Click` / `Drag` / `Wheel` / `Gutter` / `Command mark` / `Title Bar` / `Tab` / `Tab strip` / `Splitter` / `Connection row` / `Group row` in the key column are mouse gestures, not keyboard keys. `Command mark` is the narrow gutter column that shows one marker per command; it only appears once the remote shell emits OSC 133 marks.
 - An action listed on several rows has several equivalent bindings, or variants under different conditions (scrollback paging, for instance, differs between the main and the alternate screen).
 
 ## Customizing shortcuts
@@ -241,6 +242,15 @@ exported settings.
 | Open the gutter settings menu | `Gutter+Right Click` | — |
 | Collapse or expand an output block | `Gutter+Left Click` | — |
 | Select this command's output | `Command mark+Left Click` | requires shell integration (OSC 133) |
+
+### Explorer
+
+| Action | Keys | Applies when |
+| --- | --- | --- |
+| Add or remove a connection from the selection | `Ctrl+Left Click` | — |
+| Select a range of connections | `Shift+Left Click` | — |
+| Move a connection to another group | `Connection row+Drag` | — |
+| Reorder groups | `Group row+Drag` | — |
 
 ### Command Palette
 

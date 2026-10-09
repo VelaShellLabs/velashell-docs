@@ -103,7 +103,13 @@ From top to bottom:
 
 1. **Toolbar (36px, first sidebar row, `cnUAB`)**: group heading “Resource Explorer” (`126Cj`) on the left; two buttons on the right:
    - `plus` (`2mkdr`): New connection (opens the New Connection dialog in §13).
-   - `ellipsis` (`oPsSE`): More (import/export configuration, batch operations, collapse all groups).
+   - `ellipsis` (`oPsSE`): More (2026-10-09, joesdu/VelaShell#571). Top to bottom: Import connections from file… /
+     Export all connections… / Save CSV import template… / Import sessions from another tool… ([session import](session-import.md))
+     — divider — Sort groups by name / Collapse all groups / Expand all groups. The first three, together with
+     "Import into this group / Export group / Export selected", are described in [session import](session-import.md) section 7;
+     "Export all connections" is disabled when there are no connections. "Sort groups by name" is a one-off reorder
+     (natural order: "Rack 2" before "Rack 10"; the current locale's collation, so Chinese sorts by pinyin), and the order can
+     still be adjusted by hand afterwards.
 2. **Session resource tree (`fill_container`, scrollable)**: collapsible group list occupying most of the sidebar.
    - Group row: collapsible triangle + group name, such as “Production” or “Testing”, + count.
    - Host row: status dot (green/yellow/red) + hostname + optional label, such as “jump host” on an `accent-dim` background.
@@ -120,19 +126,35 @@ From top to bottom:
      its maximum width, and notes longer than 12 lines or 500 characters are cut and end with `…` — a tooltip limits
      its width but not its height, so a long pasted note would otherwise cover the very rows you are about to click;
      the full text is in the edit dialog.
-   - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging.
-   - **Ctrl pair selection** (⌘ works too on macOS, #524): Ctrl+click a second connection and both rows light up in the selected
-     state as a "pair"; right-clicking either row opens a single-item menu, "Open in dual-pane SFTP" (§6.2). Rules:
-     - **Exactly two.** Ctrl+clicking a third row while two are selected drops the oldest and shifts the rest along; Ctrl+clicking
-       a row in the pair removes it, and with one left it falls back to an ordinary single selection. **The first one picked goes left.**
+   - Interaction: click selects; **double-click connects and activates the tab**; right-click opens the session context menu in §12; groups can be reassigned by dragging;
+     **dragging a group row reorders the groups** (see below).
+   - **Multi-select** (2026-10-09, joesdu/VelaShell#571; grown out of the #524 Ctrl pair selection; ⌘ works too on macOS):
+     - **Ctrl+click** adds or removes one row, with no upper limit (under #524 only two could be picked and a third pushed the
+       oldest out; now rows keep being added); with one left it falls back to an ordinary single selection. **Shift+click** selects
+       every row between the "anchor" and this one — the anchor is the row last plain-clicked or Ctrl-added; **Ctrl+Shift+click**
+       adds that range to the existing selection. The range counts the rows you can see: connections inside collapsed groups stay
+       out, and group rows are skipped.
+     - The selected rows use the same highlight as the selected row (`bg-active` + accent name). Right-clicking any of them opens
+       the "multi-select menu" (§12), which acts on all of them; right-clicking a row outside the selection ends it and opens that
+       row's own menu.
      - The same profile can never be picked twice (a profile has exactly one node in the tree); to copy within one machine use
        "Copy to" in the single-pane file browser.
-     - Group rows do not take part. A plain click, moving the arrow keys outside the pair, or collapsing a group that hides one
-       of the two ends the pair.
-     - SSH / SFTP / FTP and plugin **file protocols** (S3, WebDAV…) can be opened as a pair; plugin workspaces (Redis…) cannot — the menu item is disabled, with a line below explaining why. A terminal plugin protocol (Telnet…) is only recognised once its plugin is activated, so opening reports that it is not a file protocol.
-       SSH / SFTP / FTP are supported.
-     - The list control itself stays single-select: the tree tracks the pair on its own, **the row's existing context menu is
-       unchanged**, and the pair menu is a separate one.
+     - Group rows do not take part. A plain click or moving the arrow keys outside the selection ends it; collapsing a group drops
+       the rows it hides from the selection, and if the selected row itself is hidden (or fewer than two remain) the selection ends.
+     - With **exactly two**, the multi-select menu gains "Open in dual-pane SFTP" (§6.2), **the first one picked goes left**.
+       SSH / SFTP / FTP and plugin **file protocols** (S3, WebDAV…) can go into the dual pane; plugin workspaces (Redis…) cannot —
+       the item is disabled, with a line below explaining why. A terminal plugin protocol (Telnet…) is only recognised once its
+       plugin is activated, so opening reports that it is not a file protocol. With three or more the item is not shown.
+     - The list control itself stays single-select: the tree tracks the selection on its own, **the row's existing context menu is
+       unchanged**, and the multi-select menu is a separate one.
+   - **Group order** (#571): group rows can be dragged directly. A drag starts after moving 5px (otherwise a click still expands /
+     collapses). Over the upper half of a group row = insert before it, the lower half = insert after it; over a connection row
+     inside a group = after that group; over a root-level connection, a pinned connection or empty space = move to the end.
+     A 2px accent insertion line marks the spot (not drawn when that row has scrolled out of view), and the ghost label following
+     the pointer says "group → move before "X" / move to the end"; dropping back in place shows the "no drop" cursor and no line.
+     "Move up / Move down" in the group context menu do the same for those who would rather not drag. The order is saved at once:
+     every group's sort order is renumbered 0, 1, 2… (orders left by deleted groups or by numbering-by-count could have gaps and
+     even duplicates), and a group created from the New Connection dialog goes after the highest order.
    - By default, follows the active terminal tab: automatically expands the parent group, selects the corresponding connection, and scrolls to it without taking terminal keyboard focus. This can be disabled under “Settings → General → Behavior”.
    - **Pinned connections** (`pin` icon, “Pin to Top / Unpin” in the context menu): a pinned connection is hoisted to
      **the very top of the tree**, sorted by name, with an accent-colored `pin` badge and the same indent as a group row.
@@ -396,7 +418,7 @@ in [settings-audit.md](settings-audit.md), eleventh batch; what users run into a
 
 ### 6.2 Remote + remote dual pane (#524)
 
-Opened from the Ctrl pair selection in §3: one file tab with each pane connected to a different machine. The tab title reads "left ⇄ right", its color bar and icon come from the left profile, and its status dot shows the worse of the two connections.
+Opened from the multi-select in §3 (exactly two connections): one file tab with each pane connected to a different machine. The tab title reads "left ⇄ right", its color bar and icon come from the left profile, and its status dot shows the worse of the two connections.
 
 - **Connecting**: the two connect one after the other (each with its usual credential prompt and host-key / certificate confirmation), under a placeholder tab titled "left ⇄ right". **If either one does not connect, the whole thing is rolled back**: the one already connected is disconnected at once, a failure stays on the placeholder's failure card, and a cancel removes the placeholder; there is never a document with only one pane. Both connections belong to the document and are disconnected together when the tab closes; sessions already open in other tabs are not reused. Any combination of SSH / SFTP / FTP / FTPS / plugin file protocols works.
 - **A plugin file-protocol pane** carries the protocol's own right-click actions (e.g. S3's "Copy share link"), and the tab icon is the one the plugin supplies (when the left pane is the plugin). The pane can only **receive** files from the other pane if the plugin also implements the SDK's `IProtocolStreamUpload`; otherwise it is a source only — the copy button toward it is disabled and drops onto it are refused.
@@ -604,7 +626,53 @@ Right-click a session row in the sidebar to open it (200px, `bg-surface`, corner
 - Divider
 - Delete (red)
 
-After Ctrl-selecting a pair of connections (§3), right-clicking one of them opens not the menu above but a single item, "Open in dual-pane SFTP" (`arrow-right-left`, §6.2); right-clicking a row outside the pair opens the menu above as usual and ends the pair.
+**Multi-select menu** (joesdu/VelaShell#571): after a Ctrl / Shift multi-select (§3), right-clicking one of the selected rows opens not the menu above but one that acts on every selected connection:
+
+- Open N connections (`plug`, accent primary action) — started in tree order from top to bottom with at most 6 handshakes at a
+  time, so the tabs appear one after another; above 10 it asks first ("This will open N connections at once"). A failure only
+  shows in its own tab
+- Open in dual-pane SFTP (`arrow-right-left`, §6.2) — only with exactly two; if one of them cannot go into the dual pane the item
+  is disabled, with a line below explaining why
+- Divider
+- Move to Group ▸ (submenu, as above; moved one by one, so "delete the group once it is empty" still applies)
+- Batch edit… (`sliders-horizontal`, [batch edit dialog](#121-batch-edit-dialog))
+- Export selected… (`file-down`, [session import](session-import.md) section 7; their jump hosts come along automatically)
+- Divider
+- Delete N connections (red) — asks first and cannot be undone; same rules as deleting one (an emptied group stays, jump hosts
+  pointing at it are not rewritten)
+
+Right-clicking a row outside the selection opens the menu above as usual and ends the selection.
+
+**Group menu** (right-click a group row; the group is selected first):
+
+- Open all connections (`plug`, accent primary action) — same concurrency and confirmation as "Open N connections"; nothing
+  happens on an empty group
+- Divider
+- Move up / Move down (`arrow-up` / `arrow-down`) — disabled at the top / bottom
+- Divider
+- Export group… (`file-down`) / Import into this group… (`file-up`; the import dialog's "Put into" preselects this group)
+- Divider
+- Delete Group (red, confirmed; the connections inside go with it)
+
+### 12.1 Batch edit dialog
+
+Opened from "Batch edit…" in the multi-select menu (540 wide, the same shell as the shared credential editor: 28px title bar +
+52px button bar, action buttons from the two shared themes in DESIGN.md §5.1). Every item has a checkbox in front:
+**only ticked items change; everything else stays as it is on each connection**:
+
+| Item | Notes |
+| --- | --- |
+| Username | prefilled when all selected connections share one, empty otherwise |
+| Port | 1–65535; prefilled when shared, 22 otherwise |
+| Authentication | segmented: shared credential (pick one, #550) / password (may be left empty to be asked when connecting) / key (file + optional passphrase) / agent. FTP and plugin protocols only take passwords; those rows are skipped for anything else |
+| Jump host | direct, or one of this computer's SSH / SFTP connections (excluding the ones being edited); only applies to SSH / SFTP, and the whole batch is skipped if it would close a loop |
+
+The group is not here: "Move to Group" in the multi-select menu is how the group changes, and it carries the "delete the group
+once it is empty" rule — a second entry point here would drift from it sooner or later. Before "Apply" is pressed, the line at the
+bottom already says something like "2 connections will change; 1 keeps its authentication (FTP and plugin protocols only support
+passwords)" — with FTP mixed in, switching to key authentication should not come as a surprise afterwards. "Apply" is disabled
+when nothing is ticked, the port is out of range, the shared credential option has none picked, or the key option has no file.
+After applying, the explorer refreshes and a toast says how many changed (warning level when some were skipped).
 
 Tabs and file rows likewise have their own context menus (see the corresponding sections).
 
