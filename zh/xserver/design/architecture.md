@@ -26,6 +26,8 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 - **rootless 多窗口**:每个顶层 X 窗口对应一个宿主原生窗口;根窗口不画。窗口装饰、移动、缩放、
   关闭由宿主负责;窗口管理器在协议层该做的(EWMH / ICCCM 属性、解析客户端提示、接住客户端的 WM 请求)由服务端做,
   再把请求转交宿主(§6)。
+- 可选的**单窗口(rootful)模式**(`X11ServerOptions.Rootful`,默认关,见 §7「单窗口模式」):整个根窗口作为一个顶层交给宿主,
+  远端的窗口管理器照常管理顶层 —— 跑完整的远端桌面(xfce、MATE)或图形安装器时用。
 - **可嵌入**:库不依赖任何 UI 框架、不依赖原生库。像素、窗口生命周期与输入经一个宿主接口(§6)交换。
 - **可测**:协议层全部走内存传输单测;另有 `[TestCategory("Interop")]` 用例让真实的 Xlib / XCB 客户端
   (Docker 里的 `xdpyinfo`、`xterm`、`xeyes`…)连进来。
@@ -37,7 +39,8 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
 - 不做 DRI2 / DRI3(没有 GPU 可交给客户端)。GLX 只登记直接渲染(客户端自己软件渲染、再经 PutImage 送像素)并提供
   固定功能 GL 子集的软件间接渲染;MIT-SHM 只在 Linux 上、只给经 Unix 套接字连进来、与服务端在同一个 IPC 命名空间里的本机客户端。
   Present 只做软件拷贝(没有显存可翻页)。
-- 不做 SECURITY 扩展(不受信的客户端级别):所有客户端同等受信,多会话之间的收紧见 §7。
+- SECURITY 扩展只做 MIT-MAGIC-COOKIE-1 授权的签发、撤销与非受信级别(§7「信任级别」);不做 XC-QUERY-SECURITY-1 认证方法与 Application Group
+  (只为早已没人用的 X 防火墙代理而设),GenerateAuthorization 的 group 只能是 None。
 
 ## 3. 净室规程
 
@@ -124,7 +127,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   宿主回调抛异常记一行后吞掉,宿主的日志委托本身再抛也一样吞掉,执行循环每一批另套一层兜底,不会因此退出。
   同一批里:同一个窗口的 `TopLevelChanged` 按位或并成一条(放在第一次的位置,不跨过夹在中间的映射 / 取消映射合并);映射了又取消映射的一对
   互相抵消;`CursorChanged` 与 `ClipboardChanged` 只交最后一次;`WindowManagerRequested` 最多 32 个,多的丢掉并记一行;`BellRequested`
-  最多一次(取最大音量),两次之间至少隔 100 毫秒 —— 一个循环改标题、反复映射、狂发响铃的客户端灌不满宿主的 UI 线程。
+  最多一次(取最大音量),两次之间至少隔 100 毫秒 —— 一个循环改标题、反复映射、狂发响铃的客户端灌不满宿主的 UI 线程。`ServerGrabStalled` 照常排队。
 - 每个连接一个**读取任务**(64 KB 缓冲):按长度字段切出完整请求,交给执行循环;一个**写出任务**:把执行循环
   放进该连接输出队列的消息拼进一块池化缓冲再写。执行循环从不在套接字上阻塞,慢客户端拖不住别人。写不出去(对端已断)时立即断开这个客户端,
   不等读端察觉 —— 读端可能正停在背压上,根本没去读套接字。
@@ -155,6 +158,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   只在出错要打印时才拼成文字。
 - **GrabServer** 期间,执行循环只执行持有者的请求,其余客户端的请求原样暂存,Ungrab 后按原顺序放回(经就绪队列,见上)。
   抓着 10 秒还有别人的请求在等,就记一行点名持有者(带连接名,比如 `user@host:22`)与等着的请求数,之后每 60 秒再记一次,直到放开;
+  同时经 `ServerGrabStalled`(`XServerGrabStall`:持有者的编号与连接名、抓了多久、等着的请求数)告诉宿主,宿主据此提示用户;没人在等时两样都不做。
   持有者挂住时宿主可以 `BreakGrabs` 或按编号 `DisconnectClient`(§6)。持有者自己再抓一次是空操作。
 - **同步抓取冻结期间**的设备事件排进同一个队列,指针与键盘按到达的先后(宿主注入与 XTEST 一样排);放行后一个工作项
   最多回放 64 个,余下的排到下一个工作项 —— 中间客户端的请求(下一个 AllowEvents)能插进来。队列最多 4096 条,满了按三类取舍:
@@ -163,6 +167,14 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
   WarpPointer 冻结时同样排队,到时才按当时的位置与窗口算。
 - 损伤区域在一批工作项执行完后合并,一次性通知宿主(不是每个绘图请求一次);每个顶层一批最多累计 8 块矩形,
   超出时合成外接矩形 —— 精确并集在一批几百条请求时退化成 O(n²)。
+- **按客户端轮流取工作(2026-10-10)**:从通道取出的工作按客户端分队、队内保持到达顺序;宿主与计时器的工作另一条队,有活就先取
+  (注入的输入、换进来的配置、到点的计时器:量小、要及时,量受真实输入速率限制,饿不死客户端);客户端之间轮流、每次取一项。
+  放回来的暂存请求(GrabServer 结束、SYNC 的 Await 等到了、XTEST 的延迟到了)照旧最先取。协议只要求同一个客户端的请求按序执行,
+  不同客户端之间的先后本来就不保证。连接收尾排在那个客户端还没执行的请求之后(发完请求就关连接的客户端,请求照样生效)。
+  原先全部工作排一条队:间接 GL 的 glxgears 排满一千多条渲染请求时,之后连进来的 xdpyinfo 要等 25 秒,现在 1 秒内。
+- **看门狗(2026-10-10)**:执行线程记下正在做的那一项(开始时间、客户端、操作码、序号),计时器线程每秒看一眼,超过 `WatchdogThreshold`
+  (默认 5 秒)就记一行 `watchdog: client#3 (user@host:22) opcode 53 has been running for 5 s; all clients are waiting`、计入 `work.stalled`,
+  同一项只记一次、不等它做完(原先「慢工作项」那一行要等它做完才记,真卡死时什么也没有)。
 
 ## 6. 宿主接口(rootless)
 
@@ -171,8 +183,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | 方向 | 内容 |
 | --- | --- |
 | 库 → 宿主(`IX11ServerHost`,回调名一律「主语 + 过去分词」;全部在执行线程上、放锁之后调,同一批里按 §5 合并) | 顶层窗口映射 / 取消映射(`TopLevelMapped` / `TopLevelUnmapped`,销毁、被 reparent 走也算取消映射;**收工时不逐个发**,宿主停服时自己收掉原生窗口);快照变了(`TopLevelChanged`,附 `XTopLevelChanges` 说明变了哪几组:`Geometry` —— 位置、尺寸、`BorderWidth`、`NeedsPlacement`;`Title` —— 标题、`ClassName`、`InstanceName`;`States`;`Icons`;`Shape` —— 边界形状与输入形状;`Hints` —— 其余)。窗口的属性在 `XTopLevelWindow.Snapshot` 这份不可变快照里(见下文「快照」);客户端的窗口管理器请求(`WindowManagerRequested`,接口的默认实现方法,见下文「窗口管理器请求」);损伤矩形(`TopLevelDamaged`,随后宿主经 `XTopLevelWindow.ReadPixels` / `TryReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标(`CursorChanged`,`XCursor`:语义形状 `XCursorShape`,位图 / ARGB / 字形光标另带图像 `XCursorImage` —— cursor 字体里有对应系统光标的字形不带,
-宿主按形状选系统光标 —— 像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`) |
-| 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(内区坐标,按 X 的 16 位范围核对,超出抛 `ArgumentOutOfRangeException`;滚轮换成 Button 4/5,6 以上是水平滚轮与侧键;X 这边没按着的按钮松开不投递,窗口已经不在时的松开照样生效)、指针离开(位置留着最后一次的,所在窗口算根、child 为 None)、按键(`InjectKey(keycode, pressed, repeat)`,X 键码;`repeat` 标明这是宿主的自动重复,见 §7);用户在宿主自己的界面里有动静(`NoteUserActivity`,空闲计时归零、不产生输入事件,每 250 毫秒至多排一个工作项);窗口管理器的动作(名字带 `TopLevel`):焦点(`FocusTopLevel`,null = 没有焦点;同时在 X 里把它抬到普通顶层的最上面,推进 last-focus-change time)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何、发真实的 ConfigureNotify 再补 ICCCM 的合成事件、发 Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage —— 声明了 `_NET_WM_PING` 的同时 ping 它 —— 否则断开该客户端;override-redirect 的窗口忽略)、强制结束(`KillTopLevelClient`,KillClient 语义,连同这个客户端的其它窗口)、窗口状态(`SetTopLevelStates` 整组覆盖;`ChangeTopLevelStates(window, add, remove)` 只改给出的位、其余原样,`add` 与 `remove` 重叠当场抛;都写回 `_NET_WM_STATE` 与 `WM_STATE`,`Focused` 由服务端维护)与外框尺寸(`SetTopLevelFrameExtents`,写回 `_NET_FRAME_EXTENTS`);宿主那边的环境变了(不带 `TopLevel` 的 `Set*`):键位表(`SetKeymap`,见 §7)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS,只替换 RESOURCE_MANAGER 里的 `Xft.*` 几项)、锁定键(`SetLockState(capsLock, numLock)`,不合成按键,客户端收到 XKB 的 StateNotify)、系统剪贴板有了新文本(`SetClipboardText`,UTF-8 超过 `X11Server.MaxClipboardBytes`(16 MB)当场抛 `ArgumentOutOfRangeException`);卡住时的恢复(`BreakGrabs`:解除一切指针 / 键盘抓取并解冻设备、放开 GrabServer、把浮动的从设备挂回虚拟核心设备,客户端照常收到 Ungrab 模式的事件与 HierarchyChanged);客户端清单(`GetClientsAsync` → `XClientInfo`:编号、连接名、是否以 Retain 模式断开、资源数、记账内存、映射着的顶层)与按编号断开(`DisconnectClient(int)`,Retain 模式断开过的销毁它留下的资源) |
+宿主按形状选系统光标 —— 像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`);有客户端 GrabServer 抓着太久、别人都在等它(`ServerGrabStalled`,见 §5;默认实现什么也不做);托盘图标停靠进来 / 没了(`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`,开着 `SystemTray` 时,见 §7「系统托盘」) |
+| 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(内区坐标,按 X 的 16 位范围核对,超出抛 `ArgumentOutOfRangeException`;滚轮换成 Button 4/5,6 以上是水平滚轮与侧键;X 这边没按着的按钮松开不投递,窗口已经不在时的松开照样生效)、指针离开(位置留着最后一次的,所在窗口算根、child 为 None)、按键(`InjectKey(keycode, pressed, repeat)`,X 键码;`repeat` 标明这是宿主的自动重复,见 §7);用户在宿主自己的界面里有动静(`NoteUserActivity`,空闲计时归零、不产生输入事件,每 250 毫秒至多排一个工作项);窗口管理器的动作(名字带 `TopLevel`):焦点(`FocusTopLevel`,null = 没有焦点;同时在 X 里把它抬到普通顶层的最上面,推进 last-focus-change time)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何、发真实的 ConfigureNotify 再补 ICCCM 的合成事件、发 Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage —— 声明了 `_NET_WM_PING` 的同时 ping 它 —— 否则断开该客户端;override-redirect 的窗口忽略)、强制结束(`KillTopLevelClient`,KillClient 语义,连同这个客户端的其它窗口)、窗口状态(`SetTopLevelStates` 整组覆盖;`ChangeTopLevelStates(window, add, remove)` 只改给出的位、其余原样,`add` 与 `remove` 重叠当场抛;都写回 `_NET_WM_STATE` 与 `WM_STATE`,`Focused` 由服务端维护)与外框尺寸(`SetTopLevelFrameExtents`,写回 `_NET_FRAME_EXTENTS`);宿主那边的环境变了(不带 `TopLevel` 的 `Set*`):键位表(`SetKeymap`,见 §7)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS,只替换 RESOURCE_MANAGER 里的 `Xft.*` 几项)、锁定键(`SetLockState(capsLock, numLock)`,不合成按键,客户端收到 XKB 的 StateNotify)、系统剪贴板有了新文本(`SetClipboardText`,UTF-8 超过 `X11Server.MaxClipboardBytes`(16 MB)当场抛 `ArgumentOutOfRangeException`);卡住时的恢复(`BreakGrabs`:解除一切指针 / 键盘抓取并解冻设备、放开 GrabServer、把浮动的从设备挂回虚拟核心设备,客户端照常收到 Ungrab 模式的事件与 HierarchyChanged);客户端清单(`GetClientsAsync` → `XClientInfo`:编号、连接名、是否以 Retain 模式断开、资源数、记账内存、映射着的顶层、是否正抓着整个服务端 `HoldsServerGrab`)与按编号断开(`DisconnectClient(int)`,Retain 模式断开过的销毁它留下的资源);本机的拖放(`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`,服务端替宿主扮演 XDND 的源;`IsDragAccepted` 是目标最近一次的回应,见 §7「拖放」) |
 
 **生命周期**:构造时执行线程就开始运行,构造出来的实例即使从没 `StartAsync` 也要 `DisposeAsync`。`StartAsync` 的失败模式见 §7
 (显示号被占抛 `SocketException`(`AddressAlreadyInUse`),配置了要监听而一种传输也没开起来抛 `IOException`);失败时已经开起来的监听一并撤回,
@@ -180,6 +192,7 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 后来的调用等第一次收完才返回,不重抛收尾中的异常;`Completion` 在收工做完时完成。`ServeAsync(stream, isLocal)` 与
 `ServeAuthenticatedAsync(stream[, label])` 的参数不合法(null 流、服务端已释放)当场抛,不放进返回的任务里;`label` 是连接的来历
 (比如 `user@host:22`),进日志、`XClientInfo.Label` 与快照的 `ClientLabel`,也是剪贴板跟着焦点走时认「同一个会话」的依据(§7)。
+第三个参数 `trust` 为 `XClientTrust.Untrusted` 时这条连接是非受信客户端(§7「信任级别」),`XClientInfo.Trust` 报每个客户端的级别。
 
 **句柄**:`XTopLevelWindow` 从映射到销毁(或被 reparent 走)一直是同一个对象。它带着发出它的服务端(`Server`;交给别的服务端的方法抛
 `ArgumentException`)与 `IsAlive`(窗口销毁、被 reparent 走、服务端收工之后为 false,不会再变回来)。宿主拿它当字典键时按引用比较,
@@ -298,8 +311,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   本机 X 程序经 Xlib 自动带上;读不到这个文件的程序连不进来。
   ⚠️ 设计层面的提醒(不是缺陷):所有开了 X11 转发的 SSH 会话共享这一个受信的显示 —— 一台被攻破的远端机经它的转发,
   能看到、也能操作别的会话里的 X 程序(读窗口内容、记键盘、注入输入)。受信的 X11 转发本来就是这个含义;不信任的远端机别开 X11 转发。
-  能收紧的部分见下面「多个会话共用一个显示」。本库不实现 SECURITY 扩展,远端 `xauth` 签不出受限 cookie:宿主在显示取自内置引擎、
-  而连接选了非受信模式时不开 X11 转发,终端里一行黄字说明原因与两条出路(勾上受信任、改用外部 X 服务器)。
+  能收紧的部分见下面「信任级别」与「多个会话共用一个显示」;要彻底隔开,宿主可以给每个 SSH 会话一个显示(下面「每个 SSH 会话一个显示」)。
+  2026-10-10 之前本库没有 SECURITY 扩展,内置引擎下选了非受信模式的连接干脆不开 X11 转发;现在非受信模式经连接器照常转发,连进来的是非受信客户端。
 - **监听与显示号**:
   - 显示号的名字被占就整个显示号不用:Linux 的抽象名已被人 bind、套接字文件后面有人在听、残留的套接字文件删不掉(别的用户的,属主随时可以再 listen)、
     删掉之后 bind 又撞上,`StartAsync` 都抛 `SocketException`(`AddressAlreadyInUse`),已经开起来的 TCP 与 Unix 监听一并撤回。原先只记一行日志、
@@ -317,7 +330,31 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   - Windows 上 TCP 监听设 `SO_EXCLUSIVEADDRUSE`:否则同一个用户的别的进程(包括低完整性的)用 SO_REUSEADDR 绑更具体的地址照样绑得上,
     把本机连接(带着 cookie)接走。宿主判断「本机已经有别的 X 显示在用」时,`localhost:0` 后面的监听者要是当前用户会话里的进程才算 ——
     终端服务器上那可能是别的用户开着的 VcXsrv。
-- **多个会话共用一个显示时的收紧**(不引入 SECURITY 扩展的前提下):
+- **信任级别(SECURITY 扩展,2026-10-10,xs_plan F2)**:依据 X Consortium 的 *Security Extension Specification* 7.1(错误与事件的编号、
+  SecurityGenerateAuthorization 的请求布局依据 xorgproto 的协议头 —— 规范第五章的编码表把 value-mask 列在两个字符串之后,
+  xauth 实际发的与协议头一致,在定长部分)。
+  - **扩展本身**:QueryVersion(1.0)、GenerateAuthorization(只签 MIT-MAGIC-COOKIE-1,16 字节随机 cookie;timeout 默认 60 秒、trust-level 默认非受信、
+    group 只能是 None、event-mask 只有 AuthorizationRevoked)、RevokeAuthorization(连同用它连着的客户端一起断开)、AuthorizationRevoked 事件;
+    授权在没有连接的状态下满 timeout 秒自动作废;至多 256 个。签出的 cookie 在登记客户端时(执行线程上)核对,对不上照旧拒。
+  - **宿主直接指名**:`ServeAuthenticatedAsync(stream, label, XClientTrust.Untrusted)` —— 进程内的连接器用不着去签 cookie(SSH 的 `ssh -X` 就这样接进来)。
+  - **非受信客户端受的限制**(规范第三章):只能指名非受信客户端的资源 —— 受信客户端的窗口、像素图、GC……一律当作不存在(请求里解析 ID 的地方
+    统一把关,服务端内部的查找不变);QueryTree / GetGeometry / TranslateCoordinates 不受限。根窗口(与服务端自己的窗口)只在规范列出的请求里可用,
+    另许 RANDR、XINERAMA、XFIXES 的 Select*Input 与 XIQueryPointer / XISelectEvents / XIGetSelectedEvents(工具包初始化都会对根窗口发,
+    回 BadWindow 时 Xlib 默认的错误处理会让程序退出);根窗口上只能选 StructureNotify / PropertyChange,XI2 只留设备 / 层级 / 属性变化;
+    往根窗口只能发 ICCCM 规定的那几种事件。XTEST、MIT-SCREEN-SAVER、DPMS、X-Resource、Composite、MIT-SHM、SECURITY 对它不可见。
+    键盘不归它时(按当前焦点、指针、抓取与选择,键盘事件送不到任何非受信客户端):QueryKeymap / KeymapNotify 全 0、GrabKeyboard 与键盘的
+    XIGrabDevice 回 AlreadyGrabbed、SetInputFocus 不生效、它的被动键盘抓取不激活、按键引起的 XKB StateNotify 不发给它。改键位表、修饰键、
+    键盘与指针设置、XKB / XI 的设备设置、主机访问控制与 KillClient(AllTemporary)回 Access;GrabServer 忽略。根窗口上的 CUT_BUFFER0–7 对它隐藏,
+    它改服务端窗口上的属性当作没发生(选区窗口上服务端替宿主取剪贴板用的 `_VELASHELL_*` 除外 —— 选区经宿主中转照常可用);
+    要受信客户端占着的选区回 property None;GetImage 被别的窗口挡住的地方填 0;它把背景设成 None 时用黑色。
+  - `RestrictForwardedClients` 保留:它是「受信、但不给 XTEST / 原始按键 / 改设备层级」的中间一档,给在非受信下工作不正常的老程序;
+    非受信客户端本来就受这三项限制。
+- **每个 SSH 会话一个显示(宿主,2026-10-10,xs_plan F1 / 决策 Q5)**:同一个显示上,受信的会话之间仍能互相看窗口、读剪贴板、经 XTEST 注入。
+  宿主的设置开着时,带着会话对象进来的 x11 通道进这个会话自己的 `X11Server`:不监听任何端口(`ListenTcp = false`、`UnixSocketPath = ""`),
+  只经连接器喂流,有自己的根窗口、选区与剪贴板,XTEST 与原始事件只碰得到同一个会话的程序。同一个会话的通道进同一个;第一条通道来时建,
+  会话断开或停服时收掉;至多 32 个,超了新会话的 X 程序连不上(不落回共用的显示 —— 那等于悄悄取消了用户要的隔离)。本机程序(`DISPLAY=:N`)
+  与没带会话的照旧进共用的那个。宿主给每个服务端配一个自己的 `IX11ServerHost`(窗口、键位表、DPI、剪贴板各管各的)。
+- **多个会话共用一个显示时的收紧**(同一个显示上、受信的会话之间):
   - **剪贴板跟着键盘焦点所在的会话走**(`X11ServerOptions.ClipboardFollowsFocus`,默认开):宿主的文本只给焦点所在顶层的客户端、以及与它连接名
     相同的客户端(同一个 SSH 会话里的 `xclip` / `xsel`,连接名见 `ServeAuthenticatedAsync(stream, label)`)读,X 这边的复制也只收那个会话的;
     没有 X 窗口有焦点时谁都读不到。否则本机复制的密码在用户点一下任意 X 窗口之后对所有会话可读,后台会话里的程序也能反复改写本机剪贴板。
@@ -347,7 +384,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     消失 —— 恶意客户端带一个未来的时间戳占了 CLIPBOARD,之后别人带真实时间去占不会再被静默忽略。宿主替用户占有时用 max(当前时间, 最后一次换属主时间)。
   - **别人的拖动打断不了**:`_NET_WM_MOVERESIZE` 只有持着指针抓取的客户端发来时才放开按钮、解除自动抓取;别人发来的照样转给宿主,但不动按钮状态与抓取。
     `_NET_MOVERESIZE_WINDOW` 的几何按 X 的范围核对(§6)。
-  - **卡住时有出口**:宿主的 `BreakGrabs`、按编号 `DisconnectClient`、`KillTopLevelClient`;GrabServer 抓太久时日志点名持有者(§5)。
+  - **卡住时有出口**:宿主的 `BreakGrabs`、按编号 `DisconnectClient`、`KillTopLevelClient`;GrabServer 抓太久时日志点名持有者、并经 `ServerGrabStalled` 告诉宿主(§5)。
+    宿主(VelaShell)的入口在标题栏 X Server 按钮的浮层:连着的程序逐个断开、「解除卡住」;抓太久时弹一条带「断开它」的提示。
     以 Retain 模式留着资源的客户端至多 16 个(超了的断开时按 Destroy 处理并记一行),X-Resource 列得出它们 —— 原先循环「连上 → RetainPermanent →
     断开」254 次就占满所有编号,谁也连不进来。
   - GLX:任何客户端都能拿别人的上下文当 share list、MakeCurrent / CopyContext / DestroyContext 别人的上下文 —— 与核心协议「客户端之间不隔离」的信任模型一致
@@ -486,8 +524,9 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   (GLFW / SDL / Qt 的 CoreProfile、Blender……)因此在直接路径上拿得到上下文;SetClientInfoARB / SetClientInfo2ARB(33 / 35)收下不用。
   强制 `LIBGL_ALWAYS_INDIRECT` 时由 `Gl/` 的软件 GL 执行固定功能管线的一个子集,版本如实报 1.1、只有兼容 profile:间接上下文要 3.2 起的核心 profile
   回 GLXBadProfileARB,版本高于 1.1 回 GLXBadFBConfig,没定义的版本或 1.x 带前向兼容回 BadMatch,不认识的属性 / 标志位回 BadValue。
-  - 没有实现的:3D 纹理、求值器、累积缓冲、选择 / 反馈、mipmap LOD、点画、像素传输的缩放 / 偏置与 PixelMap、深度 / 模板 / 颜色索引格式的 DrawPixels
-    与 CopyPixels、点 / 线 / 多边形平滑、Hint。选择 / 反馈模式与求值器每个上下文第一次用到时记一行日志(GL 的行为不变,不报 GL 错误)。
+  - 没有实现的:3D 纹理、累积缓冲、反馈模式、mipmap LOD、像素传输的缩放 / 偏置与 PixelMap、深度 / 模板 / 颜色索引格式的 DrawPixels
+    与 CopyPixels、点 / 线 / 多边形平滑、Hint。反馈模式每个上下文第一次用到时记一行日志(GL 的行为不变,不报 GL 错误)。
+    选择模式、线 / 多边形点画与求值器 2026-10-10 补上了(见下面「2026-10-10 补的功能」)。
     边标记(GLU 镶嵌器的内部对角线在 PolygonMode(LINE) 下不画)、GL_CLAMP 配 LINEAR 时与边框色混合、GL_EXT_texture_object 的厂商私有请求
     (11–14,按核心的纹理命令处理)、PolygonOffsetEXT 的 bias 按深度范围单位,以及扩展串里声明的 GL_EXT_abgr 都已实现。
   - GL 错误照规范:Enable / Disable / IsEnabled 只认 1.1 的开关与声明了的扩展的开关,别的记 INVALID_ENUM;状态命令的非法枚举记 INVALID_ENUM、
@@ -507,7 +546,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     照常执行(画不到任何地方),WaitGL / WaitX / 带标签的 SwapBuffers / CopyContext / UseXFont 回 GLXBadCurrentWindow / GLXBadCurrentDrawable。
     GLX 1.2 写法(X 窗口直接当可绘对象)的表面取窗口视觉的那条配置。GetVisualConfigs 为两个视觉各发布单缓冲与双缓冲两条配置,间接 GLX 也选得到单缓冲视觉。
 - **Present 与 SYNC 按规范排队、计时**:
-  - Present:PresentPixmap 等 wait-fence 触发(或被销毁),再按 target-msc / divisor / remainder 选帧 —— MSC 按 60 Hz 从服务端时钟推算,target 已过而
+  - Present:PresentPixmap 等 wait-fence 触发(或被销毁),再按 target-msc / divisor / remainder 选帧 —— MSC 按宿主报来的帧节拍走(`NotifyHostFrame`,2026-10-10;宿主不报时按 60 Hz 从服务端时钟推算),target 已过而
     divisor 为 0 时立即,PresentOptionUST 时三者按微秒换算成帧;到点的按请求先后呈现,同一窗口上更早的、还没呈现的按 CompleteModeSkip 了结,
     不拿旧内容盖掉新的。呈现之前一直持有像素图(规范允许请求之后立刻 FreePixmap)。idle-fence / wait-fence 不是栅栏回 SYNC 的 BadFence。
     Present 与 DAMAGE 的 QueryVersion 回服务端支持的、但不高于客户端要的版本。
@@ -524,6 +563,73 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   真实图像与热点(含 cursor 字体的字形光标;隐形指针没有图像,仍是 1×1 透明);ChangeCursor / ChangeCursorByName 生效(正在用的窗口跟着变,
   宿主收到 CursorChanged、登记者收到 CursorNotify);DestroyPointerBarrier 只认指针屏障。扩展的清理钩子分「连接断开」(事件选择、计时器、
   等着的请求)与「客户端的资源销毁」(Retain 模式下晚于断开,KillClient 销毁留下的资源时才调)两种。
+- **2026-10-10 补的功能(xs_plan F4–F28)**:
+  - **本机输入法上屏(F5 第一步)**:`InjectText(text)`。X 程序只认键码:每个字找一个空着的键码,把键值改成这个字的 Unicode 键值
+    (协议附录 A:Latin-1 是码位本身,其余是码位 + 0x01000000)再按下、松开,客户端先收到 MappingNotify 与 XKB MapNotify;键位表里本来就有、
+    不按修饰键就打得出来的字直接按那个键。改过的键码不改回去(客户端收到 MappingNotify 之后才去重新取键位表),同一个字再输入不再改、不发通知;
+    空键码用完才挪用最久没用过的,200 毫秒之内用过的不挪,剩下的字稍后再输入。换行按 Return、制表按 Tab,其余控制字符不输入;一次至多 4096 个 UTF-16 码元。
+    XIM 桥(远端程序里的候选窗与插入点)没做。
+  - **平滑滚动(F6)**:指针设备多两个相对轴 Rel Horiz Scroll / Rel Vert Scroll 与对应的 ScrollClass(XI 2.1,increment 1.0 = 一格);
+    `InjectScroll(window, x, y, dx, dy)` 发带滚动轴的 Motion 与 RawMotion,攒够一格再模拟一次按钮 4–7(XI2 那份带 PointerEmulated);
+    反过来设备给的滚轮按钮也给用滚动轴的 XI2 客户端发一格滚动。
+  - **剪贴板带上 HTML 与图片,服务端当剪贴板管理器(F14 / F15)**:`XClipboardContent`(文本、HTML、PNG);`SetClipboard(content)`
+    (`SetClipboardText` 是它的文本特例,图片上限 `MaxClipboardImageBytes` 32 MB)与回调 `ClipboardContentChanged`(默认实现有文本时转给
+    `ClipboardChanged`)。服务端当属主时 TARGETS 只列有的格式;当请求方时先要 TARGETS,再依次要文本、`text/html`、`image/png`,取完一起交给宿主。
+    开着剪贴板同步时占有 CLIPBOARD_MANAGER(freedesktop Clipboard Manager Specification):SAVE_TARGETS 在这份剪贴板取完之前不回答,
+    取到了回成功,存不了回 None;属主退出后照旧由服务端以宿主的身份接管。
+  - **指针 Warp 与 confine-to 交给宿主(F8)**:回调 `PointerWarped(rootX, rootY)` —— 只在发请求的客户端此刻抓着指针、且不是被限制的转发程序时报,
+    同一批里只交最后一次;`PointerConfinementChanged(area)`:带 confine-to 的指针抓取开始时报那个窗口的内区(根坐标),解除时报 null。
+  - **屏保协作(F9)**:MIT-SCREEN-SAVER 的 Suspend 按客户端计数(语义照 libXss 手册 XScreenSaverSuspend(3):成对调用、别的客户端恢复不了、
+    断开即作废),任何一个挂着时回调 `ScreenSaverSuspensionChanged(true)`,都恢复时 false;ForceScreenSaver(Reset) 至多每 5 秒回调一次 `ScreenSaverReset`。
+  - **`_NET_WM_SYNC_REQUEST`(F10)**:宿主改一个顶层的尺寸时,声明了它、有 SYNC 计数器的窗口先收到同步请求再收到 ConfigureNotify;
+    等的期间 `XTopLevelWindow.AwaitingRedraw` 为真,客户端把计数器推到序号或 300 毫秒到点时回调 `TopLevelRedrawn`。
+  - **合成管理器(F11)**:`X11ServerOptions.CompositingManager`(默认关)打开时占住 `_NET_WM_CM_S0`,GTK、Qt、Electron 才用 ARGB 视觉画圆角、阴影与透明窗口。
+    `ClientSideShadows` 仍默认关(Windows 上透明的阴影区照样接住鼠标)。
+  - **X-Resource 的 LocalClientPid(F28)**:经 Unix 套接字连进来的客户端记下对端 pid(Linux 经 SO_PEERCRED,macOS 经 LOCAL_PEERPID),
+    QueryClientIds 回给本身也是本机客户端的请求方。
+  - **计量仪表(F27)**:`XServerMetrics` 交出仪表源名 `VelaShell.XServer`:`clients.active`、`connections.refused`(reason:authorization、
+    too_many_clients、too_many_setups、bad_setup)、`clients.disconnected`(killed、output_backlog)、`protocol.errors`(code 是错误名)、
+    `work.duration`(毫秒直方图,没人订阅时不记)、`work.stalled`。看门狗见 §5。
+  - **GLX 多重采样与 GLX_EXT_libglvnd(F22)**:两个 4 倍多重采样的双缓冲配置(24 位 `0x105`、32 位 ARGB `0x106`)—— 直接渲染由客户端的 Mesa 真的多重采样,
+    间接上下文在这种配置上照常单采样画、如实报 SAMPLE_BUFFERS 0;`QueryServerString(GLX_VENDOR_NAMES_EXT)` 报 `mesa`。
+  - **间接 GL 的选择模式、点画与求值器(F23)**:名字栈与 SelectBuffer、选择模式下图元走到裁剪为止的命中记录(溢出时 RenderMode 返回 −1);
+    LineStipple / PolygonStipple;Map1 / Map2、MapGrid、EvalCoord / EvalMesh / EvalPoint、GetMap、AUTO_NORMAL(GLUT 的茶壶、GLU 的 NURBS 画得出来)。
+  - **Present 跟宿主的帧节拍(F25)**:`NotifyHostFrame()` 由宿主的合成器每帧调一次,帧间隔取最近 32 次里最短的(限 20–500 Hz),报帧时当场做掉
+    到了目标帧的 PresentPixmap;回调 `FrameClockWanted(bool)` 告诉宿主什么时候要逐帧报(有 NotifyMSC 或排队的 PresentPixmap 时)。只有一个全局帧时钟。
+  - **RENDER 的 SIMD 快路径(F24)**:纯色过遮罩 OVER、图像 OVER、通用路径的 Over / Add 用 `Vector128` 一次算 4 个像素,与标量版逐位一致;
+    双线性取样与 GL 光栅化没动。
+  - **宿主:Linux / macOS 默认只开 Unix 套接字(F4,决策 Q4)**:设置「也开 TCP 端口」默认关;Windows 上一直开(WSL、Cygwin 的程序只会走 TCP)。
+- **单窗口模式(`X11ServerOptions.Rootful`,默认关;决策见 §10 的 2026-10-10 一条)**:整个根窗口经 `X11Server.Screen` 作为一个顶层交给宿主
+  (快照在 (0, 0)、与根窗口一样大),宿主开一个原生窗口显示整块桌面;其余顶层不再单独交给宿主(不发 `TopLevelMapped` 这些,也不提窗口管理器的请求)。
+  服务端不再当窗口管理器:不占 `WM_S0`、不写 `_NET_SUPPORTED` / `_NET_SUPPORTING_WM_CHECK` / 客户端列表 / `_NET_WORKAREA`,
+  根窗口的 SubstructureRedirect 让给客户端(rootless 下回 BadAccess),发给根窗口的 EWMH 请求只照常投递给选了它的窗口管理器;
+  也不当 XSETTINGS 管理器与托盘(`SystemTray` 不起作用),那些归远端桌面自己的守护进程与面板。焦点归远端的窗口管理器(没有时是 PointerRoot),
+  宿主窗口得失焦点不改 X 的焦点。
+  - **画面**:顶层仍各有各的缓冲,绘图路径不变。每批执行完、放锁之前,把这一批画过的顶层区域,以及顶层的映射 / 位置 / 尺寸 / 形状 / 边框与
+    根窗口背景的变化换成屏幕上的区域(只是堆叠次序变了时,只取相互重叠、上下颠倒了的两个窗口的交集),在根窗口的缓冲里重拼:先铺根窗口的背景
+    (像素图按根窗口原点平铺,没有背景是黑的),再按堆叠次序从下往上画映射着的顶层 —— 边框(边框像素图按窗口内区原点平铺)与内区,按边界形状裁;
+    深度 32 的按预乘 over 叠上去。拼好的区域经 `TopLevelDamaged(屏幕, 矩形)` 交给宿主。GetImage 读根窗口拿到的就是拼好的屏幕(连背景)。
+  - **宿主的动作**:指针、拖放的注入坐标就是根坐标(从根往下找落点);`ResizeTopLevel(屏幕, 宽, 高)` 把屏幕改成这么大(一台显示器覆盖全部,
+    客户端收到根窗口的 ConfigureNotify 与 RANDR 通知);移动、关闭、改状态、外框宽、给焦点对屏幕句柄不起作用。光标一律报在屏幕句柄上。
+  - **没做的**:根窗口本身的绘图(直接画在根上的程序,如 xroach)不显示,只显示背景;远端合成器(xfwm4 开着合成)画在 Composite 叠加窗口上的
+    阴影等效果不显示 —— 画面由服务端自己拼,窗口照样看得到。
+- **系统托盘(`X11ServerOptions.SystemTray`,默认关)**:开着时服务端占住 `_NET_SYSTEM_TRAY_S0`(属主是服务端自己的选区窗口,上面写
+  `_NET_SYSTEM_TRAY_ORIENTATION` = 水平、`_NET_SYSTEM_TRAY_VISUAL` = 默认视觉),当 freedesktop System Tray Protocol 0.3 的托盘管理器。
+  X 程序发 `SYSTEM_TRAY_REQUEST_DOCK` 时,服务端建一个嵌入窗口(服务端自己的顶层,override-redirect,边长 `SystemTrayIconSize`,默认 24,
+  摆在屏幕右下角 —— 程序按图标的根坐标弹菜单),按 XEmbed 0.5 把图标窗口 reparent 进去撑满、按 `_XEMBED_INFO` 的 XEMBED_MAPPED 映射
+  (之后跟着这一位映射 / 取消映射;没有这个属性的老程序当作要映射)、发 `XEMBED_EMBEDDED_NOTIFY`(data1 = 嵌入窗口,版本 0)。嵌入窗口映射时
+  不当普通顶层交给宿主,而是 `SystemTrayIconAdded(句柄, 名字)`(名字取图标的 `_NET_WM_NAME`,退到 WM_NAME、WM_CLASS):宿主照常读它的像素、
+  收损伤、往里注入指针。图标窗口销毁、被程序 reparent 走(规范的结束方式)、程序断开时收掉嵌入窗口(`SystemTrayIconRemoved`)。至多 64 个图标;
+  气泡消息(BEGIN / CANCEL_MESSAGE)收下不显示。默认关是因为有了托盘程序会「关闭到托盘」,宿主不显示的话窗口就找不回来。
+- **拖放(XDND,宿主 → X)**:本机的文本、文件拖进 X 窗口时,服务端替宿主扮演 freedesktop XDND 第 5 版的**源**(源窗口是服务端自己的选区窗口):
+  宿主每动一下报一次位置,服务端从指针下最深的窗口往上找第一个设了 `XdndAware`(版本 ≥ 3,取两边的小者)的窗口当目标,它设了有效的 `XdndProxy`
+  (代理自己的 `XdndProxy` 指向自己)时消息投给代理;换目标时先 `XdndLeave` 旧的、再 `XdndEnter` 新的(多于三种类型时置位、目标读源窗口的
+  `XdndTypeList`),然后 `XdndPosition`(根坐标、服务端时间、`XdndActionCopy`)。发了位置就等 `XdndStatus`,等的期间又动了只记最新的一个,
+  状态回来再补发;`IsDragAccepted` 是最近一次状态说的「接受」。松手时先按最后的位置再报一次、等最后一条 `XdndStatus`(至多 3 秒,等不到就
+  `XdndLeave`),接受就 `XdndDrop`,不接受、或放在没有目标的地方就 `XdndLeave`。目标经 `XdndSelection`(服务端占有,全显示共享)取数据:
+  `TARGETS`、`TIMESTAMP` 与宿主交来的类型(类型就是目标原子;`STRING` 回 STRING、`TEXT` 回 UTF8_STRING),太大的走 INCR;还没放下时只答得出
+  `TARGETS`。目标回 `XdndFinished`、下一次拖放开始或放下一分钟之后,数据丢掉。X 程序之间的拖放只靠核心协议,不经过这里;X 程序拖出到本机程序
+  (X → 宿主)没有做。
 - **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD(开了 `SyncPrimary` 时连同 PRIMARY)并按 ICCCM 回应:TARGETS 里有 MULTIPLE(逐对转换,
   转换不了的那一对把属性换成 None 写回)与 COMPOUND_TEXT(Latin-1 原样、其余放进 UTF-8 段);TEXT 目标在 Latin-1 装得下时回 STRING,装不下回
   UTF8_STRING;超过 256 KB 的按 ICCCM §2.5 的 INCR 分块交(每块 256 KB,块之间请求方 10 秒不取就作废,同时至多 32 个传输);编码只在第一次有人要时做一次。
@@ -615,7 +721,9 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
 - **M3:SSH 的 x11 通道经连接器直接接进服务端**:SSH 库的 `X11ForwardOptions.LocalConnector`
   (`velashell-docs/zh/ssh/spec/07` §7.5.9)每条通道拿一对内存双工流,一端交给 `X11Server.ServeAsync`。假 cookie 的核对照旧,
   服务端按本机连接放行(2026-09-26 起改为交给 `ServeAuthenticatedAsync`,不再查授权,见 §7)。只在受信模式下用;非受信模式要 `xauth` 连显示,仍走 TCP
-  (2026-10 起内置引擎下的非受信模式直接不开转发:本库没有 SECURITY 扩展,`xauth` 签不出受限 cookie,见 §7「授权」)。
+  (2026-10 起内置引擎下的非受信模式直接不开转发:本库没有 SECURITY 扩展,`xauth` 签不出受限 cookie,见 §7「授权」;
+  2026-10-10 起非受信模式同样经连接器 —— 连接器把「非受信」随通道交给服务端(`ServeAuthenticatedAsync(stream, label, XClientTrust.Untrusted)`),
+  不跑 xauth,见 §7「信任级别」)。
   2026-10 补:连接器把 SSH 会话的 `user@host:port` 作为连接名交给 `ServeAuthenticatedAsync(stream, label)`;内置引擎停了(比如换成 VcXsrv)之后,
   老会话的 x11 通道改走本机 TCP 连此刻在运行的那个 X 服务端,而不是一律被拒。
   服务端照样监听环回 TCP 与 Unix 套接字,本机别的 X 程序可以用 `DISPLAY=localhost:N` 连进来(2026-09-26 起要带上宿主写进 `.Xauthority` 的 cookie)。
@@ -645,7 +753,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   验证:`xmodmap` 设好之后 `xkbcomp` 导出四级键、其余键仍两级,xterm 里 AltGr+q 打出 `@`。
 - **M4 的扩展编号**(接着前面):MIT-SHM 147(事件 91 Completion,错误 149 BadShmSeg)、GLX 148(事件 92 PbufferClobber,
   错误 150–162)。GLX 的 FBConfig 取 `0x101` 起,四个:两个 TrueColor 视觉各一单一双缓冲,颜色 8/8/8(ARGB 视觉再加 8 位 alpha)、
-  深度 24、模板 8,没有累积缓冲与多重采样;GLX 1.2 的视觉配置每个视觉一条,取它的双缓冲配置。
+  深度 24、模板 8,没有累积缓冲;GLX 1.2 的视觉配置每个视觉一条,取它的双缓冲配置。2026-10-10 起另有两个 4 倍多重采样的双缓冲配置
+  (`0x105` / `0x106`,见「2026-10-10 补的功能」),FBConfig 共六个。
 - **同步抓取取代「只做异步」(2026-09-24)**:M1 时把 Sync 模式按异步处理;M4 做成真正的冻结 —— 每设备一个冻结者与一条输入队列,
   宿主注入与 XTEST 的输入冻结时排队;AllowEvents 0–7 与 XIAllowEvents 放行、单步(SyncPointer / SyncKeyboard / SyncBoth)、
   重放(重放时跳过抓取窗口及其上级的被动抓取);抓取结束(含客户端断开)时解冻并把队列放回执行循环。
@@ -777,6 +886,27 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   ④ **字体脚本核对 X.Org 字体的内容**:对挑出来的文件算摘要(按文件名排序,每个文件一行「文件名 内容的 SHA-256」再整体算),不对归档算;
   全部下载、核对完才动数据目录。按固定的摘要重跑一遍,生成的数据与仓库里的逐字节相同。
   ⑤ **`.Xauthority` 与真实的 xauth 对过**:互操作镜像里的 xauth 列得出我们登记的那条,两边改写都留着对方的记录;我们用的锁文件名 xauth 认得、看见就不写。
-  ⑥ **仍留着的**:点本机窗口或桌面就收起 X 的弹出菜单(要全局指针钩子);新功能(按会话隔离、X 程序清单的界面、WarpPointer、屏保转告、合成管理器、托盘、单窗口模式……);
+  ⑥ **仍留着的**:点本机窗口或桌面就收起 X 的弹出菜单(要全局指针钩子);新功能(按会话隔离、X 程序清单的界面、WarpPointer、屏保转告、合成管理器、托盘、单窗口模式……,2026-10-10 大多做了,见本节末尾 2026-10-10 的几条);
   要实机核对的分数缩放下最后一列像素、macOS 上 Command 组合键的 KeyUp、macOS / FreeBSD 经 getpeereid 取对端 uid;互操作靶场扩到 GTK3 / GTK4、浏览器、
   Motif / Tk / Emacs、桌面会话、托盘与 fcitx5。这些都记在宿主仓库的 `feature-plan.md`「H. 内置 X 服务端」。
+- **X 程序清单与强制结束的界面(2026-10-10,xs_plan F3)**:库这边只补了两样 —— `XClientInfo.HoldsServerGrab`,与 GrabServer 抓太久时的宿主回调
+  `ServerGrabStalled`(原先只记日志:宿主与用户都不知道该断开谁)。回调与别的一样经延后队列在放掉像素锁之后交出;宿主的 `GetClientsAsync` 要回到执行线程,
+  所以 VelaShell 收到它之后另起任务查是哪个程序,不在回调里同步等。界面见宿主文档《交互与界面规格》§4A.2:标题栏 X Server 按钮在内置引擎运行中时开浮层,
+  外部 VcXsrv 列不出程序,照旧一点开、一点关。
+- **单窗口(rootful)模式(2026-10-10,xs_plan F13 / 决策 Q2)**:§2 原先只写了「rootless 多窗口、根窗口不画」这个前提,没把整块桌面写成非目标。
+  完整远端桌面(xfce / MATE)、图形安装器在 rootless 下实际不能用(远端窗口管理器拿不到 SubstructureRedirect,桌面窗口盖住本机),
+  而 VcXsrv 的「One large window」、MobaXterm 的 Windowed 都是用户熟悉的形态,于是作为**可选模式**加入,默认仍 rootless。
+  实现没改绘图路径:顶层照旧各有缓冲,服务端像一个永远开着的合成器那样在根窗口的缓冲里拼出整块屏幕(见 §7「单窗口模式」);
+  窗口管理器的角色整个让给远端。真实客户端用例:twm 接管、xterm 被套进外框、拼进屏幕,零协议错误。
+- **信任级别与每个 SSH 会话一个显示(2026-10-10,xs_plan F2 / F1,决策 Q5)**:所有转发来的会话原先共用一个受信的显示,非受信的 `ssh -X`
+  在内置引擎下开不起来。按决策 Q5 分两步收紧:先实现 SECURITY 扩展的非受信级别(远端 `xauth generate … untrusted` 签得出受限 cookie,
+  宿主的连接器也能直接把一条通道标成非受信),再在宿主加「每个 SSH 会话一个显示」—— 受信的会话之间要隔开,只能放到不同的显示上。
+  XC-QUERY-SECURITY-1 与 Application Group 不做;每个会话一个显示默认关、下次启动生效。真实客户端用例:`xauth generate` 签出非受信 cookie,
+  之后 xdpyinfo 看不到 XTEST / SECURITY、`xwd -root` 截不了屏,xterm(核心字体与 Xft)、`xclock -render`、xlogo、间接 glxgears 照常画、零协议错误。
+- **草案第十二节其余新功能的取舍(2026-10-10,xs_plan F4–F30)**:F4、F5 第一步(本机输入法上屏)、F6、F8–F11、F14、F15、F17、F18、F20 的截图、
+  F22、F25、F27、F28 做了;F21、F26 与 F22 的 create_context 部分此前已经有。只做了一部分的:F19(各显示器的 DPI 已经按各自的缩放报;
+  整数放大要一个全服务端统一的放大倍数,宿主所有根坐标与屏幕坐标的换算都要改,只靠无头用例验证风险太大)、F23(反馈模式、mipmap LOD、
+  PixelMap、深度 / 模板格式的 DrawPixels / CopyPixels 没做)、F24(双线性取样、GL 光栅化没动)、F25(一个全局帧时钟,不分显示器)。
+  没做的:F5 第二步 XIM 桥(3–5 周)、F7 压感 / 触摸 / 手势(要按 SlaveSwitch 换主设备的类,没有真实工具包可核对;XI 2.4 不在规范清单里)、
+  F20 的录屏(要编码器)、F29 WSL(没有可测的环境)、F30 MIT-SHM 1.2(Linux 才有的 fd 传递,TCP 的容器环境测不了)。
+  默认值:本机输入法开、标出来源开、合成管理器关、Linux / macOS 上的 TCP 端口关(经网络连的容器程序要打开它)。
