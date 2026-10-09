@@ -59,9 +59,10 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
    OpenGL / GLX 实现(Mesa 等)的源码。
 3. 规范里的常量(操作码、事件码、错误码、预定义原子、掩码位)按规范取值 —— 那是协议,不受版权保护,
    也不许为了「看起来不一样」去改。
-4. **数据不等于代码**:内置位图字体取自 X.Org `font-misc-misc` 的 BDF(版权声明原文为
-   "Public domain font. Share and enjoy."),颜色名表是 X.Org `rgb` 的 `rgb.txt` 原样(MIT / X11 许可),都以数据文件随库分发
-   并在 `NOTICE.md` 里注明来源与许可。
+4. **数据不等于代码**:内置位图字体是 X.Org 的 BDF 原样 —— `font-misc-misc`("Public domain font. Share and enjoy.")、
+   `font-cursor-misc`("These glyphs are unencumbered")、`font-adobe-75dpi` / `100dpi`(Adobe / DEC 的宽松许可)—— 与 GNU Unifont
+   (双许可,取 SIL OFL 1.1);颜色名表是 X.Org `rgb` 的 `rgb.txt` 原样(MIT / X11 许可)。都以数据文件随库分发,在 `NOTICE.md` 里注明来源与许可,
+   字体的许可原文随数据嵌进程序集。字体数据只由 `scripts/xserver/fonts/build-fonts.cs` 从固定的上游提交生成(BDF 逐字节不动、Brotli 压缩),不手改。
 
 ## 4. 分层
 
@@ -88,7 +89,7 @@ Drawing/      32 位软件帧缓冲、按 y 分带的区域(Region)、光栅化:
               点 / 线(细线 Bresenham + 宽线按 line-style / join-style / cap-style 拼成的多边形)/ 矩形 / 多边形扫描线填充 / 弧 / 图像块 / 文字;
               RENDER:像素格式、合成运算与混合模式、取样源(图像 / 纯色 / 渐变,repeat、变换、过滤)、梯形覆盖率
 Gl/           GLX 间接渲染的软件 GL:渲染命令解码、显示列表、矩阵栈、光照、裁剪、三角形(扫描线)/ 线 / 点光栅化、纹理、逐片元操作、查询
-Fonts/        BDF 解析、内置 misc-fixed 字体、XLFD 名称匹配(含 fonts.alias 的短名字与最接近字号的退路)、合成的 cursor 与 nil2 字体
+Fonts/        BDF 解析、内置的 X.Org 位图字体与 GNU Unifont、XLFD 名称匹配(fonts.dir / fonts.alias、单字节字符集的派生、最接近字号的退路)
 Input/        键码 ↔ 键值表(evdev 风格键码)、键值的大小写(KeysymCase)、XKB 的 evdev 键名、修饰键映射、
               抓取的数据结构(核心与 XI2;被动抓取按 detail 分桶的 PassiveGrabTable)
 ```
@@ -97,7 +98,7 @@ Unix 套接字:Windows 以外默认监听 `/tmp/.X11-unix/X{N}`,Linux 另在抽�
 `X11ServerOptions.UnixSocketPath` 可指定(放不进套接字地址时构造就抛)或关掉。TCP 由 `ListenTcp` 决定:默认(null)只在配了
 `AuthorizationCookie` 时才听,`true` 总是听(不配 cookie 时启动记一行提醒),`false` 不听。监听着与显示号挂钩的传输时,类 Unix 上按
 Xserver(1) 的约定持有 `/tmp/.X{N}-lock`(见 §7)。宿主字体提供者接口还没有:核心字体只服务老程序,现代工具包都走 RENDER + 客户端栅格化,
-接入宿主之后也没有遇到非它不可的程序。
+随库带的 X.Org 位图字体与 GNU Unifont(§7「字体」)已经覆盖老程序常用的字族与中日韩。
 
 ## 5. 线程模型
 
@@ -169,7 +170,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 
 | 方向 | 内容 |
 | --- | --- |
-| 库 → 宿主(`IX11ServerHost`,回调名一律「主语 + 过去分词」;全部在执行线程上、放锁之后调,同一批里按 §5 合并) | 顶层窗口映射 / 取消映射(`TopLevelMapped` / `TopLevelUnmapped`,销毁、被 reparent 走也算取消映射;**收工时不逐个发**,宿主停服时自己收掉原生窗口);快照变了(`TopLevelChanged`,附 `XTopLevelChanges` 说明变了哪几组:`Geometry` —— 位置、尺寸、`BorderWidth`、`NeedsPlacement`;`Title` —— 标题、`ClassName`、`InstanceName`;`States`;`Icons`;`Shape` —— 边界形状与输入形状;`Hints` —— 其余)。窗口的属性在 `XTopLevelWindow.Snapshot` 这份不可变快照里(见下文「快照」);客户端的窗口管理器请求(`WindowManagerRequested`,接口的默认实现方法,见下文「窗口管理器请求」);损伤矩形(`TopLevelDamaged`,随后宿主经 `XTopLevelWindow.ReadPixels` / `TryReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标(`CursorChanged`,`XCursor`:语义形状 `XCursorShape`,位图 / ARGB / 非 cursor 字体的字形光标另带图像 `XCursorImage`,像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`) |
+| 库 → 宿主(`IX11ServerHost`,回调名一律「主语 + 过去分词」;全部在执行线程上、放锁之后调,同一批里按 §5 合并) | 顶层窗口映射 / 取消映射(`TopLevelMapped` / `TopLevelUnmapped`,销毁、被 reparent 走也算取消映射;**收工时不逐个发**,宿主停服时自己收掉原生窗口);快照变了(`TopLevelChanged`,附 `XTopLevelChanges` 说明变了哪几组:`Geometry` —— 位置、尺寸、`BorderWidth`、`NeedsPlacement`;`Title` —— 标题、`ClassName`、`InstanceName`;`States`;`Icons`;`Shape` —— 边界形状与输入形状;`Hints` —— 其余)。窗口的属性在 `XTopLevelWindow.Snapshot` 这份不可变快照里(见下文「快照」);客户端的窗口管理器请求(`WindowManagerRequested`,接口的默认实现方法,见下文「窗口管理器请求」);损伤矩形(`TopLevelDamaged`,随后宿主经 `XTopLevelWindow.ReadPixels` / `TryReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标(`CursorChanged`,`XCursor`:语义形状 `XCursorShape`,位图 / ARGB / 字形光标另带图像 `XCursorImage` —— cursor 字体里有对应系统光标的字形不带,
+宿主按形状选系统光标 —— 像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`) |
 | 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(内区坐标,按 X 的 16 位范围核对,超出抛 `ArgumentOutOfRangeException`;滚轮换成 Button 4/5,6 以上是水平滚轮与侧键;X 这边没按着的按钮松开不投递,窗口已经不在时的松开照样生效)、指针离开(位置留着最后一次的,所在窗口算根、child 为 None)、按键(`InjectKey(keycode, pressed, repeat)`,X 键码;`repeat` 标明这是宿主的自动重复,见 §7);用户在宿主自己的界面里有动静(`NoteUserActivity`,空闲计时归零、不产生输入事件,每 250 毫秒至多排一个工作项);窗口管理器的动作(名字带 `TopLevel`):焦点(`FocusTopLevel`,null = 没有焦点;同时在 X 里把它抬到普通顶层的最上面,推进 last-focus-change time)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何、发真实的 ConfigureNotify 再补 ICCCM 的合成事件、发 Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage —— 声明了 `_NET_WM_PING` 的同时 ping 它 —— 否则断开该客户端;override-redirect 的窗口忽略)、强制结束(`KillTopLevelClient`,KillClient 语义,连同这个客户端的其它窗口)、窗口状态(`SetTopLevelStates` 整组覆盖;`ChangeTopLevelStates(window, add, remove)` 只改给出的位、其余原样,`add` 与 `remove` 重叠当场抛;都写回 `_NET_WM_STATE` 与 `WM_STATE`,`Focused` 由服务端维护)与外框尺寸(`SetTopLevelFrameExtents`,写回 `_NET_FRAME_EXTENTS`);宿主那边的环境变了(不带 `TopLevel` 的 `Set*`):键位表(`SetKeymap`,见 §7)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS,只替换 RESOURCE_MANAGER 里的 `Xft.*` 几项)、锁定键(`SetLockState(capsLock, numLock)`,不合成按键,客户端收到 XKB 的 StateNotify)、系统剪贴板有了新文本(`SetClipboardText`,UTF-8 超过 `X11Server.MaxClipboardBytes`(16 MB)当场抛 `ArgumentOutOfRangeException`);卡住时的恢复(`BreakGrabs`:解除一切指针 / 键盘抓取并解冻设备、放开 GrabServer、把浮动的从设备挂回虚拟核心设备,客户端照常收到 Ungrab 模式的事件与 HierarchyChanged);客户端清单(`GetClientsAsync` → `XClientInfo`:编号、连接名、是否以 Retain 模式断开、资源数、记账内存、映射着的顶层)与按编号断开(`DisconnectClient(int)`,Retain 模式断开过的销毁它留下的资源) |
 
 **生命周期**:构造时执行线程就开始运行,构造出来的实例即使从没 `StartAsync` 也要 `DisposeAsync`。`StartAsync` 的失败模式见 §7
@@ -246,7 +248,13 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     Round 补圆;端点重合的段从路径里拿掉,整条缩成一点时 Round 画圆、Projecting 画方块。虚线沿线按长度量,OnOffDash 只画偶数段;
     DoubleDash 的奇数段按背景 —— 源按 fill-style:Solid 用背景色、Stippled 用背景色按点画遮、Tiled / OpaqueStippled 与偶数段相同。
     宽弧不是整圆时两端按 cap-style 加端帽,内外边界是半轴各加 / 减半个线宽的椭圆,不取整。PolyLine 三个点以上、首尾重合时按闭合路径画
-    (那里是接头而不是两个端帽,细线不画第二遍终点)。PolyArc 里首尾相接的弧之间的接头没有做(各条弧各自加端帽)。
+    (那里是接头而不是两个端帽,细线不画第二遍终点)。PolyArc 里前一条的终点与后一条的起点重合的弧按协议「join correctly」:
+    「重合」按各轴相差都不到半个像素(留 1/256 像素的余量)判 —— 端点是实数,逐位相等太苛刻,取整到同一个像素在 .5 上又不稳;
+    最后一条接回第一条时整串闭合。相接的一串宽弧当一条路径:相邻两条之间按 join-style 加接头(搭在两条环带真实的端面角上,
+    椭圆的端面不一定垂直于切线),只在整串两头加端帽,闭合时不加,整串放进同一张活动边表一次填(GXxor 下接缝不画两次);
+    同一个椭圆上接着走的几段并成一条画(四段 90° 弧拼成的整圆与一条 360° 的弧逐个像素相同)。虚线沿整串量、跨过接点接着走,
+    不相接的每串从 dash-offset 重新开始。细弧整串连成一条细折线,接点只画一次。一串宽弧攒到 2²⁰ 个顶点就先填一批。
+    单独一条弧与互不相接的弧像素与原来相同(20 万组随机对拍)。
   - CopyArea / CopyPlane:源窗口只有看得见的部分可拷(ClipByChildren 时映射着的子窗口也挡着,IncludeInferiors 时连子窗口的内容一起拷);
     拷不到的部分(被挡住、不可见、子窗口伸出顶层缓冲)在背景不为 None 的目标窗口上先铺背景,再逐块发 GraphicsExposure,都拷到了才发
     NoExposure。CopyPlane 的 bit-plane ≥ 2^源深度回 BadValue。GetImage 读到伸出顶层缓冲的部分补 0(被遮住区域的内容本来就未定义)。
@@ -358,24 +366,41 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     资源离开资源表、属性被替换或删掉、窗口销毁、客户端断开时如数退还;服务端自己写的属性替换掉客户端写的值时也退还。客户端的请求在分配之前核账,
     超了回 BadAlloc、不产生效果;宿主发起的改尺寸照记不拒;缓冲改尺寸时多留的余量不记。`XClientInfo.MemoryBytes` 报每个客户端账上的数。
   - 每项工作另有工作量预算(§5)。
-- **字体**:核心字体来自内置 BDF(`fixed` / `6x13` / `9x15` / `10x20` 等及其 XLFD 名),别名补齐了 X.Org misc 字体目录 `fonts.alias` 里的短名字
-  (`5x7` … `12x24`,各自指向高度最接近、粗细相同的内置字体);完整的 14 字段 XLFD 没有完全匹配时,在 foundry、family、weight、slant、charset
-  都对得上的里面取像素高度最接近的(一样近取小的;按 PIXEL_SIZE,没给时按 POINT_SIZE 与 RESOLUTION_Y 换算,都没给不猜)。没有的字族
-  (`-adobe-helvetica-*` 之类)照旧 BadName —— 更多字族要随库带数据,或以后经宿主的字体提供者接口追加(比如把 Cascadia Mono 栅格化成位图字体)。
-  `cursor` 字体是虚拟的:只有度量,光标按字形号推出语义形状(`XCursorShape`)交给宿主,由宿主选系统光标;别的字体的字形光标(xterm 拿 `nil2`
-  的空白字形做的隐形指针)按协议烙成图像,一个像素也不显示的给宿主 `Hidden`,字形没定义回 BadValue。现代工具包不用核心字体
-  (走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
-- **RENDER 在 8888 与 a8 目标上用整数合成**:像素一律预乘 alpha。Src / Over / Add(非分量 alpha)到 a8r8g8b8 / x8r8g8b8 目标时,
-  源与遮罩各取成 8 位预乘的一行 —— 渐变、变换、repeat、各种源格式都在取样里处理掉(纯色、8888 与 a8 直接换位,
-  双线性用 0–256 的定点权重;渐变的颜色仍按浮点算、量化一次)—— 再逐像素整数合成,与全程浮点最多差 2。
-  其中纯色源 + 单字节遮罩 + Over(Xft 画字、cairo 的抗锯齿图形)与 8888 图像 Src / Over(贴图、窗口间拷贝)不逐行取样、
-  直接按存储整块算。a8 目标(cairo 拼遮罩、Qt 的 alpha 图)上 Clear … Saturate 这 14 种 Porter-Duff 运算(非分量 alpha)同样走整数、只算 alpha。
-  a1 目标、Disjoint / Conjoint、PDF 混合模式、分量 alpha 与别的目标格式按浮点逐像素合成(每通道 0–1)。
+- **字体**:核心字体是随库带的 X.Org 位图字体与 GNU Unifont(xs_plan CP-16 / F21 方案 A):misc-fixed 全套(`4x6` … `10x20` 的常规 / 粗体 / 斜体,
+  中日韩的 `12x13ja` / `18x18ja` / `18x18ko` 与 JIS X 0208 的 `k14`)、`nil2`、`cursor`;Adobe 75 / 100 dpi 的 Courier、Helvetica、New Century Schoolbook、
+  Symbol、Times(8–24 磅);GNU Unifont 18(16 像素,覆盖整个基本多文种平面)。233 份 BDF 原样、Brotli 压缩后约 5 MB(库的 DLL 约多 4.5 MB),
+  照 X.Org 安装后的目录分 misc / 75dpi / 100dpi(先后即字体路径的先后),每个目录一份 mkfontdir 格式的 `fonts.dir`。
+  ISO10646-1 的字体还以它**完整覆盖**的单字节字符集的名字出现(与 `mkfontdir -e` 一样):ISO8859-1 是 Unicode 的前 256 个码位,ISO8859-2 / 3 / 4 / 5 / 6 / 7 / 8 /
+  9 / 13 / 15 与 KOI8-R / U 按随库的映射表派生(.NET 的代码页表导出;没有 ISO8859-10 / 11 / 14 / 16),派生字体的 CHARSET_REGISTRY / CHARSET_ENCODING 跟着换;
+  一共 1877 个名字。别名照 X.Org misc 目录的 `fonts.alias` 原文(`fixed`、`variable` —— Helvetica Bold 12 磅 ——、`5x7` …),目标没有随库带的
+  (Sony、JIS、ISAS、OPEN LOOK 的字体)不列出、打开 BadName;另认 `9x18` / `9x18bold`,`8x16` / `12x24`(Sony)退到最接近的 misc-fixed。
+  完整的 14 字段 XLFD 没有完全匹配时,在 foundry、family、weight、slant、charset 都对得上的里面取像素高度最接近的(一样近取小的;按 PIXEL_SIZE,
+  没给时按 POINT_SIZE 与 RESOLUTION_Y 换算,都没给不猜)。没有随库带的字族(B&H 的 Lucida —— 许可要求在用户文档与代码注释里附特定声明 ——、
+  Bitstream、可缩放字体)照旧 BadName。名字表在第一次用到时建一次,字体第一次打开时才解压、解析,解析结果整个进程共享(多个服务端实例只解析一次);
+  字形位图按行打包(每像素 1 位)。量下来(Debug):名字表加 `fixed` 35 ms,Unifont 第一次打开 180 ms、9.6 MB,全部名字打开一遍(`xlsfonts -l`)
+  870 ms、共 58 MB。这些都不在执行线程上做:OpenFont 与 ListFontsWithInfo 要用到还没建好的字体时,字体在线程池上解压、解析,
+  这个客户端的这条与之后的请求暂存(与 SYNC 的 Await 同一套),建好了按原顺序放回 —— 别的客户端与宿主界面不陪着等像素锁。BDF 里带引号的属性值是字符串(QueryFont 里回原子),看上去是数字的也一样(`CHARSET_ENCODING "1"`)。
+  字形光标按协议烙成图像(源与掩码字形的原点重合即热点),一个像素也不显示的(xterm 拿 `nil2` 的空白字形做的隐形指针)给宿主 `Hidden`,
+  字形没定义回 BadValue。`cursor` 字体(X.Org 的 cursor.bdf)的字形另记下字形号:有对应系统光标的(left_ptr、xterm、watch、缩放边角……)按形状交给宿主、
+  不给图像 —— 系统光标跟着桌面的主题与缩放 ——,没有对应的(pencil、gumby、dotbox……)把图像交给宿主;XFIXES 的 GetCursorImage 一律给烙好的图像。
+  现代工具包不用核心字体(走 RENDER + 客户端栅格化),所以核心字体只需覆盖老程序。
+- **RENDER 在 8888、a8 与 a1 目标上用整数合成**:像素一律预乘 alpha。到 a8r8g8b8 / x8r8g8b8 / a8 / a1 目标时,全部 53 种运算
+  (Porter-Duff、Disjoint / Conjoint、PDF 混合模式,带不带分量 alpha)都先把源与遮罩各取成 8 位预乘的一行 —— 渐变、变换、repeat、
+  各种源格式都在取样里处理掉(纯色、8888 与 a8 直接换位,双线性用 0–256 的定点权重;渐变的颜色仍按浮点算、量化一次)—— 再逐像素整数合成。
+  Src / Over / Add 有专门的写法;其余 Porter-Duff 与 Disjoint / Conjoint 每个通道是 源 × Fa + 目标 × Fb,不带除法的因子取 0–255,
+  带除法的(Saturate、Disjoint / Conjoint 的 min(1, n / d)、max(1 − n / d, 0))拿没取整的 源 alpha × 遮罩 按 1/65025 算,每个通道攒齐后只取整一次。
+  混合模式不先除出 cs = Cs / αs,而是把 αs·αd·B(cs, cd) 整理成 8 位 Cs、αs、Cd、αd 的整数式(柔光的平方根查表,HSL 四种两边同乘 αs·αd),
+  三项按 1/255³ 攒齐、只取整一次。分量 alpha 时因子逐通道、按那个通道自己的源 alpha 算。只有 alpha 的 a8 / a1 目标只算 alpha 一个通道
+  (混合模式的 alpha 是 αs + αd − αs·αd,分量 alpha 不影响它);a1 按 ≥ 0.5 取 1。8 位像素的源与逐像素浮点合成最多差 1,a1 逐位相同(穷举核对过);
+  双线性与渐变的源先量化成 8 位,与全程浮点最多差 2。其中纯色源 + 单字节遮罩 + Over(Xft 画字、cairo 的抗锯齿图形)与 8888 图像 Src / Over
+  (贴图、窗口间拷贝)不逐行取样、直接按存储整块算。r5g6b5、x1r5g5b5、a4 等别的目标格式按浮点逐像素合成(每通道 0–1)。
   源或遮罩与目标是同一块缓冲时先拷出要读的那一块(结果要像「先读完源再写」):按目标上真正写得到的范围对回源坐标,有变换时取四个角变换后的外接矩形,
   再按 repeat 折回 —— 不整张拷。只有 alpha 的字形按每像素一字节存;一个 CompositeGlyphs 请求只算一次目标、只记一次损伤,
   带遮罩格式时遮罩只按目标上可写的一块分配。梯形与三角形按 16 条子扫描线、水平方向解析地算覆盖率,只算目标上可写的那一块。
   源 / 遮罩 picture 的裁剪在没有变换、不重复时也限制读取(RENDER 0.11 §7:clip-mask「affects all graphics requests, including sources」);
-  有变换或重复时、以及梯形与字形的源,仍只裁目标。alpha-map、poly-edge / poly-mode / dither 接受但不生效。
+  有变换或重复时、以及梯形与字形的源,仍只裁目标。源 picture 的 alpha-map 生效(RENDER 0.11 §7:源的 alpha 取自 alpha-map 在
+  「坐标减 alpha 原点」处的像素,alpha-map 自己的裁剪之外 alpha 为 0;alpha-map 必须是只有 alpha 的格式、不能再带 alpha-map,否则 BadMatch);
+  目标的 alpha-map、poly-edge / poly-mode / dither 接受但不生效。
   渐变的色标要在 0–1 之间并按大小排好(否则 BadValue,相等的硬过渡照收),取样时二分找色标;CreateCursor 的热点不在图里回 BadMatch;
   AddGlyphs 的位图大小与字形、色标个数按不会回绕的算法核对(超了 BadLength)。
 - **RANDR 对客户端基本只读,布局由宿主给**:每台显示器一个 CRTC / 输出 / 模式(`X11ServerOptions.Monitors` 或运行中的
@@ -474,8 +499,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     不整窗拷,也不盖掉窗口里别处 X 画的内容;窗口被核心绘图改过的地方,下次交换照样补回来。
   - 可绘对象:表面随可绘对象与客户端释放(同一个 XID 被重用时是新表面),GLX 像素图的表面随 FreePixmap 释放。当前可绘对象没了时 Render 与非渲染命令
     照常执行(画不到任何地方),WaitGL / WaitX / 带标签的 SwapBuffers / CopyContext / UseXFont 回 GLXBadCurrentWindow / GLXBadCurrentDrawable。
-    GLX 1.2 写法(X 窗口直接当可绘对象)的表面取窗口视觉的那条配置。已知未修:间接 GLX 选不到单缓冲的视觉(GetVisualConfigs 每个视觉只列它的双缓冲配置,
-    要另加单缓冲的 X 视觉)。
+    GLX 1.2 写法(X 窗口直接当可绘对象)的表面取窗口视觉的那条配置。GetVisualConfigs 为两个视觉各发布单缓冲与双缓冲两条配置,间接 GLX 也选得到单缓冲视觉。
 - **Present 与 SYNC 按规范排队、计时**:
   - Present:PresentPixmap 等 wait-fence 触发(或被销毁),再按 target-msc / divisor / remainder 选帧 —— MSC 按 60 Hz 从服务端时钟推算,target 已过而
     divisor 为 0 时立即,PresentOptionUST 时三者按微秒换算成帧;到点的按请求先后呈现,同一窗口上更早的、还没呈现的按 CompleteModeSkip 了结,
@@ -491,7 +515,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   客户端的资源销毁释放;绘图时只看本顶层里挂了 Damage 的窗口。DOUBLE-BUFFER —— Background 交换按窗口背景铺(背景像素图按原点平铺、ParentRelative 沿祖先找、
   None 不动),同一窗口在列表里出现两次回 BadMatch。Composite —— NameWindowPixmap 给的像素图在顶层改尺寸、重新映射、销毁之后保持原样
   (从那时起独占旧缓冲);还共享着缓冲时往里画同时记成顶层的损伤,宿主收得到。XFIXES —— GetCursorImage / GetCursorImageAndName 给出指针处光标的
-  真实图像与热点(cursor 字体的字形光标与隐形指针没有图像,仍是 1×1 透明);ChangeCursor / ChangeCursorByName 生效(正在用的窗口跟着变,
+  真实图像与热点(含 cursor 字体的字形光标;隐形指针没有图像,仍是 1×1 透明);ChangeCursor / ChangeCursorByName 生效(正在用的窗口跟着变,
   宿主收到 CursorChanged、登记者收到 CursorNotify);DestroyPointerBarrier 只认指针屏障。扩展的清理钩子分「连接断开」(事件选择、计时器、
   等着的请求)与「客户端的资源销毁」(Retain 模式下晚于断开,KillClient 销毁留下的资源时才调)两种。
 - **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD(开了 `SyncPrimary` 时连同 PRIMARY)并按 ICCCM 回应:TARGETS 里有 MULTIPLE(逐对转换,
@@ -536,6 +560,7 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
 - **Expose 偏多、不偏少**:子窗口移动 / 堆叠变化时直接重画并 Expose 新旧两块区域,不做「搬运原内容」的优化 ——
   客户端本来就要处理 Expose,多发一次只是多画一次,少发一次就是一块脏图。
 - **合成字体**:`cursor`(只有度量,光标形状按字形号推出)与 `nil2`(xterm 的隐形指针用,全空字形)不来自 BDF。
+  (2026-10-09 起两者都是 X.Org 的 BDF 原样,见 §7「字体」与本节末尾的「第二轮审查遗留项的收尾」。)
 - **M1 验收(2026-09-23)**:单元测试 40 条;真实客户端 `xdpyinfo` / `xterm` / `xeyes` / `xclock` / `xlogo` 零协议错误、
   画出内容;键盘注入经 xterm 到容器里的 sh 往返成功。
 - **扩展的编号**:主操作码按实现顺序从 128 起分配 —— BIG-REQUESTS 128、XC-MISC 129、SHAPE 130、XFIXES 131、RANDR 132、
@@ -714,6 +739,24 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   弹层也只在用户用 X 时置顶,不会盖住本机程序);WarpPointer 挪宿主的真实光标、confine-to 约束用户的鼠标;PolyArc 相接的弧之间的接头;
   源 picture 的 alpha-map;更多核心字族与字号;宿主侧分数缩放下最后一列像素可能被裁(要各平台实机核对);间接 GLX 的单缓冲视觉;
   视频播放器的 ForceScreenSaver / Suspend 转告宿主、抑制系统屏保;宿主界面上「解除卡住」的入口(库这边的 `BreakGrabs` 与 `DisconnectClient` 已齐)。
+  (2026-10-09:其中 PolyArc 的接头、alpha-map、更多核心字族与单缓冲视觉已补,见下一条。)
   ⑩ 宿主侧的界面行为(X 程序无响应时的强制结束、停 X Server 前的确认、焦点窃取防护、桌面类与 InputOnly 窗口不开原生窗口、形状外点击穿透……)见
   [`../../host/交互与界面规格.md`](../../host/交互与界面规格.md) §4A.3,设置项见 [`../../host/settings-audit.md`](../../host/settings-audit.md) 第十一批,
   排障见 [`../troubleshooting.md`](../troubleshooting.md)。
+- **第二轮审查遗留项的收尾(2026-10-09)**:上一条 ⑨ 里不靠新功能的几项、以及审查时只做了一部分的几项补齐;行为写进了 §6、§7,这里只记取舍与来由。
+  ① **核心字体随库带数据,不等宿主的字体提供者**(xs_plan F21 方案 A):方案原文是把 Liberation 之类栅格化成 75 / 100 dpi;改用 X.Org 自己的 Adobe 位图 ——
+  字体名与度量与真实的 X 服务端一致,许可同样宽松,也不用写一个 TrueType 栅格化器。中日韩与其余文字靠 GNU Unifont(双许可里取 OFL)与 misc-fixed 的
+  ja / ko 字体。B&H 的 Lucida 不带:许可要求在用户文档与代码注释里附特定声明。数据由脚本从固定的上游提交生成、逐字节不动,换版本只改脚本里的提交号与哈希。
+  代价是库的 DLL 多约 4.5 MB。
+  ② **字体在线程池上建,请求暂存**:带上整套字体之后,真实客户端的 `xlsfonts -l "*"` 第一次在执行线程上持着像素锁解析了 1.5 秒,宿主界面陪着冻住。
+  解析字体是纯计算、没有 I/O,放到线程池上不算假异步;暂存复用 SYNC Await 与 XTEST 延迟的那一套,放回的那一条不再查第二遍,后台建不出来时照常执行、
+  按常规回错误。
+  ③ **cursor 字体里有对应系统光标的字形仍显示系统光标**:GetCursorImage 给烙好的 X 位图,本机却仍用系统光标 —— 它跟着桌面的主题与缩放,
+  比 16 像素的 X 位图清楚;没有对应的才把图像交给宿主。
+  ④ **PolyArc 的「相接」按差不到半个像素判**:协议只说端点「重合」,而端点是实数 —— 逐位相等太苛刻(同一个椭圆相邻两段的端点差几个末位),
+  取整到同一个像素在 .5 上又不稳;90° 倍数上的端点都落在半像素的格点上,对它们这个判据就是恰好相等。单独一条弧与互不相接的弧像素不变(20 万组随机对拍)。
+  ⑤ **RENDER 的整数路径扩到 a1 / a8 / 8888 目标上的全部运算**:与逐像素浮点合成最多差 1、a1 逐位相同(穷举核对过),原先走浮点的那些组合
+  快约 2–12 倍。顺带修了浮点版 ClipColor 的一处 NaN(灰色的源在 αd = 0 的目标上做 HSL 四种模式,颜色成了 0)。r5g6b5、x1r5g5b5、a4 目标少见,仍走浮点。
+  ⑥ 选区按会话隔离(别的会话看不到属主变化、收不到因此发的 SelectionClear)、源 picture 的 alpha-map、间接 GLX 的单缓冲视觉同在这一轮补上(§7)。
+  ⑦ **仍留着的**:点本机窗口或桌面就收起 X 的弹出菜单(要全局指针钩子);WarpPointer / confine-to、屏保转告宿主、「解除卡住」的宿主入口等新功能;
+  分数缩放下最后一列像素(要各平台实机核对);外接框宽或高为 0 的宽弧只画出一半线宽(审查之前就如此,这一轮没有动)。
