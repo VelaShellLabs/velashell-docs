@@ -532,22 +532,29 @@ Changed together with the X Server's second library-wide review. Library behavio
   mode means — with an external X server untrusted mode still needs the SECURITY extension and a local `xauth`, and a few old programs do not
   work correctly when untrusted.
 
-### 2026-10-10 Twelfth batch (X Server: the draft''s new features)
+### 2026-10-10 Twelfth batch (X Server: the draft's new features)
 
-Added with the built-in X server''s new features (`xs_plan` F1–F30). Library behaviour: [X Server architecture](../xserver/design/architecture.md) §7
+Added with the built-in X server's new features (`xs_plan` F1–F30). Library behaviour: [X Server architecture](../xserver/design/architecture.md) §7
 ("Trust levels", "One display per SSH session", "One-window mode", "Added on 2026-10-10") and §10; interaction: the X Server part of
 [interaction-and-ui-specs.md](interaction-and-ui-specs.md); symptoms and what to do: [X Server troubleshooting](../xserver/troubleshooting.md).
-All apply to the built-in engine only (except "Window mode", which both engines share) and take effect the next time the X Server starts.
+All apply to the built-in engine only (except "Window mode", which both engines share) and take effect the next time the X Server starts (except
+"Show where X windows come from", which applies immediately). Where they sit on the settings page: the transparency and source items are in the
+"Display" section (below window mode), the input method in "Keyboard", and "Restrict programs from SSH sessions", one display per session and the
+TCP port in the new "Security" section (they all used to sit under "Keyboard").
 
 | Setting | Default | Values | Notes |
 | --- | --- | --- | --- |
 | Window mode | Multiple windows | The existing five (`XServer.WindowMode`) | Used to affect VcXsrv only; now shared by both engines: on the built-in engine one large window / no title bar / fullscreen start it in one-window mode (the whole X desktop in one window, a remote window manager takes over), while multiple windows and rootless both give one window per program |
-| One display per SSH session | off | on / off (`XServer.DisplayPerSession`) | X programs from different SSH sessions get separate displays: they cannot see each other''s windows, read each other''s keyboard or clipboard, or inject input; X programs on this computer keep using the shared display; each session costs a little memory and a thread |
-| Use this computer''s input method in X windows | **on** | on / off (`XServer.UseHostInputMethod`) | Text composed by the local input method is typed into X programs directly (no fcitx / ibus needed on the server); off sends keys to the remote side as they are, so its own input method works. This partly reverses the earlier "no XIM" decision — only the "commit" step is done, the XIM bridge still is not |
-| Show where X windows come from | **on** | on / off (`XServer.ShowWindowSource`) | Titles of windows forwarded over SSH (also the taskbar text) read "user@host:22 — title", with the source first so nothing the remote side puts in the title can hide it; programs connected locally are not labelled |
-| Transparent X windows | off | on / off (`XServer.CompositingManager`) | The server acts as compositing manager so GTK''s rounded corners and shadows and Electron''s transparent windows get alpha. Off by default: windows with alpha cost the system an extra compositing layer, not yet measured on real machines |
-| Also listen on a TCP port | off | on / off (`XServer.ListenTcpOnUnix`) | Only shown on Linux / macOS: by default only the Unix socket is open, and container programs connecting over the network need this on. On Windows the port is always open (WSL and Cygwin programs only use TCP) and the setting is not shown |
+| One display per SSH session | off | on / off (`XServer.DisplayPerSession`) | X programs from different SSH sessions get separate displays: they cannot see each other's windows, read each other's keyboard or clipboard, or inject input; X programs on this computer keep using the shared display; each session costs a little memory and a thread. In one-window mode, closing one session's "X Desktop" window closes only that session's display |
+| Use this computer's input method in X windows | **on** | on / off (`XServer.UseHostInputMethod`) | Text composed by the local input method is typed into X programs directly (no fcitx / ibus needed on the server); off sends keys to the remote side as they are, so its own input method works. This partly reverses the earlier "no XIM" decision — only the "commit" step is done, the XIM bridge still is not |
+| Show where X windows come from | **on** | on / off (`XServer.ShowWindowSource`) | Titles of windows forwarded over SSH (also the taskbar text) and tray icon tooltips read "user@host:22 — title", with the source first so nothing the remote side puts in the title can hide it; programs connected locally are not labelled. **Applies immediately**: open windows are retitled on the spot (the description used to say "applies to windows opened afterwards", but it actually needed an X Server restart). Windows that draw their own title bar show the source only in the taskbar |
+| Transparent X windows | off | on / off (`XServer.CompositingManager`) | The server acts as compositing manager so GTK's rounded corners and shadows and Electron's transparent windows get alpha. Off by default: windows with alpha cost the system an extra compositing layer, not yet measured on real machines; while off, windows with alpha are shown opaque. No effect in the single-window modes |
+| Also listen on a TCP port | off | on / off (`XServer.ListenTcpOnUnix`) | Only shown on Linux / macOS: by default only the Unix socket is open; when on, the port listens on 127.0.0.1 only, for programs that connect to this computer's loopback over TCP (containers using host networking); containers on a bridge network cannot reach it — on Linux mount `/tmp/.X11-unix` into them and use `DISPLAY=:N`. On Windows the port is always open (WSL and Cygwin programs only use TCP) and the setting is not shown |
 
 - **Why these defaults**: the input method and source labels are on — without the former CJK users cannot type in remote programs, the latter guards
   against impersonation; the compositing manager is off (cost not measured); the TCP port being off on Linux / macOS is a behaviour change: loopback
-  TCP used to be always open, and on those platforms that port was just one more way in for other local processes and users.
+  TCP used to be always open, and on those platforms that port was just one more way in for other local processes and users. The maintainer
+  confirmed on 2026-10-10 that these defaults stay, with one display per SSH session off.
+- **Descriptions follow the platform**: the built-in engine note and the display-number description say `DISPLAY=localhost:N` (TCP) on Windows
+  and `DISPLAY=:N` (the Unix socket; TCP off by default) on Linux / macOS — they used to say `localhost:N` everywhere, which Linux users following
+  them could not connect to. The display address in the start notification and the button tooltip likewise follows the listeners actually open.
