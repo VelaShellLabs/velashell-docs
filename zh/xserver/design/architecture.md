@@ -203,7 +203,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 **快照**(`XTopLevelSnapshot`,服务端每次变更整份替换,宿主先取到局部变量再读;没变的形状、图标沿用同一个列表实例):
 几何(`X` / `Y` 是 X 窗口**边框外沿**的左上角,`Width` / `Height` 是内区,`BorderWidth`,`NeedsPlacement` 与 `PlaceInFrame`,见下文「摆放约定」)、
 标题(`_NET_WM_NAME` 优先,否则按类型解码的 `WM_NAME`)、`ClassName` / `InstanceName`(`WM_CLASS`)、override-redirect、瞬态父窗口(`TransientFor`)、
-`SupportsDeleteWindow`、所属客户端(`ClientId` / `ClientLabel`)、`InputOnly`、`HasAlpha`、`WindowType`、`States`(映射前客户端写好的状态;
+`SupportsDeleteWindow`、所属客户端(`ClientId` / `ClientLabel`;托盘图标的嵌入窗口是服务端的,`ClientLabel` 取停靠进来的图标所属的连接)、`InputOnly`、
+`HasAlpha`(深度 32 的窗口、且服务端在当合成管理器时才为真 —— 没有合成管理器时 X 显示 ARGB 窗口不看 alpha;托盘图标例外)、`WindowType`、`States`(映射前客户端写好的状态;
 `WM_HINTS` 的 initial_state 为 IconicState 时服务端在映射时加上 `Hidden`)、`Decorated`(`_MOTIF_WM_HINTS` 要求无装饰时为 false)、
 尺寸约束(最小 / 最大、步长、`BaseWidth` / `BaseHeight` —— 最小与基准互为缺省、`MinAspect` / `MaxAspect`,一律夹到 0–32767)、
 `WinGravity`、`UserPosition` / `ProgramPosition`、`WindowGroup`、`Functions`(`_MOTIF_WM_HINTS` 的 functions,`XWindowFunctions`)、
@@ -353,7 +354,10 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   宿主的设置开着时,带着会话对象进来的 x11 通道进这个会话自己的 `X11Server`:不监听任何端口(`ListenTcp = false`、`UnixSocketPath = ""`),
   只经连接器喂流,有自己的根窗口、选区与剪贴板,XTEST 与原始事件只碰得到同一个会话的程序。同一个会话的通道进同一个;第一条通道来时建,
   会话断开或停服时收掉;至多 32 个,超了新会话的 X 程序连不上(不落回共用的显示 —— 那等于悄悄取消了用户要的隔离)。本机程序(`DISPLAY=:N`)
-  与没带会话的照旧进共用的那个。宿主给每个服务端配一个自己的 `IX11ServerHost`(窗口、键位表、DPI、剪贴板各管各的)。
+  与没带会话的照旧进共用的那个。宿主给每个服务端配一个自己的 `IX11ServerHost`(窗口、键位表、DPI、剪贴板各管各的),设置里归宿主管的几项
+  (键盘布局、窗口模式、本机输入法、来源标识)每个都拿到。单窗口模式下用户关掉某个会话的屏幕窗口,只收掉这个会话的显示(宿主经
+  `IEmbeddedXServerHost.SessionDisplayCloseRequested` 告诉 `BuiltInLocalXServer`,有程序连着时先确认),别的会话与共用的显示不受影响,
+  这个会话之后再开 X 程序时另建一个 —— 2026-10-10 核对之前关掉任何一个会话的桌面都停整个 X Server。
 - **多个会话共用一个显示时的收紧**(同一个显示上、受信的会话之间):
   - **剪贴板跟着键盘焦点所在的会话走**(`X11ServerOptions.ClipboardFollowsFocus`,默认开):宿主的文本只给焦点所在顶层的客户端、以及与它连接名
     相同的客户端(同一个 SSH 会话里的 `xclip` / `xsel`,连接名见 `ServeAuthenticatedAsync(stream, label)`)读,X 这边的复制也只收那个会话的;
@@ -565,10 +569,21 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   等着的请求)与「客户端的资源销毁」(Retain 模式下晚于断开,KillClient 销毁留下的资源时才调)两种。
 - **2026-10-10 补的功能(xs_plan F4–F28)**:
   - **本机输入法上屏(F5 第一步)**:`InjectText(text)`。X 程序只认键码:每个字找一个空着的键码,把键值改成这个字的 Unicode 键值
-    (协议附录 A:Latin-1 是码位本身,其余是码位 + 0x01000000)再按下、松开,客户端先收到 MappingNotify 与 XKB MapNotify;键位表里本来就有、
-    不按修饰键就打得出来的字直接按那个键。改过的键码不改回去(客户端收到 MappingNotify 之后才去重新取键位表),同一个字再输入不再改、不发通知;
-    空键码用完才挪用最久没用过的,200 毫秒之内用过的不挪,剩下的字稍后再输入。换行按 Return、制表按 Tab,其余控制字符不输入;一次至多 4096 个 UTF-16 码元。
-    XIM 桥(远端程序里的候选窗与插入点)没做。
+    (协议附录 A:Latin-1 是码位本身,其余是码位 + 0x01000000)再按下、松开;键位表里本来就有、此刻不按修饰键(NumLock 除外)就打得出来的字直接按那个键。
+    - **一批一次通知**:一段字先把新借的键码都改好,再发一次核心 MappingNotify(覆盖这几个键码)与一次只报这一段键值的 XKB MapNotify
+      (changed 只有 KeySyms),然后依次按下、松开 —— 客户端每批只重取一次键位表。
+    - **改过的键码不改回去**:客户端收到通知之后才去重新取键位表,取到的是请求到达那一刻的;同一个字再输入不再改、不发通知。空键码用完才挪用
+      最久没用过的,而且它最后一次用过之后要空闲 3 秒(`TextKeyReuseMilliseconds`,远长于经 SSH 的一个来回加重取键位表)、这一批里没用过、
+      键盘没被同步抓取冻结着;挪不了时这段字等着,每 50 毫秒再看一次。一个可借的键码都没有(客户端把每个键码都占了)时剩下的字丢掉、记一行日志。
+    - **按顺序**:等的时候后来的 `InjectText` 与宿主的 `InjectKey` 排在后面(XTEST 与指针不排)。
+    - **大小写**:借来的键两级同一个键值、XKB 类型是 ALPHABETIC(Lock 算作被这个键消耗),CapsLock 开着时 Xlib / xkbcommon 不把「é」转成「É」;
+      只认核心协议的老客户端仍按协议第 5 节转大写。
+    - **非受信客户端**(SECURITY「Keyboard Security」):借来的键码的键值就是用户刚输入的字。键盘事件不送到非受信客户端时,改键位表的通知不发给
+      它们,GetKeyboardMapping / XI 的 GetDeviceKeyMapping / XKB GetMap 里这些键码是 NoSymbol;只有输入给非受信程序时用到的键码才让它们看见
+      (这时补发只给非受信客户端的通知)。
+    - 换行(CR LF 算一个)按 Return、制表按 Tab,其余控制字符不输入;一次至多 4096 个 UTF-16 码元。XIM 桥(远端程序里的候选窗与插入点)没做。
+    - 2026-10-10 核对之前:每个新字一轮通知;空闲 200 毫秒就挪用(慢链路上超过空键码数的一段字,客户端为前面的字重取键位表时那个键码已经改成了后面的字);
+      等的时候宿主的按键插到前一段字中间;借来的键推成 ONE_LEVEL,CapsLock 下转大写;非受信客户端收得到通知、读得到键值。
   - **平滑滚动(F6)**:指针设备多两个相对轴 Rel Horiz Scroll / Rel Vert Scroll 与对应的 ScrollClass(XI 2.1,increment 1.0 = 一格);
     `InjectScroll(window, x, y, dx, dy)` 发带滚动轴的 Motion 与 RawMotion,攒够一格再模拟一次按钮 4–7(XI2 那份带 PointerEmulated);
     反过来设备给的滚轮按钮也给用滚动轴的 XI2 客户端发一格滚动。
@@ -584,7 +599,10 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   - **`_NET_WM_SYNC_REQUEST`(F10)**:宿主改一个顶层的尺寸时,声明了它、有 SYNC 计数器的窗口先收到同步请求再收到 ConfigureNotify;
     等的期间 `XTopLevelWindow.AwaitingRedraw` 为真,客户端把计数器推到序号或 300 毫秒到点时回调 `TopLevelRedrawn`。
   - **合成管理器(F11)**:`X11ServerOptions.CompositingManager`(默认关)打开时占住 `_NET_WM_CM_S0`,GTK、Qt、Electron 才用 ARGB 视觉画圆角、阴影与透明窗口。
-    `ClientSideShadows` 仍默认关(Windows 上透明的阴影区照样接住鼠标)。
+    关着时深度 32 的窗口照样按不透明交给宿主(快照的 `HasAlpha` 为假)—— 没有合成管理器时 X 显示它们不看 alpha;要了 8 位 alpha 的 GL 程序
+    (GLFW 默认就要,只拿得到 ARGB 视觉)清屏的 alpha 是 0,2026-10-10 核对之前整个窗口透出后面的东西,还白付系统合成的开销。
+    远端跑了个合成器(`xfwm4 --replace` 之类)接走这个选区又退出、或者谁把属主设成了 None 时,服务端接回来,按 ICCCM §2.8 向根窗口广播
+    MANAGER(选了 StructureNotify 的客户端收到)。`ClientSideShadows` 仍默认关(Windows 上透明的阴影区照样接住鼠标)。
   - **X-Resource 的 LocalClientPid(F28)**:经 Unix 套接字连进来的客户端记下对端 pid(Linux 经 SO_PEERCRED,macOS 经 LOCAL_PEERPID),
     QueryClientIds 回给本身也是本机客户端的请求方。
   - **计量仪表(F27)**:`XServerMetrics` 交出仪表源名 `VelaShell.XServer`:`clients.active`、`connections.refused`(reason:authorization、
@@ -599,6 +617,11 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   - **RENDER 的 SIMD 快路径(F24)**:纯色过遮罩 OVER、图像 OVER、通用路径的 Over / Add 用 `Vector128` 一次算 4 个像素,与标量版逐位一致;
     双线性取样与 GL 光栅化没动。
   - **宿主:Linux / macOS 默认只开 Unix 套接字(F4,决策 Q4)**:设置「也开 TCP 端口」默认关;Windows 上一直开(WSL、Cygwin 的程序只会走 TCP)。
+    TCP 端口只听 127.0.0.1(桥接网络里的容器连不到,Linux 上把 `/tmp/.X11-unix` 挂进去用 `DISPLAY=:N`)。宿主报的显示地址按实际开着的监听给
+    (`X11Server.Display`:Linux / macOS 上 `:N`,只有 TCP 时 `localhost:N.0`)。Unix 套接字建不起来、TCP 又没开时(macOS 上 `/tmp/.X11-unix`
+    归别的用户、属主不可信)照样起一个只经连接器喂流的服务端:SSH 的 X11 转发照常,本机程序连不上,启动结果带一条提示(`XServerStartResult.Warning`)——
+    2026-10-10 核对之前整个服务端起不来,连 SSH 转发一并失败。自动选号时 `/tmp/.X{N}-lock` 由活着的进程持着(或读不出是谁)的号算占用;
+    内置引擎停了之后老会话的通道不再退到本机 TCP(没有 VcXsrv 的平台上环回 `6000+N` 不会是我们的服务端)。
 - **单窗口模式(`X11ServerOptions.Rootful`,默认关;决策见 §10 的 2026-10-10 一条)**:整个根窗口经 `X11Server.Screen` 作为一个顶层交给宿主
   (快照在 (0, 0)、与根窗口一样大),宿主开一个原生窗口显示整块桌面;其余顶层不再单独交给宿主(不发 `TopLevelMapped` 这些,也不提窗口管理器的请求)。
   服务端不再当窗口管理器:不占 `WM_S0`、不写 `_NET_SUPPORTED` / `_NET_SUPPORTING_WM_CHECK` / 客户端列表 / `_NET_WORKAREA`,
@@ -608,7 +631,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   - **画面**:顶层仍各有各的缓冲,绘图路径不变。每批执行完、放锁之前,把这一批画过的顶层区域,以及顶层的映射 / 位置 / 尺寸 / 形状 / 边框与
     根窗口背景的变化换成屏幕上的区域(只是堆叠次序变了时,只取相互重叠、上下颠倒了的两个窗口的交集),在根窗口的缓冲里重拼:先铺根窗口的背景
     (像素图按根窗口原点平铺,没有背景是黑的),再按堆叠次序从下往上画映射着的顶层 —— 边框(边框像素图按窗口内区原点平铺)与内区,按边界形状裁;
-    深度 32 的按预乘 over 叠上去。拼好的区域经 `TopLevelDamaged(屏幕, 矩形)` 交给宿主。GetImage 读根窗口拿到的就是拼好的屏幕(连背景)。
+    深度 32 的在有合成管理器(远端的合成器占着 `_NET_WM_CM_S0`)时按预乘 over 叠上去,没有时与别的窗口一样整块盖上(X 不看 alpha)。
+    拼好的区域经 `TopLevelDamaged(屏幕, 矩形)` 交给宿主。GetImage 读根窗口拿到的就是拼好的屏幕(连背景)。
   - **宿主的动作**:指针、拖放的注入坐标就是根坐标(从根往下找落点);`ResizeTopLevel(屏幕, 宽, 高)` 把屏幕改成这么大(一台显示器覆盖全部,
     客户端收到根窗口的 ConfigureNotify 与 RANDR 通知);移动、关闭、改状态、外框宽、给焦点对屏幕句柄不起作用。光标一律报在屏幕句柄上。
   - **没做的**:根窗口本身的绘图(直接画在根上的程序,如 xroach)不显示,只显示背景;远端合成器(xfwm4 开着合成)画在 Composite 叠加窗口上的
@@ -618,7 +642,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   X 程序发 `SYSTEM_TRAY_REQUEST_DOCK` 时,服务端建一个嵌入窗口(服务端自己的顶层,override-redirect,边长 `SystemTrayIconSize`,默认 24,
   摆在屏幕右下角 —— 程序按图标的根坐标弹菜单),按 XEmbed 0.5 把图标窗口 reparent 进去撑满、按 `_XEMBED_INFO` 的 XEMBED_MAPPED 映射
   (之后跟着这一位映射 / 取消映射;没有这个属性的老程序当作要映射)、发 `XEMBED_EMBEDDED_NOTIFY`(data1 = 嵌入窗口,版本 0)。嵌入窗口映射时
-  不当普通顶层交给宿主,而是 `SystemTrayIconAdded(句柄, 名字)`(名字取图标的 `_NET_WM_NAME`,退到 WM_NAME、WM_CLASS):宿主照常读它的像素、
+  不当普通顶层交给宿主,而是 `SystemTrayIconAdded(句柄, 名字)`(名字取图标的 `_NET_WM_NAME`,退到按类型解码的 WM_NAME、WM_CLASS,
+  与窗口标题一样限长、去掉控制字符与双向排版控制符;快照的 `ClientLabel` 是图标所属连接的标签,宿主据此在提示里标出来源):宿主照常读它的像素、
   收损伤、往里注入指针。图标窗口销毁、被程序 reparent 走(规范的结束方式)、程序断开时收掉嵌入窗口(`SystemTrayIconRemoved`)。至多 64 个图标;
   气泡消息(BEGIN / CANCEL_MESSAGE)收下不显示。默认关是因为有了托盘程序会「关闭到托盘」,宿主不显示的话窗口就找不回来。
 - **拖放(XDND,宿主 → X)**:本机的文本、文件拖进 X 窗口时,服务端替宿主扮演 freedesktop XDND 第 5 版的**源**(源窗口是服务端自己的选区窗口):
@@ -727,6 +752,8 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   2026-10 补:连接器把 SSH 会话的 `user@host:port` 作为连接名交给 `ServeAuthenticatedAsync(stream, label)`;内置引擎停了(比如换成 VcXsrv)之后,
   老会话的 x11 通道改走本机 TCP 连此刻在运行的那个 X 服务端,而不是一律被拒。
   服务端照样监听环回 TCP 与 Unix 套接字,本机别的 X 程序可以用 `DISPLAY=localhost:N` 连进来(2026-09-26 起要带上宿主写进 `.Xauthority` 的 cookie)。
+  (2026-10-10 起 Linux / macOS 上默认只开 Unix 套接字,本机程序用 `DISPLAY=:N`,TCP 要在设置里打开,见 §7「2026-10-10 补的功能」的 F4;
+  内置引擎停了之后退到本机 TCP 只在 Windows 上做。)
   **2026-09-24 修正两处**:① 连接器每来一条通道才取**此刻**在运行的服务端,不记住解析显示时的那一个 —— SSH 会话比服务端活得久,
   用户在标题栏把 X Server 停掉再开之后,老会话的每条通道原先都接进已释放的服务端,远端只看到 `Failed to open display`、本机日志一字不记;
   此刻没在运行就拒绝这条通道并记一行日志。② 远端发来 `CHANNEL_EOF` 时连接器那一端也要读到 EOF(spec 07 §7.5.9 新增的一条决策):
@@ -910,3 +937,12 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   没做的:F5 第二步 XIM 桥(3–5 周)、F7 压感 / 触摸 / 手势(要按 SlaveSwitch 换主设备的类,没有真实工具包可核对;XI 2.4 不在规范清单里)、
   F20 的录屏(要编码器)、F29 WSL(没有可测的环境)、F30 MIT-SHM 1.2(Linux 才有的 fd 传递,TCP 的容器环境测不了)。
   默认值:本机输入法开、标出来源开、合成管理器关、Linux / macOS 上的 TCP 端口关(经网络连的容器程序要打开它)。
+- **新设置的默认值与 F19(2026-10-10,维护者)**:上一条的默认值确认保持,每个 SSH 会话一个显示默认关。F19 的整数倍放大先等:不做全服务端统一倍数的方案,
+  等「每个 SSH 会话一个显示」给每个显示各自的倍数。
+- **核对新设置之后的几处修正(2026-10-10)**:对着上面几项逐一核对、外加真实客户端用例,改了这些(细节见 §7 各条):
+  ① 本机输入法上屏:挪用键码从「空闲 200 毫秒」改成「空闲 3 秒」—— 正确性靠的是客户端为前一个字重取完键位表,这只能靠足够长的时间保证
+  (按「客户端取过一次键位表」判断不成立:它可能在处理到这一轮通知之前就为别的原因取过);一批字一次通知;等的时候宿主的按键排在后面;
+  借来的键用 ALPHABETIC 类型;非受信客户端看不见输入给受信程序的字。真实客户端用例:xev 收到的是 U4E2D、U6587,CapsLock 开着时仍是 eacute。
+  ② 合成管理器关着时 ARGB 窗口按不透明显示;选区被远端合成器接走又放下时服务端接回来。③ 托盘图标的名字照窗口标题过滤,宿主的提示标出来源。
+  ④ Unix 套接字建不起来、TCP 又没开时只服务 SSH 转发,不再整个起不来。⑤ 宿主一侧(按会话分出来的显示拿到全部宿主设置、关掉某个会话的屏幕窗口只收它、
+  「标出来源」立即生效、显示地址按实际监听报)见宿主仓库 `plan.md`。

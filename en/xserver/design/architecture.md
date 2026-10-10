@@ -269,7 +269,9 @@ count — the buffer is still there, holding what was drawn last before the unma
 unchanged shape or icon set keeps its list instance): geometry (`X` / `Y` are the top-left corner of the X window's **outer border edge**, `Width` /
 `Height` the content area, `BorderWidth`, `NeedsPlacement` and `PlaceInFrame` — see "Placement" below), title (`_NET_WM_NAME` first, else
 `WM_NAME` decoded by its type), `ClassName` / `InstanceName` (`WM_CLASS`), override-redirect, transient parent (`TransientFor`),
-`SupportsDeleteWindow`, the owning client (`ClientId` / `ClientLabel`), `InputOnly`, `HasAlpha`, `WindowType`, `States` (states the client set
+`SupportsDeleteWindow`, the owning client (`ClientId` / `ClientLabel`; a tray embedder belongs to the server, so its `ClientLabel` is that of the
+docked icon's connection), `InputOnly`, `HasAlpha` (true only for depth-32 windows while the server acts as compositing manager — without one X
+shows ARGB windows without regard to alpha; tray icons excepted), `WindowType`, `States` (states the client set
 before mapping; with a `WM_HINTS` initial_state of IconicState the server adds `Hidden` at map time), `Decorated` (false when `_MOTIF_WM_HINTS`
 asks for no decorations), size constraints (min / max, increments, `BaseWidth` / `BaseHeight` — min and base default to each other,
 `MinAspect` / `MaxAspect`, all clamped to 0–32767), `WinGravity`, `UserPosition` / `ProgramPosition`, `WindowGroup`, `Functions` (the
@@ -482,7 +484,11 @@ extra (the slack is not charged).
   session share one; it is created on the first channel and removed when the session disconnects or the server stops; at most 32 — beyond that a
   new session's X programs cannot connect (they do not fall back to the shared display, which would silently undo the isolation the user asked
   for). Local programs (`DISPLAY=:N`) and channels without a session still go to the shared one. The host gives each server its own
-  `IX11ServerHost` (windows, keymap, DPI and clipboard are kept apart).
+  `IX11ServerHost` (windows, keymap, DPI and clipboard are kept apart), and each of them gets all the host-side settings (keyboard layout, window
+  mode, local input method, source labels). In one-window mode, closing one session's screen window closes only that session's display (the host
+  tells `BuiltInLocalXServer` through `IEmbeddedXServerHost.SessionDisplayCloseRequested`, asking first when programs are connected); other
+  sessions and the shared display are unaffected, and the session gets a new display the next time it opens an X program — before the 2026-10-10
+  review, closing any session's desktop stopped the whole X Server.
 - **Several sessions sharing one display — what is tightened** (on one display, between trusted sessions):
   - **The clipboard follows the session with the keyboard focus** (`X11ServerOptions.ClipboardFollowsFocus`, on by default): the host's text can be
     read only by the client owning the focused top-level and by clients with the same connection label (`xclip` / `xsel` in the same SSH session;
@@ -807,12 +813,29 @@ extra (the slack is not charged).
 - **Added on 2026-10-10 (xs_plan F4–F28)**:
   - **Committing text from the local input method (F5, first step)**: `InjectText(text)`. X programs only understand keycodes: each character
     gets a free keycode whose keysym is changed to the character's Unicode keysym (protocol appendix A: Latin-1 is the code point itself, others
-    are code point + 0x01000000), then it is pressed and released, with clients getting MappingNotify and XKB MapNotify first; a character the
-    keymap already produces without modifiers is typed with that key. Changed keycodes are not changed back (clients only refetch the keymap
-    after MappingNotify), and typing the same character again changes nothing and sends no notification; only when free keycodes run out is the
-    least recently used one reused, never one used in the last 200 ms, and the remaining characters are typed a moment later. Newline types
-    Return and tab types Tab; other control characters are skipped; at most 4096 UTF-16 code units at a time. The XIM bridge (candidate window
-    and insertion point inside remote programs) is not done.
+    are code point + 0x01000000), then it is pressed and released; a character the keymap already produces with no modifiers held (NumLock
+    aside) is typed with that key.
+    - **One notification per batch**: a run of text first changes all the keycodes it newly borrows, then sends one core MappingNotify (covering
+      those keycodes) and one XKB MapNotify that reports only the key symbols of that range (changed = KeySyms), and then presses and releases
+      them in order — clients refetch the keymap once per batch.
+    - **Changed keycodes are not changed back**: clients refetch the keymap only after the notification, and get it as it is when their request
+      arrives; typing the same character again changes nothing and sends no notification. Only when free keycodes run out is the least recently
+      used one reused, and only after it has been idle for 3 seconds (`TextKeyReuseMilliseconds`, far longer than a round trip over SSH plus
+      the keymap download), was not used in the same batch, and the keyboard is not frozen by a synchronous grab; otherwise the text waits and is
+      retried every 50 ms. When no keycode can be borrowed at all (a client bound every keycode), the rest of the text is dropped and a line is logged.
+    - **In order**: while it waits, later `InjectText` calls and the host's `InjectKey` queue up behind it (XTEST and the pointer do not).
+    - **Case**: a borrowed key has the same keysym on both levels and the XKB type ALPHABETIC (Lock counts as consumed by the key), so with
+      CapsLock on Xlib / xkbcommon do not turn "é" into "É"; old core-protocol-only clients still uppercase it per protocol section 5.
+    - **Untrusted clients** (SECURITY "Keyboard Security"): the keysym of a borrowed keycode is the character the user just typed. While keyboard
+      events do not reach untrusted clients, they get no keymap notifications for it, and GetKeyboardMapping / XI GetDeviceKeyMapping / XKB GetMap
+      show those keycodes as NoSymbol to them; only keycodes used while typing into an untrusted program are revealed (with a notification sent
+      to untrusted clients only).
+    - Newline (CR LF counts once) types Return and tab types Tab; other control characters are skipped; at most 4096 UTF-16 code units at a time.
+      The XIM bridge (candidate window and insertion point inside remote programs) is not done.
+    - Before the 2026-10-10 review: one notification per new character; a keycode was reused after 200 ms (over a slow link, for a run longer than
+      the free keycodes, the keycode had already been changed to a later character when the client refetched the keymap for an earlier one); host
+      keys pressed while it waited landed in the middle of the earlier text; borrowed keys were derived as ONE_LEVEL and uppercased under CapsLock;
+      untrusted clients got the notifications and could read the keysyms.
   - **Smooth scrolling (F6)**: pointer devices gain two relative axes, Rel Horiz Scroll / Rel Vert Scroll, with matching ScrollClasses (XI 2.1,
     increment 1.0 = one notch); `InjectScroll(window, x, y, dx, dy)` sends Motion and RawMotion with the scroll axes and emulates buttons 4–7 once
     a full notch has accumulated (the XI2 copy carries PointerEmulated); conversely, wheel buttons from devices also give XI2 clients that use the
@@ -833,8 +856,12 @@ extra (the slack is not charged).
     before the ConfigureNotify; while waiting `XTopLevelWindow.AwaitingRedraw` is true, and `TopLevelRedrawn` is called back when the client
     raises the counter to that serial or after 300 ms.
   - **Compositing manager (F11)**: `X11ServerOptions.CompositingManager` (off by default) owns `_NET_WM_CM_S0` when on, so GTK, Qt and Electron
-    use ARGB visuals for rounded corners, shadows and transparent windows. `ClientSideShadows` stays off by default (on Windows the transparent
-    shadow margin still catches the mouse).
+    use ARGB visuals for rounded corners, shadows and transparent windows. While it is off, depth-32 windows are still handed to the host as
+    opaque (the snapshot's `HasAlpha` is false) — without a compositing manager X shows them without regard to alpha; a GL program that asks for
+    8 alpha bits (GLFW does by default, and only gets an ARGB visual) clears with alpha 0, and before the 2026-10-10 review the whole window showed
+    what was behind it while paying for the system's compositing. When a remote compositor (`xfwm4 --replace` and the like) takes the selection and
+    then exits, or someone sets the owner to None, the server takes it back and broadcasts MANAGER on the root window per ICCCM §2.8 (to clients
+    that selected StructureNotify). `ClientSideShadows` stays off by default (on Windows the transparent shadow margin still catches the mouse).
   - **X-Resource LocalClientPid (F28)**: clients connecting over the Unix socket record the peer pid (Linux via SO_PEERCRED, macOS via
     LOCAL_PEERPID), and QueryClientIds returns it to requestors that are local clients themselves.
   - **Metrics (F27)**: `XServerMetrics` exposes the meter name `VelaShell.XServer`: `clients.active`, `connections.refused` (reason: authorization,
@@ -852,8 +879,15 @@ extra (the slack is not charged).
     clock.
   - **SIMD fast paths in RENDER (F24)**: solid-through-mask OVER, image OVER and the general path's Over / Add compute 4 pixels at a time with
     `Vector128`, bit-identical to the scalar versions; bilinear sampling and the GL rasterizer are untouched.
-  - **Host: Unix socket only by default on Linux / macOS (F4, decision Q4)**: the "Also open the TCP port" setting is off by default; on Windows
-    it is always open (WSL and Cygwin programs only use TCP).
+  - **Host: Unix socket only by default on Linux / macOS (F4, decision Q4)**: the "Also listen on a TCP port" setting is off by default; on Windows
+    it is always open (WSL and Cygwin programs only use TCP). The TCP port listens on 127.0.0.1 only (containers on a bridge network cannot reach
+    it; on Linux mount `/tmp/.X11-unix` into them and use `DISPLAY=:N`). The display address the host reports follows the listeners actually open
+    (`X11Server.Display`: `:N` on Linux / macOS, `localhost:N.0` with TCP only). When the Unix socket cannot be created and TCP is off (on macOS
+    when `/tmp/.X11-unix` belongs to another user or has an untrusted owner), a server fed only through the connector is started anyway: SSH X11
+    forwarding works, local programs cannot connect, and the start result carries a warning (`XServerStartResult.Warning`) — before the 2026-10-10
+    review the whole server failed to start, taking SSH forwarding down with it. When picking a display automatically, a number whose
+    `/tmp/.X{N}-lock` is held by a live process (or by one that cannot be read) counts as taken; after the built-in engine stops, old sessions'
+    channels no longer fall back to local TCP (on platforms without VcXsrv, loopback `6000+N` is never our server).
 - **One-window mode (`X11ServerOptions.Rootful`, off by default; see the 2026-10-10 entry in §10 for the decision)**: the whole root window is
   handed to the host as one top-level through `X11Server.Screen` (its snapshot is at (0, 0) and as large as the root window), and the host opens
   one native window showing the whole desktop; the other top-levels are no longer handed to the host (no `TopLevelMapped` and the like, and no
@@ -867,7 +901,8 @@ extra (the slack is not charged).
     the root background are turned into screen areas (when only the stacking order changed, just the intersection of two overlapping windows
     whose order flipped), and recomposed in the root window's buffer: first the root background (a pixmap tiled from the root origin, black when
     there is none), then the mapped top-levels from bottom to top — border (a border pixmap tiled from the window's inner origin) and interior,
-    clipped by the bounding shape; depth-32 windows are composited with premultiplied over. Composed areas go to the host as
+    clipped by the bounding shape; depth-32 windows are composited with premultiplied over while there is a compositing manager (a remote
+    compositor owns `_NET_WM_CM_S0`), and otherwise cover what is below like any other window (X ignores alpha). Composed areas go to the host as
     `TopLevelDamaged(screen, rects)`. GetImage on the root window returns the composed screen (background included).
   - **Host actions**: pointer and drag-and-drop injection coordinates are root coordinates (the target is searched from the root down);
     `ResizeTopLevel(screen, width, height)` makes the screen that large (one monitor covering it; clients get the root ConfigureNotify and RANDR
@@ -883,7 +918,9 @@ extra (the slack is not charged).
   menus at the icon's root coordinates), reparents the icon window into it per XEmbed 0.5 and fills it, maps it per the XEMBED_MAPPED bit of
   `_XEMBED_INFO` (following that bit afterwards; old programs without the property are treated as wanting to be mapped) and sends
   `XEMBED_EMBEDDED_NOTIFY` (data1 = the embedder, version 0). The embedder, when mapped, is not handed to the host as an ordinary top-level but
-  as `SystemTrayIconAdded(handle, name)` (the name is the icon's `_NET_WM_NAME`, else WM_NAME, else WM_CLASS): the host reads its pixels,
+  as `SystemTrayIconAdded(handle, name)` (the name is the icon's `_NET_WM_NAME`, else WM_NAME decoded by its type, else WM_CLASS, length-capped
+  and stripped of control and bidi formatting characters like window titles; the snapshot's `ClientLabel` is the label of the icon's connection,
+  so the host can show the source in the tooltip): the host reads its pixels,
   receives its damage and injects pointer input into it as usual. When the icon window is destroyed, reparented away by the program (the
   spec's way of ending the protocol) or its program disconnects, the embedder goes away (`SystemTrayIconRemoved`). At most 64 icons; balloon
   messages (BEGIN / CANCEL_MESSAGE) are accepted but not shown. It is off by default because with a tray present programs "close to tray", and
@@ -1031,7 +1068,9 @@ extra (the slack is not charged).
   to `ServeAuthenticatedAsync(stream, label)`; once the built-in engine has stopped (say, after switching to VcXsrv), x11 channels of
   existing sessions go over local TCP to whichever X server is running now instead of being refused. The server keeps listening
   on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N` (since 2026-09-26 they
-  need the cookie the host writes to `.Xauthority`).
+  need the cookie the host writes to `.Xauthority`). (Since 2026-10-10 only the Unix socket is open by default on Linux / macOS — local
+  programs use `DISPLAY=:N` and TCP has to be turned on in the settings, see F4 under "Added on 2026-10-10" in §7; falling back to local TCP
+  after the built-in engine stops happens on Windows only.)
   **Two corrections on 2026-09-24**: ① the connector picks the server that is running **at the moment** each channel arrives,
   instead of remembering the one that was running when the display was resolved — an SSH session outlives the server, and after
   the user stopped and restarted the X Server from the title bar, every channel of an existing session used to go into a disposed
@@ -1294,24 +1333,37 @@ extra (the slack is not charged).
   button opens a flyout; an external VcXsrv cannot list its programs, so there the button still starts and stops it.
 - **One-window (rootful) mode (2026-10-10, xs_plan F13 / decision Q2)**: §2 used to state only the premise "rootless multi-window, the root
   window is never drawn" without making the whole desktop a non-goal. A full remote desktop (xfce / MATE) or a graphical installer did not work
-  in rootless mode (a remote window manager cannot get SubstructureRedirect, desktop windows cover the local screen), while VcXsrv''s "One large
-  window" and MobaXterm''s Windowed mode are shapes users know, so it was added as an **optional mode**, rootless staying the default. The drawing
-  path is unchanged: top-levels keep their buffers and the server composes the whole screen in the root window''s buffer like an always-on
+  in rootless mode (a remote window manager cannot get SubstructureRedirect, desktop windows cover the local screen), while VcXsrv's "One large
+  window" and MobaXterm's Windowed mode are shapes users know, so it was added as an **optional mode**, rootless staying the default. The drawing
+  path is unchanged: top-levels keep their buffers and the server composes the whole screen in the root window's buffer like an always-on
   compositor (see "One-window mode" in §7); the window-manager role is handed over to the remote side entirely. Real-client case: twm takes
   over, xterm gets framed and composed into the screen, zero protocol errors.
 - **Trust levels and one display per SSH session (2026-10-10, xs_plan F2 / F1, decision Q5)**: all forwarded sessions used to share one trusted
   display, and untrusted `ssh -X` could not be set up with the built-in engine. Decision Q5 tightens this in two steps: first the SECURITY
-  extension''s untrusted level (a remote `xauth generate … untrusted` gets a restricted cookie, and the host''s connector can mark a channel
-  untrusted directly), then the host''s "one display per SSH session" — trusted sessions can only be kept apart on different displays.
+  extension's untrusted level (a remote `xauth generate … untrusted` gets a restricted cookie, and the host's connector can mark a channel
+  untrusted directly), then the host's "one display per SSH session" — trusted sessions can only be kept apart on different displays.
   XC-QUERY-SECURITY-1 and Application Groups are not done; one display per session is off by default and takes effect at the next start.
   Real-client case: `xauth generate` issues an untrusted cookie, after which xdpyinfo sees no XTEST / SECURITY, `xwd -root` cannot grab the
   screen, and xterm (core fonts and Xft), `xclock -render`, xlogo and indirect glxgears draw normally with zero protocol errors.
-- **What became of the draft''s remaining new features (2026-10-10, xs_plan F4–F30)**: F4, the first step of F5 (committing text from the local
+- **What became of the draft's remaining new features (2026-10-10, xs_plan F4–F30)**: F4, the first step of F5 (committing text from the local
   input method), F6, F8–F11, F14, F15, F17, F18, the screenshot part of F20, F22, F25, F27 and F28 are done; F21, F26 and the create_context part of
   F22 already existed. Partly done: F19 (each monitor already reports its DPI from its own scaling; integer upscaling needs one zoom factor for the
   whole server and changes every root↔screen mapping in the host, too risky to verify only headlessly), F23 (feedback mode, mipmap LOD, PixelMap and
   depth / stencil DrawPixels / CopyPixels are not done), F24 (bilinear sampling and the GL rasterizer untouched), F25 (one global frame clock, not per
-  monitor). Not done: F5''s second step, the XIM bridge (3–5 weeks); F7 pen pressure / touch / gestures (needs the master device''s classes switched on
-  SlaveSwitch, with no real toolkit to check against; XI 2.4 is not on the spec list); F20''s screen recording (needs an encoder); F29 WSL (no
+  monitor). Not done: F5's second step, the XIM bridge (3–5 weeks); F7 pen pressure / touch / gestures (needs the master device's classes switched on
+  SlaveSwitch, with no real toolkit to check against; XI 2.4 is not on the spec list); F20's screen recording (needs an encoder); F29 WSL (no
   environment to test); F30 MIT-SHM 1.2 (Linux-only fd passing that the TCP-based container setup cannot exercise). Defaults: local input method on,
   source labels on, compositing manager off, the TCP port on Linux / macOS off (containers connecting over the network need to turn it on).
+- **Defaults of the new settings and F19 (2026-10-10, maintainer)**: the defaults above stay, and one display per SSH session stays off. F19's
+  integer upscaling waits: no single zoom factor for the whole server; it waits for "one display per SSH session" to give each display its own.
+- **Fixes after reviewing the new settings (2026-10-10)**: going through the items above one by one, plus real-client cases, changed these
+  (details under each item in §7): ① committing text from the local input method: a keycode is reused after 3 seconds idle instead of 200 ms —
+  correctness depends on the client having finished refetching the keymap for the earlier character, and only enough time can guarantee that
+  ("the client fetched the keymap once" does not hold up: it may have fetched for another reason before reaching this round's notification);
+  one notification per batch; host keys queue behind waiting text; borrowed keys use the ALPHABETIC type; untrusted clients cannot see text typed
+  into trusted programs. Real-client case: xev receives U4E2D and U6587, and still eacute with CapsLock on. ② With the compositing manager off,
+  ARGB windows are shown opaque; when a remote compositor takes the selection and drops it, the server takes it back. ③ Tray icon names are
+  filtered like window titles, and the host's tooltip shows the source. ④ When the Unix socket cannot be created and TCP is off, only SSH
+  forwarding is served instead of failing to start. ⑤ Host-side fixes (per-session displays get all host settings, closing one session's screen
+  window closes only that display, "show where X windows come from" applies immediately, the display address follows the actual listeners) are
+  in the host repository's `plan.md`.
