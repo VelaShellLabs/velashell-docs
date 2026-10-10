@@ -1995,10 +1995,11 @@ The host now has a built-in X server (`VelaShell.XServer`, in the same repositor
 the local display lives in the same process, connecting to a local port is only a detour. `X11ForwardOptions.LocalConnector`
 lets the caller supply a connector: it is called once per `x11` channel for a duplex stream, and the setup message is written
 into it with the cookie replaced by `LocalCookie` (empty if none was given) (`spec/07` §7.5.9). **The fake-cookie check is
-unchanged** — that layer guards against the remote side. Trusted mode only: untrusted mode needs `xauth` to reach the local
-display and sign a restricted cookie, so setting both is a configuration contradiction — the session entry points (`ExecuteAsync` / `OpenShellAsync`)
-throw `ArgumentException` before opening the channel, `ForwardFailureMode.Continue` does not swallow it, and nothing silently falls back to trusted
-(it used to be reported only when sending `x11-req`, as "forwarding did not come up"). Likewise, `AgentForwardOptions` takes only one of `AgentEndpoint`
+unchanged** — that layer guards against the remote side. Both trusted and untrusted mode can use the connector (since 2026-10-10):
+in untrusted mode `xauth` is not run and the connector side admits the connection into the X server as an untrusted client (the
+built-in X server's SECURITY untrusted level). Setting both used to be a configuration contradiction that made the session entry
+points throw `ArgumentException` before opening the channel; that check, `X11ForwardOptions.Validate()`, was removed together with
+its three call sites. Likewise, `AgentForwardOptions` takes only one of `AgentEndpoint`
 and `LocalConnector`; setting both throws (the endpoint used to be silently ignored).
 An unavailable connector side is treated as "local display unreachable". Three tests (relaying with cookie replacement,
 unavailable connector, combined with untrusted mode).

@@ -1935,8 +1935,9 @@ OpenSSH 的 `ForwardX11Timeout` 只管非受信模式。**我们两种模式都�
 宿主内置了 X server（`VelaShell.XServer`，与本库同仓、互不引用）。本机显示就在同一个进程里时，再去连一个本机端口只是绕路。
 `X11ForwardOptions.LocalConnector` 让调用方给一个连接器：每条 `x11` 通道调它一次拿一条双工流，建立报文里的 cookie 换成
 `LocalCookie`（没给就是空的）后写进去（`spec/07` §7.5.9）。**假 cookie 的核对不变** —— 那一层防的是远端。
-只支持受信模式：非受信模式要 `xauth` 连本机显示签受限 cookie，与连接器同时设是配置矛盾 —— 开会话的入口（`ExecuteAsync` / `OpenShellAsync`）
-在开通道之前就抛 `ArgumentException`，`ForwardFailureMode.Continue` 也不吞它，不静默退回受信（曾经要到发 `x11-req` 时才报成「转发没开成」）。
+受信与非受信都可以经连接器（2026-10-10 起）：非受信模式下不跑 `xauth`，由连接器那一端把这条连接当成非受信客户端接进 X server
+（内置 X server 的 SECURITY 非受信级别）。此前两者同时设被当成配置矛盾、开会话的入口在开通道之前就抛 `ArgumentException`，
+连同 `X11ForwardOptions.Validate()` 与它的三处调用一起删掉了。
 同理，`AgentForwardOptions` 的 `AgentEndpoint` 与 `LocalConnector` 只能给一个，两个都给时设值就抛（曾经静默忽略端点）。
 连接器那一端不可用时按「本机显示连不上」处理。用例 3 条（对搬与 cookie 替换、连接器不可用、与非受信同设）。
 

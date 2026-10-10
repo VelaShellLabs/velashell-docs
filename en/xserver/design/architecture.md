@@ -30,6 +30,9 @@ top-level windows as native windows through Avalonia (rootless), giving one code
   Decorations, moving, resizing and closing are the host's job; what a window manager does at the protocol level
   (EWMH / ICCCM properties, parsing client hints, receiving clients' WM requests) is done by the server, which then
   hands the requests to the host (§6).
+- An optional **one-window (rootful) mode** (`X11ServerOptions.Rootful`, off by default, see "One-window mode" in §7): the whole root
+  window is handed to the host as one top-level and a remote window manager manages the top-levels as usual — for a full remote desktop
+  (xfce, MATE) or a graphical installer.
 - **Embeddable**: no UI framework and no native library dependency. Pixels, window lifecycle and input are exchanged
   through one host interface (§6).
 - **Testable**: the protocol layer is unit-tested over in-memory transports; `[TestCategory("Interop")]` cases let real
@@ -44,8 +47,9 @@ top-level windows as native windows through Avalonia (rootless), giving one code
   itself and sends pixels with PutImage) and offers software indirect rendering of a fixed-function GL subset; MIT-SHM exists
   only on Linux and only for local clients connected over a Unix socket from the server's own IPC namespace. Present does
   software copies only (there is no video memory to flip).
-- No SECURITY extension (no untrusted client level): every client is equally trusted; how sessions are kept apart where
-  possible is in §7.
+- The SECURITY extension covers issuing and revoking MIT-MAGIC-COOKIE-1 authorizations and the untrusted level ("Trust levels" in §7);
+  the XC-QUERY-SECURITY-1 authentication method and Application Groups (made only for the long-gone X firewall proxy) are not done, and
+  GenerateAuthorization's group must be None.
 
 ## 3. Clean-room rules
 
@@ -160,7 +164,7 @@ each request's effects are visible to everything after it. Therefore:
   one (at the position of the first; not merged across a map / unmap in between); a map followed by an unmap cancels out; only the last
   `CursorChanged` and `ClipboardChanged` are delivered; at most 32 `WindowManagerRequested` are delivered and the rest are dropped with a log
   line; at most one `BellRequested` (the loudest), at least 100 ms apart — a client looping over title changes, map / unmap or bells cannot
-  flood the host's UI thread.
+  flood the host's UI thread. `ServerGrabStalled` is queued as usual.
 - One **reader task** per connection (64 KB buffer) cuts complete requests by their length field and hands them to the
   loop; one **writer task** packs the messages the loop queued for that connection into one pooled buffer and writes it.
   The loop never blocks on a socket, so a slow client cannot stall the others. When a write fails (the peer is gone) the client is
@@ -206,8 +210,9 @@ each request's effects are visible to everything after it. Therefore:
 - During **GrabServer** the loop runs only the holder's requests; other clients' requests are parked as they are and
   replayed in order after the ungrab (through the ready queue, above). If the grab has been held for 10 seconds while others' requests are
   waiting, a line names the holder (with its connection label, e.g. `user@host:22`) and the number of waiting requests, and again every 60
-  seconds until it lets go; when the holder hangs, the host can call `BreakGrabs` or `DisconnectClient` by number (§6). A holder grabbing again
-  is a no-op.
+  seconds until it lets go; each time the host is also told through `ServerGrabStalled` (`XServerGrabStall`: the holder's number and
+  connection label, how long it has held the grab, how many requests are waiting) so it can prompt the user; with nobody waiting neither
+  happens. When the holder hangs, the host can call `BreakGrabs` or `DisconnectClient` by number (§6). A holder grabbing again is a no-op.
 - **While a synchronous grab freezes devices**, device events queue in a single list, pointer and keyboard in arrival order (host injection
   and XTEST queue alike); after release, one work item replays at most 64 of them and the rest go to the next work item — so client requests
   in between (the next AllowEvents) can get in. The queue holds at most 4096 events and, when full, decides by three classes: droppable ones
@@ -218,6 +223,17 @@ each request's effects are visible to everything after it. Therefore:
 - Damage is merged after a batch of work items and reported to the host once (not once per drawing request); each
   top-level accumulates at most 8 rectangles per batch and falls back to their bounding box beyond that — an exact
   union degrades to O(n²) over a batch of a few hundred requests.
+- **Clients take turns (2026-10-10)**: work taken from the channel is queued per client, keeping arrival order within a queue; host and timer
+  work has its own queue that goes first whenever it has items (injected input, configuration changes, due timers: small and time-sensitive,
+  and bounded by the real input rate, so clients cannot starve); clients take turns, one item each. Requests put back after being held
+  (GrabServer ended, a SYNC Await satisfied, an XTEST delay elapsed) are still taken first. The protocol only requires one client's requests
+  to run in order; ordering between clients was never guaranteed. Connection teardown is queued after that client's pending requests (a
+  client that sends requests and closes still has them take effect). Everything used to share one queue: with an indirect-GL glxgears
+  queueing over a thousand rendering requests, an xdpyinfo connecting afterwards waited 25 seconds; now under 1.
+- **Watchdog (2026-10-10)**: the execution thread records the item in progress (start time, client, opcode, sequence number); the timer thread
+  looks once a second and past `WatchdogThreshold` (5 seconds by default) logs a line `watchdog: client#3 (user@host:22) opcode 53 has been
+  running for 5 s; all clients are waiting` and counts `work.stalled`, once per item and without waiting for it to finish (the "slow work item"
+  line used to be logged only after the item finished, so a real hang left nothing).
 
 ## 6. Host interface (rootless)
 
@@ -227,8 +243,8 @@ The library defines the interface and the host implements it; notifications flow
 | Direction | Content |
 | --- | --- |
 | Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle"; all are made on the execution thread after the lock is released, coalesced per batch as in §5) | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction and being reparented away count as unmapping; **not sent one by one at shutdown** — the host closes its native windows itself when it stops the server); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: `Geometry` — position, size, `BorderWidth`, `NeedsPlacement`; `Title` — title, `ClassName`, `InstanceName`; `States`; `Icons`; `Shape` — bounding and input shapes; `Hints` — everything else). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` (see "Snapshot" below); clients' window-manager requests (`WindowManagerRequested`, a default interface method; see "Window-manager requests" below); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` / `TryReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB / glyph cursors — except glyphs of the `cursor` font that have a matching system cursor, for which the
-host picks the system cursor by shape — its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`) |
-| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed) |
+host picks the system cursor by shape — its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`); a client has held GrabServer too long while others wait for it (`ServerGrabStalled`, see §5; the default implementation does nothing); a tray icon docked / went away (`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`, with `SystemTray` on, see "System tray" in §7) |
+| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels, whether it holds the whole server with GrabServer — `HoldsServerGrab`) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed); local drag-and-drop (`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`: the server acts as the XDND source for the host; `IsDragAccepted` is the target's latest answer, see "Drag and drop" in §7) |
 
 **Lifecycle**: the execution thread starts at construction, so an instance must be disposed with `DisposeAsync` even if `StartAsync`
 was never called. `StartAsync`'s failure modes are in §7 (a taken display number throws `SocketException` (`AddressAlreadyInUse`); being
@@ -238,7 +254,8 @@ instance may try again. `StartAsync` and `DisposeAsync` are mutually exclusive, 
 shutdown are not rethrown; `Completion` completes when shutdown is done. `ServeAsync(stream, isLocal)` and `ServeAuthenticatedAsync(stream[, label])`
 throw invalid arguments (a null stream, a disposed server) on the spot rather than inside the returned task; `label` describes where the connection
 comes from (e.g. `user@host:22`), shows up in the log, `XClientInfo.Label` and the snapshot's `ClientLabel`, and is what "the same session" means
-when the clipboard follows the focus (§7).
+when the clipboard follows the focus (§7). With a third argument `trust` of `XClientTrust.Untrusted` the connection is an untrusted client
+("Trust levels" in §7); `XClientInfo.Trust` reports each client's level.
 
 **Handles**: an `XTopLevelWindow` is the same object from map until destruction (or until it is reparented away). It carries the server that
 issued it (`Server`; passing it to another server's methods throws `ArgumentException`) and `IsAlive` (false once the window is destroyed,
@@ -405,9 +422,10 @@ extra (the slack is not charged).
   ⚠️ A design-level caveat (not a defect): every SSH session with X11 forwarding shares this one trusted display — a compromised
   remote machine can, through its forwarding, see and operate X programs from other sessions (read window contents, log keystrokes,
   inject input). That is what trusted X11 forwarding means; do not enable X11 forwarding for remote machines you do not trust. What can be
-  tightened is under "Several sessions sharing one display" below. The library does not implement the SECURITY extension, so a remote `xauth`
-  cannot obtain an untrusted cookie: when the display comes from the built-in engine and the connection asks for untrusted mode, the host does
-  not set up X11 forwarding and prints one yellow line explaining why, with the two ways out (tick Trusted, or use an external X server).
+  tightened is under "Trust levels" and "Several sessions sharing one display" below; to separate sessions completely the host can give each
+  SSH session its own display ("One display per SSH session" below). Before 2026-10-10 the library had no SECURITY extension and the built-in
+  engine did not set up X11 forwarding at all for connections in untrusted mode; now untrusted mode forwards through the connector as usual and
+  the client that connects is untrusted.
 - **Listening and display numbers**:
   - A display number whose names are taken is not used at all: when the Linux abstract name is already bound by someone, something listens
     behind the socket file, a leftover socket file cannot be deleted (it belongs to another user, who could listen on it again at any time), or
@@ -432,7 +450,40 @@ extra (the slack is not charged).
     bind a more specific address with SO_REUSEADDR and take over local connections (cookie included). When the host decides whether "another X
     display is already in use", a listener behind `localhost:0` only counts if it is a process in the current user's session — on a terminal
     server it may be another user's VcXsrv.
-- **Several sessions sharing one display — what is tightened** (without introducing the SECURITY extension):
+- **Trust levels (SECURITY extension, 2026-10-10, xs_plan F2)**: based on the X Consortium *Security Extension Specification* 7.1 (error and
+  event numbering and the SecurityGenerateAuthorization request layout follow the xorgproto protocol headers — the spec's chapter 5 encoding table
+  lists the value-mask after the two strings, while what xauth actually sends matches the headers, with it in the fixed part).
+  - **The extension**: QueryVersion (1.0), GenerateAuthorization (MIT-MAGIC-COOKIE-1 only, a 16-byte random cookie; timeout defaults to 60 seconds,
+    trust-level to untrusted, group must be None, event-mask has only AuthorizationRevoked), RevokeAuthorization (clients connected with it are
+    disconnected too), the AuthorizationRevoked event; an authorization expires after timeout seconds without a connection; at most 256. Issued
+    cookies are checked when the client is registered (on the execution thread); a mismatch is refused as before.
+  - **Named by the host**: `ServeAuthenticatedAsync(stream, label, XClientTrust.Untrusted)` — an in-process connector need not issue a cookie
+    (this is how SSH's `ssh -X` comes in).
+  - **What an untrusted client is restricted to** (spec chapter 3): it can only name resources of untrusted clients — trusted clients' windows,
+    pixmaps, GCs… are treated as nonexistent (checked where requests resolve IDs; the server's internal lookups are unchanged); QueryTree /
+    GetGeometry / TranslateCoordinates are unrestricted. The root window (and the server's own windows) can be used only in the requests the spec
+    lists, plus RANDR, XINERAMA, XFIXES Select*Input and XIQueryPointer / XISelectEvents / XIGetSelectedEvents (toolkits send them on the root
+    window at startup, and a BadWindow makes Xlib's default error handler exit the program); on the root window only StructureNotify /
+    PropertyChange can be selected, and XI2 keeps only device / hierarchy / property changes; only the events ICCCM prescribes can be sent to the
+    root window. XTEST, MIT-SCREEN-SAVER, DPMS, X-Resource, Composite, MIT-SHM and SECURITY are invisible to it. When the keyboard is not its own
+    (by current focus, pointer, grabs and selections, keyboard events reach no untrusted client): QueryKeymap / KeymapNotify read all zeros,
+    GrabKeyboard and keyboard XIGrabDevice return AlreadyGrabbed, SetInputFocus has no effect, its passive keyboard grabs do not activate, and
+    key-caused XKB StateNotify is not sent to it. Changing the keymap, modifiers, keyboard and pointer controls, XKB / XI device settings, host
+    access control and KillClient(AllTemporary) return Access; GrabServer is ignored. CUT_BUFFER0–7 on the root window are hidden from it, and
+    its property changes on server windows are treated as no-ops (except the `_VELASHELL_*` atoms on the selection window that the server uses to
+    fetch the clipboard for the host — selections still work through the host); asking for a selection owned by a trusted client returns
+    property None; GetImage fills areas obscured by other windows with 0; a None background it sets is drawn black.
+  - `RestrictForwardedClients` stays: it is the middle tier "trusted, but no XTEST / raw keys / device hierarchy changes" for old programs that
+    misbehave when untrusted; untrusted clients get all three restrictions anyway.
+- **One display per SSH session (host, 2026-10-10, xs_plan F1 / decision Q5)**: on one display, trusted sessions can still see each other's
+  windows, read each other's clipboard and inject input through XTEST. With the host setting on, x11 channels that come in with a session object
+  go to that session's own `X11Server`: it listens on nothing (`ListenTcp = false`, `UnixSocketPath = ""`), is fed only through the connector,
+  has its own root window, selections and clipboard, and XTEST and raw events reach only programs of the same session. Channels of the same
+  session share one; it is created on the first channel and removed when the session disconnects or the server stops; at most 32 — beyond that a
+  new session's X programs cannot connect (they do not fall back to the shared display, which would silently undo the isolation the user asked
+  for). Local programs (`DISPLAY=:N`) and channels without a session still go to the shared one. The host gives each server its own
+  `IX11ServerHost` (windows, keymap, DPI and clipboard are kept apart).
+- **Several sessions sharing one display — what is tightened** (on one display, between trusted sessions):
   - **The clipboard follows the session with the keyboard focus** (`X11ServerOptions.ClipboardFollowsFocus`, on by default): the host's text can be
     read only by the client owning the focused top-level and by clients with the same connection label (`xclip` / `xsel` in the same SSH session;
     labels come from `ServeAuthenticatedAsync(stream, label)`), and only copies from that session reach the host; with no X window focused nobody
@@ -479,7 +530,8 @@ extra (the slack is not charged).
     through `_NET_WM_MOVERESIZE`; requests from anyone else are still passed to the host but leave button state and grabs alone.
     `_NET_MOVERESIZE_WINDOW` geometry is checked against X's ranges (§6).
   - **There is a way out of a hang**: the host's `BreakGrabs`, `DisconnectClient` by number and `KillTopLevelClient`; a GrabServer held too long
-    names its holder in the log (§5). At most 16 clients may keep their resources in Retain mode (any further one is treated as Destroy on
+    names its holder in the log and is reported to the host through `ServerGrabStalled` (§5). In the host (VelaShell) the way in is the flyout of the
+    title-bar X Server button — disconnect connected programs one by one, "Unstick" — and a toast with "Disconnect it" when a grab is held too long. At most 16 clients may keep their resources in Retain mode (any further one is treated as Destroy on
     disconnect, with a log line), and X-Resource lists them — a loop of "connect → RetainPermanent → disconnect" 254 times used to use up every
     client number, after which nobody could connect.
   - GLX: any client can use another's context as a share list and MakeCurrent / CopyContext / DestroyContext another's context — consistent with
@@ -693,9 +745,10 @@ extra (the slack is not charged).
   honestly reports version 1.1 with only the compatibility profile: an indirect context asking for a core profile from 3.2 on gets
   GLXBadProfileARB, a version above 1.1 GLXBadFBConfig, an undefined version or 1.x with forward-compatible BadMatch, and unknown attributes /
   flag bits BadValue.
-  - Not implemented: 3D textures, evaluators, the accumulation buffer, selection / feedback, mipmap LOD, stippling, pixel-transfer scale / bias
-    and PixelMap, DrawPixels and CopyPixels in depth / stencil / colour-index formats, point / line / polygon smoothing, Hint. The first use of
-    selection / feedback mode or evaluators in each context logs one line (GL behaviour is unchanged and no GL error is raised). Edge flags (the
+  - Not implemented: 3D textures, the accumulation buffer, feedback mode, mipmap LOD, pixel-transfer scale / bias and PixelMap, DrawPixels
+    and CopyPixels in depth / stencil / colour-index formats, point / line / polygon smoothing, Hint. The first use of feedback mode in each
+    context logs one line (GL behaviour is unchanged and no GL error is raised). Selection mode, line / polygon stippling and evaluators were
+    added on 2026-10-10 (see "Added on 2026-10-10" below). Edge flags (the
     GLU tessellator's interior diagonals are not drawn under PolygonMode(LINE)), GL_CLAMP with LINEAR blending in the border colour,
     GL_EXT_texture_object's vendor-private requests (11–14, handled as the core texture commands), PolygonOffsetEXT's bias in depth-range units,
     and GL_EXT_abgr as advertised in the extension string are all implemented.
@@ -726,7 +779,7 @@ extra (the slack is not charged).
     config for each of the two visuals, so indirect GLX can pick a single-buffered visual too.
 - **Present and SYNC queue and time things as the specifications say**:
   - Present: PresentPixmap waits for its wait-fence to trigger (or be destroyed), then picks the frame by target-msc / divisor / remainder — the
-    MSC is derived from the server clock at 60 Hz, a past target with divisor 0 means now, and with PresentOptionUST the three are converted from
+    MSC follows the frame clock the host reports (`NotifyHostFrame`, 2026-10-10; derived from the server clock at 60 Hz when the host does not report), a past target with divisor 0 means now, and with PresentOptionUST the three are converted from
     microseconds to frames; due presents are shown in request order, and earlier ones on the same window not yet shown complete with
     CompleteModeSkip, so old content never overwrites new. The pixmap is held until presented (the specification allows FreePixmap right after
     the request). An idle-fence / wait-fence that is not a fence gets SYNC's BadFence. Present's and DAMAGE's QueryVersion report the highest
@@ -751,6 +804,103 @@ extra (the slack is not charged).
   DestroyPointerBarrier accepts only pointer barriers. Extension cleanup hooks come in two kinds: connection closed (event selections, timers,
   waiting requests) and a client's resources destroyed (in Retain mode this comes later than the disconnect, when KillClient destroys the
   leftover resources).
+- **Added on 2026-10-10 (xs_plan F4–F28)**:
+  - **Committing text from the local input method (F5, first step)**: `InjectText(text)`. X programs only understand keycodes: each character
+    gets a free keycode whose keysym is changed to the character's Unicode keysym (protocol appendix A: Latin-1 is the code point itself, others
+    are code point + 0x01000000), then it is pressed and released, with clients getting MappingNotify and XKB MapNotify first; a character the
+    keymap already produces without modifiers is typed with that key. Changed keycodes are not changed back (clients only refetch the keymap
+    after MappingNotify), and typing the same character again changes nothing and sends no notification; only when free keycodes run out is the
+    least recently used one reused, never one used in the last 200 ms, and the remaining characters are typed a moment later. Newline types
+    Return and tab types Tab; other control characters are skipped; at most 4096 UTF-16 code units at a time. The XIM bridge (candidate window
+    and insertion point inside remote programs) is not done.
+  - **Smooth scrolling (F6)**: pointer devices gain two relative axes, Rel Horiz Scroll / Rel Vert Scroll, with matching ScrollClasses (XI 2.1,
+    increment 1.0 = one notch); `InjectScroll(window, x, y, dx, dy)` sends Motion and RawMotion with the scroll axes and emulates buttons 4–7 once
+    a full notch has accumulated (the XI2 copy carries PointerEmulated); conversely, wheel buttons from devices also give XI2 clients that use the
+    scroll axes one notch of scrolling.
+  - **HTML and images on the clipboard, the server as clipboard manager (F14 / F15)**: `XClipboardContent` (text, HTML, PNG); `SetClipboard(content)`
+    (`SetClipboardText` is its text-only case; images are capped at `MaxClipboardImageBytes`, 32 MB) and the `ClipboardContentChanged` callback (its
+    default implementation forwards text to `ClipboardChanged`). As owner the server lists only the formats it has in TARGETS; as requestor it asks for
+    TARGETS first, then text, `text/html` and `image/png` in turn, and hands them to the host together. With clipboard sync on it owns
+    CLIPBOARD_MANAGER (freedesktop Clipboard Manager Specification): SAVE_TARGETS is not answered until this clipboard has been fetched, succeeds
+    when it has been, and gets None when it cannot be saved; after the owner exits the server takes over on the host's behalf as before.
+  - **Pointer warps and confine-to handed to the host (F8)**: the `PointerWarped(rootX, rootY)` callback — reported only when the requesting client
+    holds the pointer at the time and is not a restricted forwarded program, and only the last one in a batch; `PointerConfinementChanged(area)`:
+    a pointer grab with confine-to reports that window's interior (root coordinates) when it starts and null when it ends.
+  - **Screensaver cooperation (F9)**: MIT-SCREEN-SAVER Suspend is counted per client (semantics from the libXss XScreenSaverSuspend(3) man page:
+    calls pair up, other clients cannot resume it, disconnecting cancels it); while any is suspended the `ScreenSaverSuspensionChanged(true)` callback
+    fires, false when all have resumed; ForceScreenSaver(Reset) calls back `ScreenSaverReset` at most every 5 seconds.
+  - **`_NET_WM_SYNC_REQUEST` (F10)**: when the host resizes a top-level that declares it and has a SYNC counter, the window gets the sync request
+    before the ConfigureNotify; while waiting `XTopLevelWindow.AwaitingRedraw` is true, and `TopLevelRedrawn` is called back when the client
+    raises the counter to that serial or after 300 ms.
+  - **Compositing manager (F11)**: `X11ServerOptions.CompositingManager` (off by default) owns `_NET_WM_CM_S0` when on, so GTK, Qt and Electron
+    use ARGB visuals for rounded corners, shadows and transparent windows. `ClientSideShadows` stays off by default (on Windows the transparent
+    shadow margin still catches the mouse).
+  - **X-Resource LocalClientPid (F28)**: clients connecting over the Unix socket record the peer pid (Linux via SO_PEERCRED, macOS via
+    LOCAL_PEERPID), and QueryClientIds returns it to requestors that are local clients themselves.
+  - **Metrics (F27)**: `XServerMetrics` exposes the meter name `VelaShell.XServer`: `clients.active`, `connections.refused` (reason: authorization,
+    too_many_clients, too_many_setups, bad_setup), `clients.disconnected` (killed, output_backlog), `protocol.errors` (code is the error name),
+    `work.duration` (a millisecond histogram, not recorded without a subscriber), `work.stalled`. The watchdog is in §5.
+  - **GLX multisampling and GLX_EXT_libglvnd (F22)**: two 4× multisampled double-buffered configs (24-bit `0x105`, 32-bit ARGB `0x106`) — direct
+    rendering is truly multisampled by the client's Mesa, while indirect contexts draw single-sampled on them and honestly report SAMPLE_BUFFERS 0;
+    `QueryServerString(GLX_VENDOR_NAMES_EXT)` reports `mesa`.
+  - **Indirect GL selection mode, stippling and evaluators (F23)**: the name stack and SelectBuffer, hit records for primitives taken as far as
+    clipping in selection mode (RenderMode returns −1 on overflow); LineStipple / PolygonStipple; Map1 / Map2, MapGrid, EvalCoord / EvalMesh /
+    EvalPoint, GetMap, AUTO_NORMAL (GLUT's teapot and GLU's NURBS draw).
+  - **Present follows the host's frame clock (F25)**: the host's compositor calls `NotifyHostFrame()` once per frame; the frame interval is the
+    shortest of the last 32 (clamped to 20–500 Hz), and PresentPixmap requests whose target frame has arrived complete right at that report; the
+    `FrameClockWanted(bool)` callback tells the host when per-frame reports are needed (NotifyMSC or queued PresentPixmap). There is one global frame
+    clock.
+  - **SIMD fast paths in RENDER (F24)**: solid-through-mask OVER, image OVER and the general path's Over / Add compute 4 pixels at a time with
+    `Vector128`, bit-identical to the scalar versions; bilinear sampling and the GL rasterizer are untouched.
+  - **Host: Unix socket only by default on Linux / macOS (F4, decision Q4)**: the "Also open the TCP port" setting is off by default; on Windows
+    it is always open (WSL and Cygwin programs only use TCP).
+- **One-window mode (`X11ServerOptions.Rootful`, off by default; see the 2026-10-10 entry in §10 for the decision)**: the whole root window is
+  handed to the host as one top-level through `X11Server.Screen` (its snapshot is at (0, 0) and as large as the root window), and the host opens
+  one native window showing the whole desktop; the other top-levels are no longer handed to the host (no `TopLevelMapped` and the like, and no
+  window-manager requests). The server stops acting as the window manager: it does not own `WM_S0`, does not write `_NET_SUPPORTED` /
+  `_NET_SUPPORTING_WM_CHECK` / the client lists / `_NET_WORKAREA`, leaves the root window's SubstructureRedirect to clients (BadAccess in
+  rootless mode), and EWMH requests sent to the root window are only delivered as usual to the window manager that selected it; nor is it the
+  XSETTINGS manager or the tray (`SystemTray` has no effect) — those belong to the remote desktop's own daemons and panel. Focus belongs to the
+  remote window manager (PointerRoot when there is none); the host window gaining or losing focus does not change the X focus.
+  - **Picture**: top-levels still have their own buffers and the drawing path is unchanged. At the end of each batch, before the lock is
+    released, the areas drawn on top-levels in that batch and the changes in the top-levels' mapping / position / size / shape / border and in
+    the root background are turned into screen areas (when only the stacking order changed, just the intersection of two overlapping windows
+    whose order flipped), and recomposed in the root window's buffer: first the root background (a pixmap tiled from the root origin, black when
+    there is none), then the mapped top-levels from bottom to top — border (a border pixmap tiled from the window's inner origin) and interior,
+    clipped by the bounding shape; depth-32 windows are composited with premultiplied over. Composed areas go to the host as
+    `TopLevelDamaged(screen, rects)`. GetImage on the root window returns the composed screen (background included).
+  - **Host actions**: pointer and drag-and-drop injection coordinates are root coordinates (the target is searched from the root down);
+    `ResizeTopLevel(screen, width, height)` makes the screen that large (one monitor covering it; clients get the root ConfigureNotify and RANDR
+    notifications); move, close, state changes, frame extents and focus do nothing on the screen handle. Cursors are always reported on the
+    screen handle.
+  - **Not done**: drawing on the root window itself (programs that draw straight onto the root, such as xroach) is not shown — only the
+    background is; effects a remote compositor (xfwm4 with compositing on) draws onto the Composite overlay window, such as shadows, are not
+    shown — the server composes the picture itself, so the windows are still visible.
+- **System tray (`X11ServerOptions.SystemTray`, off by default)**: when on, the server owns `_NET_SYSTEM_TRAY_S0` (owned by the server's own
+  selection window, which carries `_NET_SYSTEM_TRAY_ORIENTATION` = horizontal and `_NET_SYSTEM_TRAY_VISUAL` = the default visual) and acts as
+  the freedesktop System Tray Protocol 0.3 tray manager. On `SYSTEM_TRAY_REQUEST_DOCK` the server creates an embedder window (a server-owned
+  override-redirect top-level, `SystemTrayIconSize` on each side, 24 by default, placed at the bottom-right of the screen — programs pop their
+  menus at the icon's root coordinates), reparents the icon window into it per XEmbed 0.5 and fills it, maps it per the XEMBED_MAPPED bit of
+  `_XEMBED_INFO` (following that bit afterwards; old programs without the property are treated as wanting to be mapped) and sends
+  `XEMBED_EMBEDDED_NOTIFY` (data1 = the embedder, version 0). The embedder, when mapped, is not handed to the host as an ordinary top-level but
+  as `SystemTrayIconAdded(handle, name)` (the name is the icon's `_NET_WM_NAME`, else WM_NAME, else WM_CLASS): the host reads its pixels,
+  receives its damage and injects pointer input into it as usual. When the icon window is destroyed, reparented away by the program (the
+  spec's way of ending the protocol) or its program disconnects, the embedder goes away (`SystemTrayIconRemoved`). At most 64 icons; balloon
+  messages (BEGIN / CANCEL_MESSAGE) are accepted but not shown. It is off by default because with a tray present programs "close to tray", and
+  if the host does not show the icons those windows can no longer be found.
+- **Drag and drop (XDND, host → X)**: when local text or files are dragged onto an X window, the server acts as the freedesktop XDND version 5
+  **source** for the host (the source window is the server's own selection window). The host reports the position on every move; the server
+  walks up from the deepest window under the pointer to the first one with `XdndAware` (version ≥ 3, the lower of both sides is used) as the
+  target, and if it has a valid `XdndProxy` (the proxy's own `XdndProxy` points to itself) the messages go to the proxy. On a change of target
+  it sends `XdndLeave` to the old one and `XdndEnter` to the new one (with the more-than-three-types bit set, the target reads the source
+  window's `XdndTypeList`), then `XdndPosition` (root coordinates, server time, `XdndActionCopy`). After a position it waits for `XdndStatus`;
+  moves in the meantime keep only the latest, sent once the status arrives; `IsDragAccepted` is what the latest status said. On release it
+  reports the last position once more and waits for the last `XdndStatus` (at most 3 s, else `XdndLeave`): accepted means `XdndDrop`; not
+  accepted, or dropped where there is no target, means `XdndLeave`. The target fetches the data through `XdndSelection` (owned by the server,
+  shared display-wide): `TARGETS`, `TIMESTAMP` and the types the host supplied (the type is the target atom; `STRING` answers STRING, `TEXT`
+  answers UTF8_STRING), large data via INCR; before the drop only `TARGETS` can be answered. The data is dropped on `XdndFinished`, when the next
+  drag starts, or a minute after the drop. Drags between X programs use the core protocol only and do not involve this; dragging out of an X
+  program into a local one (X → host) is not done.
 - **Clipboard**: host → X, the server itself owns CLIPBOARD (and PRIMARY with `SyncPrimary`) and answers per ICCCM: TARGETS includes MULTIPLE
   (pairs converted one by one, a pair that cannot be converted gets its property written back as None) and COMPOUND_TEXT (Latin-1 as is,
   everything else in UTF-8 segments); the TEXT target answers STRING when the text fits in Latin-1 and UTF8_STRING otherwise; text over
@@ -875,7 +1025,9 @@ extra (the slack is not charged).
   (since 2026-09-26 it is handed to `ServeAuthenticatedAsync` and not checked again, see §7).
   Used in trusted mode only — untrusted mode needs `xauth` to reach a display and still goes over TCP (since 2026-10, untrusted mode
   with the built-in engine does not set up forwarding at all: the library has no SECURITY extension, so `xauth` cannot get an untrusted
-  cookie; see "Authorization" in §7). Added in 2026-10: the connector passes the SSH session's `user@host:port` as the connection label
+  cookie; see "Authorization" in §7; since 2026-10-10 untrusted mode goes through the connector too — the connector hands "untrusted" to the
+  server with the channel (`ServeAuthenticatedAsync(stream, label, XClientTrust.Untrusted)`) and no xauth runs, see "Trust levels" in §7).
+  Added in 2026-10: the connector passes the SSH session's `user@host:port` as the connection label
   to `ServeAuthenticatedAsync(stream, label)`; once the built-in engine has stopped (say, after switching to VcXsrv), x11 channels of
   existing sessions go over local TCP to whichever X server is running now instead of being refused. The server keeps listening
   on loopback TCP and the Unix socket, so other local X programs can connect with `DISPLAY=localhost:N` (since 2026-09-26 they
@@ -918,8 +1070,9 @@ extra (the slack is not charged).
   Verified: after `xmodmap`, `xkbcomp` dumps the four-level key while other keys keep two levels, and AltGr+q in xterm types `@`.
 - **M4 extension numbers** (continuing): MIT-SHM 147 (event 91 Completion, error 149 BadShmSeg), GLX 148 (event 92
   PbufferClobber, errors 150–162). GLX FBConfigs start at `0x101`, four of them: one single- and one double-buffered per
-  TrueColor visual, colour 8/8/8 (plus 8 bits of alpha on the ARGB visual), depth 24, stencil 8, no accumulation buffer and
-  no multisampling; GLX 1.2 visual configs have one entry per visual, using its double-buffered config.
+  TrueColor visual, colour 8/8/8 (plus 8 bits of alpha on the ARGB visual), depth 24, stencil 8, no accumulation buffer;
+  GLX 1.2 visual configs have one entry per visual, using its double-buffered config. Since 2026-10-10 there are also two 4×
+  multisampled double-buffered configs (`0x105` / `0x106`, see "Added on 2026-10-10"), six FBConfigs in all.
 - **Synchronous grabs replace "asynchronous only" (2026-09-24)**: M1 treated Sync modes as asynchronous; M4 implements real
   freezing — one freezer and one input queue per device, with host-injected and XTEST input queued while frozen; AllowEvents 0–7
   and XIAllowEvents release, single-step (SyncPointer / SyncKeyboard / SyncBoth) and replay (a replay skips passive grabs on
@@ -1130,6 +1283,35 @@ extra (the slack is not charged).
   when rewriting, and xauth recognises the lock file names we use and does not write while they exist.
   ⑥ **Still left**: closing an X popup menu when the user clicks a local window or the desktop (needs a global pointer hook); new features
   (per-session isolation, a UI for the X client list, WarpPointer, passing the screen saver on, a compositing manager, a tray, a one-window
-  mode…); on real machines, the last pixel column under fractional scaling, KeyUp for Command combinations on macOS, and the peer uid through
+  mode… — most done on 2026-10-10, see the 2026-10-10 entries at the end of this section); on real machines, the last pixel column under fractional scaling, KeyUp for Command combinations on macOS, and the peer uid through
   getpeereid on macOS / FreeBSD; extending the interop range to GTK3 / GTK4, browsers, Motif / Tk / Emacs, desktop sessions, the tray and fcitx5.
   All of these are recorded in the host repository's `feature-plan.md`, "H. Built-in X server".
+- **The X program list and force-quit UI (2026-10-10, xs_plan F3)**: the library only gained two things — `XClientInfo.HoldsServerGrab`, and the
+  host callback `ServerGrabStalled` when GrabServer is held too long (before, only a log line: neither the host nor the user knew whom to
+  disconnect). Like the other callbacks it goes through the deferred queue and is delivered after the pixel lock is released; the host's
+  `GetClientsAsync` has to go back to the execution thread, so VelaShell looks up which program it is on a separate task instead of waiting
+  inside the callback. The UI is in the host's "Interaction and UI specs" §4A.2: while the built-in engine runs, the title-bar X Server
+  button opens a flyout; an external VcXsrv cannot list its programs, so there the button still starts and stops it.
+- **One-window (rootful) mode (2026-10-10, xs_plan F13 / decision Q2)**: §2 used to state only the premise "rootless multi-window, the root
+  window is never drawn" without making the whole desktop a non-goal. A full remote desktop (xfce / MATE) or a graphical installer did not work
+  in rootless mode (a remote window manager cannot get SubstructureRedirect, desktop windows cover the local screen), while VcXsrv''s "One large
+  window" and MobaXterm''s Windowed mode are shapes users know, so it was added as an **optional mode**, rootless staying the default. The drawing
+  path is unchanged: top-levels keep their buffers and the server composes the whole screen in the root window''s buffer like an always-on
+  compositor (see "One-window mode" in §7); the window-manager role is handed over to the remote side entirely. Real-client case: twm takes
+  over, xterm gets framed and composed into the screen, zero protocol errors.
+- **Trust levels and one display per SSH session (2026-10-10, xs_plan F2 / F1, decision Q5)**: all forwarded sessions used to share one trusted
+  display, and untrusted `ssh -X` could not be set up with the built-in engine. Decision Q5 tightens this in two steps: first the SECURITY
+  extension''s untrusted level (a remote `xauth generate … untrusted` gets a restricted cookie, and the host''s connector can mark a channel
+  untrusted directly), then the host''s "one display per SSH session" — trusted sessions can only be kept apart on different displays.
+  XC-QUERY-SECURITY-1 and Application Groups are not done; one display per session is off by default and takes effect at the next start.
+  Real-client case: `xauth generate` issues an untrusted cookie, after which xdpyinfo sees no XTEST / SECURITY, `xwd -root` cannot grab the
+  screen, and xterm (core fonts and Xft), `xclock -render`, xlogo and indirect glxgears draw normally with zero protocol errors.
+- **What became of the draft''s remaining new features (2026-10-10, xs_plan F4–F30)**: F4, the first step of F5 (committing text from the local
+  input method), F6, F8–F11, F14, F15, F17, F18, the screenshot part of F20, F22, F25, F27 and F28 are done; F21, F26 and the create_context part of
+  F22 already existed. Partly done: F19 (each monitor already reports its DPI from its own scaling; integer upscaling needs one zoom factor for the
+  whole server and changes every root↔screen mapping in the host, too risky to verify only headlessly), F23 (feedback mode, mipmap LOD, PixelMap and
+  depth / stencil DrawPixels / CopyPixels are not done), F24 (bilinear sampling and the GL rasterizer untouched), F25 (one global frame clock, not per
+  monitor). Not done: F5''s second step, the XIM bridge (3–5 weeks); F7 pen pressure / touch / gestures (needs the master device''s classes switched on
+  SlaveSwitch, with no real toolkit to check against; XI 2.4 is not on the spec list); F20''s screen recording (needs an encoder); F29 WSL (no
+  environment to test); F30 MIT-SHM 1.2 (Linux-only fd passing that the TCP-based container setup cannot exercise). Defaults: local input method on,
+  source labels on, compositing manager off, the TCP port on Linux / macOS off (containers connecting over the network need to turn it on).

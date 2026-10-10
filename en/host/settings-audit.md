@@ -389,7 +389,7 @@ before this section existed get the defaults from `Normalize`.
 | --- | --- | --- | --- |
 | VcXsrv executable | empty = auto-detect | — | Tries Program Files, Scoop, then PATH; **a filled-in path is the only one used** — if it is missing that is reported as such, never silently swapped for another install |
 | Display number | Auto | `:N` | Auto = the first display nobody listens on, starting at :0; a fixed number that is taken fails before launching. Range :0–:15, clamped the same way by `Normalize` |
-| Window mode | Multiple windows | `-multiwindow` / (none) / `-nodecoration` / `-fullscreen` / `-rootless` | Unrecognized values fall back to multiple windows |
+| Window mode | Multiple windows | `-multiwindow` / (none) / `-nodecoration` / `-fullscreen` / `-rootless` | Unrecognized values fall back to multiple windows. Shared by both engines since 2026-10-10: on the built-in engine one large window / no title bar / fullscreen start it in one-window mode (the whole X desktop in one window, a remote window manager takes over), while multiple windows and rootless both give one window per program; takes effect the next time the X Server starts |
 | Enable clipboard | on | `-clipboard` / `-noclipboard` | |
 | Copy on selection | on (off by default since 2026-10, see the eleventh batch) | `-primary` / `-noprimary` | Only meaningful with the clipboard on; disabled and omitted from the command line otherwise |
 | Keyboard layout | Auto | `-xkblayout` | Shared by both engines. Auto = not passed to VcXsrv (it follows the Windows layout), and the built-in engine follows the system's current layout; a chosen layout is passed to VcXsrv as `-xkblayout` and the built-in engine uses the keymap tables shipped with the app |
@@ -419,10 +419,10 @@ lives in `AppSettings.XServer.Engine`; unrecognized values fall back to built-in
 | --- | --- | --- | --- |
 | Engine | Built-in | `builtin` / `vcxsrv` | Only shown on Windows; other platforms only have the built-in one, and a `vcxsrv` value (e.g. synced from Windows) is treated as built-in |
 
-- **Shared by both engines**: display number, enable clipboard, copy on selection, keyboard layout, start with VelaShell, start automatically
+- **Shared by both engines**: display number, window mode (since 2026-10-10), enable clipboard, copy on selection, keyboard layout, start with VelaShell, start automatically
   for X11 forwarding. On the built-in engine the two clipboard switches map to the server's CLIPBOARD / PRIMARY sync (since 2026-10
   the built-in engine also exchanges only with the session that has the keyboard focus, see the eleventh batch).
-- **VcXsrv-only**, shown only when VcXsrv is selected: program location, window mode, keyboard model, capture special
+- **VcXsrv-only**, shown only when VcXsrv is selected: program location, keyboard model, capture special
   keys, native OpenGL, disable access control, additional arguments and the command-line preview, tray icon. On Windows the
   built-in engine follows the system keyboard layout and needs no configuration.
 - The “stay out of it” condition of “Start automatically for X11 forwarding” becomes: another X server is already in use —
@@ -527,4 +527,27 @@ Changed together with the X Server's second library-wide review. Library behavio
   share one display — they can see each other's windows, read the clipboard and send input; the built-in X Server and most X servers on Windows
   support only trusted forwarding, and untrusted mode needs an external X server with the SECURITY extension plus a local `xauth`. When the
   display comes from the built-in X Server and the connection asks for untrusted mode, forwarding is not set up and a yellow line at the top of
-  the terminal explains why, with two ways out (tick Trusted, or use an external X server).
+  the terminal explains why, with two ways out (tick Trusted, or use an external X server). Since 2026-10-10 the built-in X Server supports
+  both (an untrusted channel connects as an untrusted client) and that yellow line is gone; the hint is rewritten again to explain what each
+  mode means — with an external X server untrusted mode still needs the SECURITY extension and a local `xauth`, and a few old programs do not
+  work correctly when untrusted.
+
+### 2026-10-10 Twelfth batch (X Server: the draft''s new features)
+
+Added with the built-in X server''s new features (`xs_plan` F1–F30). Library behaviour: [X Server architecture](../xserver/design/architecture.md) §7
+("Trust levels", "One display per SSH session", "One-window mode", "Added on 2026-10-10") and §10; interaction: the X Server part of
+[interaction-and-ui-specs.md](interaction-and-ui-specs.md); symptoms and what to do: [X Server troubleshooting](../xserver/troubleshooting.md).
+All apply to the built-in engine only (except "Window mode", which both engines share) and take effect the next time the X Server starts.
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Window mode | Multiple windows | The existing five (`XServer.WindowMode`) | Used to affect VcXsrv only; now shared by both engines: on the built-in engine one large window / no title bar / fullscreen start it in one-window mode (the whole X desktop in one window, a remote window manager takes over), while multiple windows and rootless both give one window per program |
+| One display per SSH session | off | on / off (`XServer.DisplayPerSession`) | X programs from different SSH sessions get separate displays: they cannot see each other''s windows, read each other''s keyboard or clipboard, or inject input; X programs on this computer keep using the shared display; each session costs a little memory and a thread |
+| Use this computer''s input method in X windows | **on** | on / off (`XServer.UseHostInputMethod`) | Text composed by the local input method is typed into X programs directly (no fcitx / ibus needed on the server); off sends keys to the remote side as they are, so its own input method works. This partly reverses the earlier "no XIM" decision — only the "commit" step is done, the XIM bridge still is not |
+| Show where X windows come from | **on** | on / off (`XServer.ShowWindowSource`) | Titles of windows forwarded over SSH (also the taskbar text) read "user@host:22 — title", with the source first so nothing the remote side puts in the title can hide it; programs connected locally are not labelled |
+| Transparent X windows | off | on / off (`XServer.CompositingManager`) | The server acts as compositing manager so GTK''s rounded corners and shadows and Electron''s transparent windows get alpha. Off by default: windows with alpha cost the system an extra compositing layer, not yet measured on real machines |
+| Also listen on a TCP port | off | on / off (`XServer.ListenTcpOnUnix`) | Only shown on Linux / macOS: by default only the Unix socket is open, and container programs connecting over the network need this on. On Windows the port is always open (WSL and Cygwin programs only use TCP) and the setting is not shown |
+
+- **Why these defaults**: the input method and source labels are on — without the former CJK users cannot type in remote programs, the latter guards
+  against impersonation; the compositing manager is off (cost not measured); the TCP port being off on Linux / macOS is a behaviour change: loopback
+  TCP used to be always open, and on those platforms that port was just one more way in for other local processes and users.
