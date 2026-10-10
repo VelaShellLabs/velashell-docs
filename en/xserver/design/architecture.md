@@ -63,7 +63,12 @@ The same discipline as `VelaShell.Ssh` (see `src/VelaShell.XServer/AGENTS.md` in
    *X Damage Extension*, *Composite Extension*, *Double Buffer Extension*, *The Present Extension*, *MIT-SCREEN-SAVER*,
    *DPMS*, *X-Resource*, *Generic Event Extension*, *The MIT Shared Memory Extension* 1.1, and XINERAMA — which has no
    standalone specification document, so its wire format follows the protocol definitions X.Org publishes in panoramiXproto),
-   ICCCM, EWMH, freedesktop.org's XSETTINGS specification, and the X Consortium's *Compound Text Encoding* (COMPOUND_TEXT
+   ICCCM, EWMH, freedesktop.org's XSETTINGS specification, freedesktop's XDND protocol version 5 (both directions of drag and drop: the host as
+   the source dragging into X windows, and — through the root-window `XdndProxy` convention of version 4 on — taking drags out of X programs),
+   the X Consortium's *The Input Method Protocol* 1.0 and *The XIM Transport Specification* 0.1 (the XIM input method server, `Server/XimServer.cs`;
+   the two documents' prose and tables contradict each other on whose window a long packet is written to and which format the ClientMessage
+   announcing it uses — the tables in Appendix D of the Input Method Protocol win; the XIMStyle bits and XN* attribute names come from chapter 13
+   of *Xlib - C Language X Interface*), and the X Consortium's *Compound Text Encoding* (COMPOUND_TEXT
    encoding and decoding, `Protocol/XText.cs`); GLX follows Khronos' *OpenGL Graphics with the X Window System*
    1.4, the *GLX Extensions for OpenGL Protocol Specification* 1.3 (the encoding), *The OpenGL Graphics System* 1.5 (GL
    semantics for indirect rendering) and the GLX_ARB_create_context / GLX_ARB_create_context_profile extension specifications
@@ -243,8 +248,8 @@ The library defines the interface and the host implements it; notifications flow
 | Direction | Content |
 | --- | --- |
 | Library → host (`IX11ServerHost`; callbacks are all named "subject + past participle"; all are made on the execution thread after the lock is released, coalesced per batch as in §5) | Top-level window mapped / unmapped (`TopLevelMapped` / `TopLevelUnmapped`; destruction and being reparented away count as unmapping; **not sent one by one at shutdown** — the host closes its native windows itself when it stops the server); the snapshot changed (`TopLevelChanged`, with `XTopLevelChanges` saying which groups changed: `Geometry` — position, size, `BorderWidth`, `NeedsPlacement`; `Title` — title, `ClassName`, `InstanceName`; `States`; `Icons`; `Shape` — bounding and input shapes; `Hints` — everything else). A window's properties live in the immutable snapshot `XTopLevelWindow.Snapshot` (see "Snapshot" below); clients' window-manager requests (`WindowManagerRequested`, a default interface method; see "Window-manager requests" below); damage rectangles (`TopLevelDamaged`; the host then reads just those rectangles through `XTopLevelWindow.ReadPixels` / `TryReadPixels` under the pixel lock, straight into its own bitmaps; `CopyPixels` copies the whole window, for tests and diagnostics); the cursor (`CursorChanged`, an `XCursor`: a semantic shape `XCursorShape`, plus an `XCursorImage` for bitmap / ARGB / glyph cursors — except glyphs of the `cursor` font that have a matching system cursor, for which the
-host picks the system cursor by shape — its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`); a client has held GrabServer too long while others wait for it (`ServerGrabStalled`, see §5; the default implementation does nothing); a tray icon docked / went away (`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`, with `SystemTray` on, see "System tray" in §7) |
-| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels, whether it holds the whole server with GrabServer — `HoldsServerGrab`) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed); local drag-and-drop (`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`: the server acts as the XDND source for the host; `IsDragAccepted` is the target's latest answer, see "Drag and drop" in §7) |
+host picks the system cursor by shape — its pixels a read-only `ReadOnlyMemory<uint>`); bell (`BellRequested`, the 0–100 volume computed from the base volume as the protocol specifies; 0 means silent — `xset b off`, Bell −100); an X client copied text (`ClipboardChanged`); a client has held GrabServer too long while others wait for it (`ServerGrabStalled`, see §5; the default implementation does nothing); a tray icon docked / went away (`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`, with `SystemTray` on, see "System tray" in §7); the XIM input context taking the host input method's input changed or its insertion point moved (`InputMethodFocusChanged(XInputMethodFocus?)`: its top-level, whether the program draws the preedit, the insertion point; null = the focused program does not use XIM. With `InputMethodName` set; only the last one per batch, see "The XIM bridge for the host input method" in §7); an X program dragged something outside every X window and the data has been fetched (`OutgoingDragStarted(XOutgoingDrag)`: URIs, text, the dragging program's connection label, root coordinates), and that drag ended on the X side before the host reported back (`OutgoingDragEnded`; with `AcceptOutgoingDrags` on, see "Dragging out" in §7) |
+| Host → library (`X11Server` methods; windows are named by their `XTopLevelWindow` handle; invalid arguments throw on the spot, a window that is already gone is silently ignored) | Input, `Inject*`: pointer motion / buttons (content-area coordinates, checked against X's 16-bit range — out of range throws `ArgumentOutOfRangeException`; the wheel as buttons 4/5, 6 and up are horizontal wheel and side buttons; a release for a button X does not consider pressed is not delivered, while a release for a window that is already gone still takes effect), pointer leaving (the last position is kept, the pointer counts as on the root with child None), keys (`InjectKey(keycode, pressed, repeat)`, X keycodes; `repeat` marks the host's auto-repeat, see §7); activity in the host's own UI (`NoteUserActivity`: resets the idle time without producing input events, queuing at most one work item per 250 ms); window-manager actions (names containing `TopLevel`): focus (`FocusTopLevel`, null = no focus; it also raises the window above the other normal top-levels in X and advances the last-focus-change time), the user moved / resized the native window (`MoveTopLevel` / `ResizeTopLevel`; the library updates geometry, sends a real ConfigureNotify followed by ICCCM's synthetic one, and Expose), close button (`CloseTopLevel`: ClientMessage when `WM_DELETE_WINDOW` is advertised — with a ping when `_NET_WM_PING` is too — otherwise the client is disconnected; ignored for override-redirect windows), force quit (`KillTopLevelClient`, KillClient semantics, taking the client's other windows with it), window states (`SetTopLevelStates` replaces the whole set; `ChangeTopLevelStates(window, add, remove)` changes only the given bits and keeps the rest, throwing on the spot when `add` and `remove` overlap; both write `_NET_WM_STATE` and `WM_STATE`, and `Focused` is maintained by the server) and frame extents (`SetTopLevelFrameExtents`, written to `_NET_FRAME_EXTENTS`); the host's environment changed (`Set*` without `TopLevel`): the keymap (`SetKeymap`, see §7), monitor layout (`SetScreenLayout`, sends RANDR events), DPI and scale (`SetDisplayScale`, updates XSETTINGS and replaces only the `Xft.*` entries in RESOURCE_MANAGER), lock keys (`SetLockState(capsLock, numLock)`: no synthesized key presses, clients get an XKB StateNotify), the system clipboard has new text (`SetClipboardText`; more than `X11Server.MaxClipboardBytes` (16 MB) of UTF-8 throws `ArgumentOutOfRangeException` on the spot); recovering from a hang (`BreakGrabs`: releases every pointer / keyboard grab and thaws the devices, releases GrabServer, reattaches floating slave devices to the virtual core devices; clients get the usual Ungrab-mode events and HierarchyChanged); the client list (`GetClientsAsync` → `XClientInfo`: number, connection label, whether it disconnected in Retain mode, resource count, accounted memory, mapped top-levels, whether it holds the whole server with GrabServer — `HoldsServerGrab`) and disconnecting by number (`DisconnectClient(int)`; for a client that disconnected in Retain mode, its leftover resources are destroyed); local drag-and-drop (`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`: the server acts as the XDND source for the host; `IsDragAccepted` is the target's latest answer, see "Drag and drop" in §7); host input method commits and preedit (`InjectText(text)`: when the focused program is connected over XIM the whole run goes as XIM_COMMIT, otherwise keycodes are borrowed; `InjectPreedit(text, caret)`: an on-the-spot program draws it in its own input box through XIM's preedit callbacks, otherwise it is ignored, see §7); the host's answers to something the server handed it (`Complete*`, the first argument being that thing): whether the local side dropped what an X program dragged out (`CompleteOutgoingDrag(drag, dropped)`, called before the released button is injected back, see "Dragging out" in §7) |
 
 **Lifecycle**: the execution thread starts at construction, so an instance must be disposed with `DisposeAsync` even if `StartAsync`
 was never called. `StartAsync`'s failure modes are in §7 (a taken display number throws `SocketException` (`AddressAlreadyInUse`); being
@@ -831,11 +836,66 @@ extra (the slack is not charged).
       show those keycodes as NoSymbol to them; only keycodes used while typing into an untrusted program are revealed (with a notification sent
       to untrusted clients only).
     - Newline (CR LF counts once) types Return and tab types Tab; other control characters are skipped; at most 4096 UTF-16 code units at a time.
-      The XIM bridge (candidate window and insertion point inside remote programs) is not done.
+      When the focused program is connected over XIM, no keycodes are borrowed and the whole run goes as XIM_COMMIT (next item); this is decided when
+      the run reaches the head of the queue, so earlier text still waiting for keycodes is typed first.
     - Before the 2026-10-10 review: one notification per new character; a keycode was reused after 200 ms (over a slow link, for a run longer than
       the free keycodes, the keycode had already been changed to a later character when the client refetched the keymap for an earlier one); host
       keys pressed while it waited landed in the middle of the earlier text; borrowed keys were derived as ONE_LEVEL and uppercased under CapsLock;
       untrusted clients got the notifications and could read the keysyms.
+  - **The XIM bridge for the host input method (F5 step two, decision Q1)**: with `X11ServerOptions.InputMethodName` set (the host passes
+    `velashell`), the server is an XIM input method server.
+    - **Preconnection** (The Input Method Protocol, "Default Preconnection Convention"): it owns the selection `@server=name` (the owner being a
+      window of the server's own) and adds that atom to the root window's `XIM_SERVERS` (existing entries kept); the `LOCALES` target answers
+      `@locale=` with a long list (C, POSIX, every ISO 639-1 language code, common language_territory names with and without `.UTF-8`) — committed
+      text is delivered in the negotiated encoding regardless of the program's locale, so everything is accepted; `TRANSPORT` answers
+      `@transport=X/`. Both properties have the target atom itself as their type. The `LOCALES` / `TRANSPORT` atoms are created when XIM is turned
+      on: Xlib first checks with an only-if-exists InternAtom whether they exist, and if not assumes there is no input method server (the interop
+      case caught this — xterm never connected — and unit tests could not have).
+    - **X transport** (The XIM Transport Specification): the program sends `_XIM_XCONNECT` (format 32) to the selection owner window; the server
+      creates a server communication window for the connection and answers `_XIM_XCONNECT`: that window, transport version 0.2, dividing size 20.
+      From then on, packets of up to 20 bytes go as one `_XIM_PROTOCOL` (format 8, zero-padded); longer ones are written as a property (type STRING,
+      format 8) on the receiver's communication window and announced with a format-32 `_XIM_PROTOCOL` carrying the length and the property name,
+      which the receiver deletes as it reads; multiple ClientMessages (`_XIM_MOREDATA` … `_XIM_PROTOCOL`) are accepted too. The two documents'
+      prose and tables disagree (the prose says the sender's own window, tables 1.7 / D.6 say the IMS window; table 1.8 says format 8 yet uses
+      data.l); the tables in Appendix D of the Input Method Protocol win, and on reading the sender's window is checked as well. The server writes
+      properties on a program's window rotating through 64 names, moving on when the previous one is still unread. Untrusted clients can use it:
+      writing properties on the server communication window and sending ClientMessages to XIM windows are not stopped by SECURITY (each window
+      belongs to that one connection).
+    - **Protocol**: XIM_CONNECT (its byte order sets the connection's; no authentication), OPEN (answers every IM / IC attribute: the IM only has
+      `queryInputStyle`; the IC has `inputStyle`, `clientWindow`, `focusWindow`, `filterEvents`, `preeditAttributes` / `statusAttributes`
+      (nested), `spotLocation`, `lineSpace`, `fontSet`, `area`, `areaNeeded`, colors and cursor, `separatorofNestedList`, `resetState`,
+      `preeditState`), ENCODING_NEGOTIATION (COMPOUND_TEXT when listed, else UTF-8, else −1), QUERY_EXTENSION (no extensions), GET / SET_IM_VALUES,
+      CREATE / DESTROY_IC, SET / GET_IC_VALUES (a nested level runs to the separator), SET / UNSET_IC_FOCUS, RESET_IC, SYNC, TRIGGER_NOTIFY, CLOSE,
+      DISCONNECT; anything unknown — or a first packet that is not CONNECT — answers XIM_ERROR BadProtocol. Supported styles: XIMPreeditCallbacks
+      (on-the-spot, with StatusNothing or StatusCallbacks), XIMPreeditPosition (over-the-spot), XIMPreeditNothing (root-window style),
+      XIMPreeditNone; Area (off-the-spot — it needs geometry negotiation and the host cannot draw into the program's window) is not supported and
+      CREATE_IC answers BadStyle. No status area is drawn.
+    - **Keys do not go through XIM**: as soon as an input context exists the server sends XIM_SET_EVENT_MASK with both the forward and the
+      synchronous mask 0, and `filterEvents` answers KeyPressMask: keys are interpreted by the program with its own keymap, and composition happens
+      on the host (the local input method swallows the composing keys locally) — forwarding keys to the server and back over SSH would add a
+      round trip per key. Should a program forward events anyway, they are sent straight back, with SYNC_REPLY when synchronous.
+    - **The input context taking input**: the one that reported focus in the top-level holding the keyboard focus (with PointerRoot, the top-level
+      under the pointer), the last to report when several did; re-chosen when the X focus changes, a program sets / unsets focus, changes the
+      insertion point, creates / destroys an input context, or a communication or focus window is destroyed. The `XInputMethodFocus` reported to
+      the host: its top-level (the screen window in single-window mode), `ClientDrawsPreedit` (the style includes XIMPreeditCallbacks), `Cursor`
+      (XNSpotLocation is the baseline origin of the preedit's first character, turned into a bar 1 wide and one line tall in the top-level's inner
+      coordinates: the line height is the program's XNLineSpace or, without it, estimated from the DPI — 16 at 96 dpi; the top edge is 80 % of a
+      line above the baseline; null when the program reported no insertion point). Equal values are not reported twice.
+    - **Commit**: each visible run of `InjectText` goes to the input context taking input as XIM_COMMIT (XLookupChars, not synchronous) in the
+      negotiated encoding — with COMPOUND_TEXT, Latin-1 as is and everything else in UTF-8 segments (`ESC % G … ESC % @`); newline and tab are still
+      typed as keys (Return / Tab are already in the keymap), other control characters skipped. The program's preedit is erased first.
+    - **Preedit**: `InjectPreedit(text, caret)` goes only to an on-the-spot input context: XIM_PREEDIT_START when nothing is shown yet, then
+      XIM_PREEDIT_DRAW (caret, chg_first and chg_length counted in characters — Unicode code points — replacing the whole previous run; one
+      XIMUnderline per character); an empty string sends a DRAW deleting the whole run (no string | no feedback), then XIM_PREEDIT_DONE. It is also
+      cleared when the input context taking input changes, unsets focus, or on RESET_IC; RESET_IC answers an empty preedit (the host input method
+      is still composing on its own).
+    - **Coverage**: Xlib XIM clients — xterm, Emacs, Java (AWT / Swing), Tk, Motif, and programs using GTK 2/3's xim input module (Firefox and
+      Chromium follow GTK); the server puts `Gtk/IMModule = xim` in XSETTINGS, so GTK 2/3 programs without `GTK_IM_MODULE` use it (in single-window
+      mode the server is not the XSETTINGS manager and this entry is absent). Qt 5 / 6 and GTK 4 have no XIM and still get commits through borrowed
+      keycodes. Programs must start with `XMODIFIERS=@im=velashell` — Xlib looks for an input method server only when `@im=` is set and otherwise
+      does its own compose handling; the host sets it in its silent post-connect injection (see the host repository's `plan.md`).
+    - Limits: 256 XIM connections, 1024 input contexts per connection; a packet assembled from multiple ClientMessages may grow up to the XIM
+      packet length limit (about 256 KB) — beyond that the connection is dropped as garbage.
   - **Smooth scrolling (F6)**: pointer devices gain two relative axes, Rel Horiz Scroll / Rel Vert Scroll, with matching ScrollClasses (XI 2.1,
     increment 1.0 = one notch); `InjectScroll(window, x, y, dx, dy)` sends Motion and RawMotion with the scroll axes and emulates buttons 4–7 once
     a full notch has accumulated (the XI2 copy carries PointerEmulated); conversely, wheel buttons from devices also give XI2 clients that use the
@@ -937,7 +997,38 @@ extra (the slack is not charged).
   shared display-wide): `TARGETS`, `TIMESTAMP` and the types the host supplied (the type is the target atom; `STRING` answers STRING, `TEXT`
   answers UTF8_STRING), large data via INCR; before the drop only `TARGETS` can be answered. The data is dropped on `XdndFinished`, when the next
   drag starts, or a minute after the drop. Drags between X programs use the core protocol only and do not involve this; dragging out of an X
-  program into a local one (X → host) is not done.
+  program into a local one is the next item.
+- **Dragging out (XDND, X → host)**: `X11ServerOptions.AcceptOutgoingDrags` (the host turns it on in multi-window mode; in single-window mode the
+  root window belongs to the remote desktop and it is off).
+  - **Where the target is**: per the root-window convention of version 4 on, the root window's `XdndProxy` points at a window of the server's own
+    (whose `XdndProxy` points at itself, with `XdndAware` = 5); when the pointer is dragged outside every X window (rootless, that is the local
+    desktop or a local program), sources that look at the root window's `XdndProxy` (GTK and the like) send their messages to the proxy, with the
+    root window in the window field. Java's AWT only looks for a target on "the child of the root window under the pointer" (with an empty
+    MotionNotify child it does not look at all), so when an X program takes `XdndSelection` (starts a drag) the server slips the proxy window in
+    as the bottom child of the root window covering all of it, with `WM_STATE` (Java only looks for `XdndAware` on such top-levels): the empty
+    area then has a top-level taking drops, with the real X windows still above it. It is slipped in and out silently (no CreateNotify /
+    MapNotify) and only exists during the drag — from one second on it checks every half second and is removed once the `XdndSelection` owner
+    no longer holds the pointer and no drag-out is in progress; sources build their window cache when the drag starts, do not see it, and still
+    find the same proxy through the root window.
+  - **Flow**: `XdndEnter` records the source window, version and types (more than three: the source window's `XdndTypeList`); every
+    `XdndPosition` gets an `XdndStatus` — accepted when the types include `text/uri-list` or text (UTF8_STRING, `text/plain;charset=utf-8`,
+    COMPOUND_TEXT, STRING, `text/plain`, TEXT), the action always `XdndActionCopy` (the local side gets a copy; the remote original is never
+    treated as moved and deleted), an empty rectangle (report on every move). On the first acceptance the server asks the `XdndSelection` owner
+    for the data with that `XdndPosition`'s timestamp (the protocol allows fetching during the drag): the URI list when offered, plus the first
+    text type offered, through the clipboard's selection fetching (10-second step timeouts, INCR, ending when the owner leaves). It then parses
+    the URIs (RFC 2483: comment and empty lines removed) and the text (decoded by type) and hands them to the host through
+    `OutgoingDragStarted(XOutgoingDrag)`, with the source program's connection label (for the host to find the SSH session and fetch files) and
+    root coordinates; when nothing came back, later `XdndStatus` messages refuse.
+  - **Result**: when the host's local drag-and-drop ends it calls `CompleteOutgoingDrag(drag, dropped)` and **then** injects the released button —
+    the X program's following `XdndDrop` gets an `XdndFinished` from that result (version 5: bit 0 of l1 "accepted and done", l2
+    `XdndActionCopy`, or None when not dropped). Once the host says cancelled, later `XdndPosition` messages refuse. Before the host reports back,
+    `XdndLeave` (the pointer came back into an X window), `XdndDrop` (the user released before the local drag started — answered "not
+    accepted") and the source window being destroyed all report `OutgoingDragEnded`, and the host does not start anything. A result for an old
+    drag does not count for a new one (matched by the `XOutgoingDrag` object).
+  - Real-client case: Swing's drag-and-drop dragged outside the X windows finds the slipped-in proxy, the text reaches the host, and after the
+    host says dropped `exportDone` reports COPY. OpenJDK 17, after a successful `XdndFinished`, sends one ChangeWindowAttributes for window 0 while
+    cleaning up (BadWindow 0x0); compared against Swing dragging text into its own text field (which never touches the server's proxy) — same
+    error, unrelated to the server, and AWT swallows it.
 - **Clipboard**: host → X, the server itself owns CLIPBOARD (and PRIMARY with `SyncPrimary`) and answers per ICCCM: TARGETS includes MULTIPLE
   (pairs converted one by one, a pair that cannot be converted gets its property written back as None) and COMPOUND_TEXT (Latin-1 as is,
   everything else in UTF-8 segments); the TEXT target answers STRING when the text fits in Latin-1 and UTF8_STRING otherwise; text over
@@ -971,7 +1062,12 @@ extra (the slack is not charged).
   (the `velashell-xclients` image: x11-apps, xterm, xdotool, xinput, mesa-utils and more, plus default-jdk — the Swing cases run
   straight from source with `java X.java` to check how Java judges the window manager); the tests start the server locally, let real
   clients in the container connect via `host.docker.internal:N`, save top-level pixels as PNG for humans and make coarse assertions
-  (non-background pixels). Rebuild the image after changing its Dockerfile.
+  (non-background pixels). Rebuild the image after changing its Dockerfile. XIM and dragging out each have real-client cases: xterm under
+  `XMODIFIERS=@im=velashell` connects over XIM and Chinese committed by the host reaches the shell's `read` (over-the-spot, insertion point
+  reported); a Swing text field connects on-the-spot, gets the preedit to draw, and holds exactly the two committed characters afterwards; Swing
+  drags text out of the X windows and, once the host drops it, `exportDone` reports COPY. The XIM protocol details (three transports, byte orders,
+  nested attributes, errors) also have byte-level unit tests (`XimTests`, the test client playing the Xlib side); drag-out flow control and
+  cleanup are in `OutgoingDragTests`.
 - When the specification and the implementation disagree, **the specification wins**: fix the implementation and
   record it in §10.
 
@@ -1367,3 +1463,17 @@ extra (the slack is not charged).
   forwarding is served instead of failing to start. ⑤ Host-side fixes (per-session displays get all host settings, closing one session's screen
   window closes only that display, "show where X windows come from" applies immediately, the display address follows the actual listeners) are
   in the host repository's `plan.md`.
+- **The XIM bridge for the host input method and dragging out (2026-10-10, xs_plan F5 step two / decision Q1, the other half of F16)**:
+  ① XIM — the server itself is the XIM input method server rather than bridging to a remote fcitx / ibus: the remote host usually has neither,
+  while the host has the local input method at hand. Only the X transport (built into Xlib, no extra port); keys are not forwarded over XIM
+  (forward mask 0), composition stays local and only committed text and the preedit travel, so typing over a slow link gains no round trip.
+  Only on-the-spot, over-the-spot and root-window styles: off-the-spot would need the host to draw a status and preedit area inside the
+  program's window, which it cannot. Programs must start under `XMODIFIERS=@im=velashell` — sshd does not accept that variable's env request by
+  default, so the host sets it in the silent post-connect injection (an existing value is kept). Interop caught one problem unit tests could not:
+  Xlib checks with an only-if-exists InternAtom whether `LOCALES` exists, so the server has to create it first. Qt 5 / 6 and GTK 4 have no XIM
+  and keep getting commits through borrowed keycodes.
+  ② Dragging out — the root-window `XdndProxy` convention of XDND version 4 on, so there is no guessing whether a local window is under the
+  pointer: whatever lands outside the X windows goes to the host. Java ignores the root window's `XdndProxy`, so during a drag the proxy window is
+  slipped in at the bottom with `WM_STATE`, without structure events and only while the source holds the pointer. The action is always copy.
+  The data is fetched on the X side (during the drag, as the protocol allows), so the host gets URIs and text; fetching remote files and starting
+  the local drag-and-drop are up to the host (see the host repository's `plan.md`).
