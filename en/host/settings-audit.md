@@ -158,7 +158,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | General | Data Management | Import settings, export settings, clear recent connections, restore defaults | Restore defaults must require confirmation; export scope must be accurate |
 | General | Application Updates | Check for updates at startup, update channel, download automatically | Hide the whole group until the feature is implemented |
 | Appearance | Application Theme | Theme mode, theme color (`AccentColor`, factory empty = follow theme), interface font, interface font size | Keep real-time preview; "Follow theme" sits in front of the swatches; any other color comes from the color picker (interaction-and-ui-specs §14.3) |
-| Appearance | Window and Layout | Window opacity, show menu bar, sidebar position, show tabs in multiple rows (`Appearance.MultiRowTabs`, off by default) | Hide tab bar position until implemented; multiple rows is the same value as the check item of the same name in the tab right-click menu |
+| Appearance | Window and Layout | Window opacity, show menu bar, sidebar position, show tabs in multiple rows (`Appearance.MultiRowTabs`, off by default), splash screen (`Appearance.SplashStyle`, Classic out of the box; Windows only) | Hide tab bar position until implemented; multiple rows is the same value as the check item of the same name in the tab right-click menu; the splash screen dropdown has a live preview under it and takes effect on the next launch (thirteenth batch) |
 | Terminal | Font and Display | Terminal font, font size, line height, scrollback buffer, semantic highlighting | Semantic highlighting can be placed in an advanced collapsed section |
 | Terminal | Colors | Color scheme, foreground color, background color, cursor color, selection color, ANSI palette | Collapse the ANSI palette by default; if it cannot be edited, label it as a preview |
 | Terminal | Cursor | Cursor style, blink, blink accessibility settings | Support reduced motion |
@@ -558,3 +558,19 @@ TCP port in the new "Security" section (they all used to sit under "Keyboard").
 - **Descriptions follow the platform**: the built-in engine note and the display-number description say `DISPLAY=localhost:N` (TCP) on Windows
   and `DISPLAY=:N` (the Unix socket; TCP off by default) on Linux / macOS — they used to say `localhost:N` everywhere, which Linux users following
   them could not connect to. The display address in the start notification and the button tooltip likewise follows the listeners actually open.
+
+### 2026-10-10 Thirteenth batch (splash screen)
+
+A cold start takes seven or eight seconds before the main window appears, and nothing is on screen in between, so users think the app failed to
+open. The splash screen shows as soon as the process is up (Windows, a native window from `Program.Main`) and fades out once the main window has
+painted its first frame. Interaction: [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §14.5.
+
+| Setting | Default | Values | Notes |
+| --- | --- | --- | --- |
+| Splash screen | Classic | Classic / Terminal boot / Vela constellation / Prompt / Mascot / Off (`Appearance.SplashStyle`: `classic` / `terminal` / `constellation` / `prompt` / `mascot` / `none`) | Under Appearance → Window, with a live preview under the dropdown that uses the theme and accent being edited on the page; **takes effect on the next launch**. Windows only: the Dock bounce on macOS and the launch notification on Linux desktops already say "opening". Unknown values (hand-edited, written by a newer version) fall back to Classic |
+
+- **Needed before the database opens**: the splash screen runs seconds before SonnetDB is up and cannot read the settings. Saving the settings
+  mirrors the theme, accent, UI language and this item into `~/.velashell/startup.appearance` (a few `key=value` lines), and every launch aligns it
+  once with the settings it read (no write when nothing changed) — the same approach as `render.mode`. The item takes part in cloud sync: it is
+  a preference, not machine state.
+- `VELASHELL_NO_SPLASH=1` turns the splash screen off (automated tests, screen recording, troubleshooting) and wins over the setting.

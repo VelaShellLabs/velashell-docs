@@ -1302,6 +1302,51 @@ with cloud sync as added fields, without a schema bump. A device that has not be
 again, deleted built-ins reappear and the order falls back to the default, but none of the user's own commands are lost
 (an edited built-in shows next to its original there).
 
+### 14.5 Splash screen (2026-10-10)
+
+**Why**: a measured cold start takes about 8 seconds to the first frame (over 3 seconds of it Avalonia platform initialisation and XAML
+loading, mostly Defender's first scan of unsigned assemblies), and nothing is on screen meanwhile, so users think the app failed to open.
+Windows only offers a busy cursor that disappears after a few seconds; the Dock bounce on macOS and the launch notification on Linux desktops
+already say "opening", so the splash screen is Windows only.
+
+**Behaviour**
+
+- Shown as soon as the process holds the single-instance lock, about 50 ms after `Main` (about 0.2 s after process creation on a warm start).
+  A second double-click only brings the existing window forward, without flashing a splash screen.
+- Fades out (160 ms) once the main window has painted its first frame. If startup fails part-way, the splash screen is closed before the error
+  box appears so the box is not buried under it; if the first frame has not come after 60 seconds, it closes itself.
+- Does not take focus: it is shown without activation, so switching to another window during startup is not undone; it has a taskbar button,
+  and the pointer over it is the "working in background" cursor. Centred on the monitor under the pointer.
+- A 600 × 340 card, radius 8, self-drawn shadow, 120 ms fade-in. Follows the theme, accent and UI language from the settings.
+- Progress comes from the real startup marks, in five stages: runtime → database → interface → sessions and settings → main window. The running
+  stage is estimated as `1 − e^(−t/τ)`, capped at 0.95, so the progress never fills up while the screen is still waiting.
+
+**Five styles** (Settings → Appearance → Window → Splash screen; Classic out of the box)
+
+| Style | What it shows |
+| --- | --- |
+| Classic | Closest to Visual Studio: a large logo and the product name top left, the current stage bottom left, a row of accent dots sliding left to right along the bottom (fast at the ends, slow in the middle) |
+| Terminal boot | A mini terminal: the prompt types `velashell`, then one line per stage with its real duration (`[ ok ]` and a spinner); the second line is the SSH protocol version string; a thin line along the bottom is the total progress. If startup hangs, you can see where |
+| Vela constellation | The Vela in the product name is the southern constellation of the sails: stars twinkle, each stage lights a main star and draws one more segment, and the constellation closes just as the main window appears; lit stars carry their Bayer designations |
+| Prompt | The `>_` from the logo types the product name letter by letter; below it a status line and five squares, the running one breathing |
+| Mascot | The chibi mascot with her laptop (the original art, multiplied onto a light panel), a speech bubble saying the current stage in her voice, five paw prints lighting up. The one exception to DESIGN.md's "no illustrations in the UI": it has to be chosen by the user |
+| Off | — |
+
+**Preview**: a live preview under the dropdown, drawn by the same code as the real splash screen and looping at the "typical" speed; the theme
+and accent come from what is being edited on the page (saved or not). Hidden when Off is selected. Changes **take effect on the next launch**.
+
+**Implementation constraints** (do not break when changing it)
+
+- It cannot be an Avalonia window, which could only appear after Avalonia has initialised. It is a native layered window with its own
+  message loop on its own thread, its frames drawn by SkiaSharp into a DIB.
+- Theme, accent, language and style are read from `~/.velashell/startup.appearance` (the database is not open yet); see the thirteenth batch
+  of the [settings audit](settings-audit.md).
+- Fonts are system fonts (Segoe UI; Cascadia Mono, or Consolas without it): the bundled Inter and Cascadia Mono are Avalonia resources and
+  cannot be read yet. CJK text and the Braille spinner fall back per character to a system font that has them.
+- The startup timeline in the diagnostic log gains a `SplashShown` mark; when the splash screen closes it logs
+  `[Splash] style=… scale=… open=… ms frames=… render avg=… ms max=… ms`, to tell whether the splash itself slowed startup down.
+- `VELASHELL_NO_SPLASH=1` turns the splash screen off.
+
 ---
 
 ## 15. Advanced Feature Panels (Large Standalone Panels)
