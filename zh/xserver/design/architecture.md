@@ -53,7 +53,10 @@ Windows、还会让安装包大几十 MB,与「解压即跑」的分发模型冲
    *X Synchronization Extension*、*X Damage Extension*、*Composite Extension*、*Double Buffer Extension*、
    *The Present Extension*、*MIT-SCREEN-SAVER*、*DPMS*、*X-Resource*、*Generic Event Extension*、*The MIT Shared Memory Extension* 1.1,
    以及 XINERAMA —— 它没有独立的规范文档,线格式依据 X.Org 发布的 panoramiXproto 协议定义)、ICCCM、EWMH、freedesktop.org 的
-   XSETTINGS 规范,以及 X Consortium 的 *Compound Text Encoding*(COMPOUND_TEXT 的编解码,`Protocol/XText.cs`);
+   XSETTINGS 规范、freedesktop 的 XDND 协议第 5 版(拖放的两个方向:宿主当源拖进 X 窗口;第 4 版起「拖到根窗口」的 `XdndProxy` 约定接 X 程序往本机拖出来),
+   X Consortium 的 *The Input Method Protocol* 1.0 与 *The XIM Transport Specification* 0.1(XIM 输入法服务端,`Server/XimServer.cs`;
+   两份文档的正文与表格在「长包写在谁的窗口上」「通知属性的 ClientMessage 用什么格式」上互相矛盾,以 Input Method Protocol 附录 D 的表为准;
+   XIMStyle 的位与 XN* 属性名取自 *Xlib - C Language X Interface* 第 13 章),以及 X Consortium 的 *Compound Text Encoding*(COMPOUND_TEXT 的编解码,`Protocol/XText.cs`);
    GLX 部分依据 Khronos 发布的 *OpenGL Graphics with the X Window System* 1.4、*GLX Extensions for OpenGL
    Protocol Specification* 1.3(编码)、*The OpenGL Graphics System* 1.5(间接渲染的 GL 语义)与 Khronos 注册表里的
    GLX_ARB_create_context / GLX_ARB_create_context_profile 扩展规范,操作码与枚举值取自 Khronos 注册表的 `gl.xml` / `glx.xml`。
@@ -183,8 +186,8 @@ X 协议的语义是**全局串行**的:服务端按到达顺序逐条执行所�
 | 方向 | 内容 |
 | --- | --- |
 | 库 → 宿主(`IX11ServerHost`,回调名一律「主语 + 过去分词」;全部在执行线程上、放锁之后调,同一批里按 §5 合并) | 顶层窗口映射 / 取消映射(`TopLevelMapped` / `TopLevelUnmapped`,销毁、被 reparent 走也算取消映射;**收工时不逐个发**,宿主停服时自己收掉原生窗口);快照变了(`TopLevelChanged`,附 `XTopLevelChanges` 说明变了哪几组:`Geometry` —— 位置、尺寸、`BorderWidth`、`NeedsPlacement`;`Title` —— 标题、`ClassName`、`InstanceName`;`States`;`Icons`;`Shape` —— 边界形状与输入形状;`Hints` —— 其余)。窗口的属性在 `XTopLevelWindow.Snapshot` 这份不可变快照里(见下文「快照」);客户端的窗口管理器请求(`WindowManagerRequested`,接口的默认实现方法,见下文「窗口管理器请求」);损伤矩形(`TopLevelDamaged`,随后宿主经 `XTopLevelWindow.ReadPixels` / `TryReadPixels` 在像素锁里只读这几块,直接写进自己的位图;`CopyPixels` 整窗拷一份,给测试与诊断用);光标(`CursorChanged`,`XCursor`:语义形状 `XCursorShape`,位图 / ARGB / 字形光标另带图像 `XCursorImage` —— cursor 字体里有对应系统光标的字形不带,
-宿主按形状选系统光标 —— 像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`);有客户端 GrabServer 抓着太久、别人都在等它(`ServerGrabStalled`,见 §5;默认实现什么也不做);托盘图标停靠进来 / 没了(`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`,开着 `SystemTray` 时,见 §7「系统托盘」) |
-| 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(内区坐标,按 X 的 16 位范围核对,超出抛 `ArgumentOutOfRangeException`;滚轮换成 Button 4/5,6 以上是水平滚轮与侧键;X 这边没按着的按钮松开不投递,窗口已经不在时的松开照样生效)、指针离开(位置留着最后一次的,所在窗口算根、child 为 None)、按键(`InjectKey(keycode, pressed, repeat)`,X 键码;`repeat` 标明这是宿主的自动重复,见 §7);用户在宿主自己的界面里有动静(`NoteUserActivity`,空闲计时归零、不产生输入事件,每 250 毫秒至多排一个工作项);窗口管理器的动作(名字带 `TopLevel`):焦点(`FocusTopLevel`,null = 没有焦点;同时在 X 里把它抬到普通顶层的最上面,推进 last-focus-change time)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何、发真实的 ConfigureNotify 再补 ICCCM 的合成事件、发 Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage —— 声明了 `_NET_WM_PING` 的同时 ping 它 —— 否则断开该客户端;override-redirect 的窗口忽略)、强制结束(`KillTopLevelClient`,KillClient 语义,连同这个客户端的其它窗口)、窗口状态(`SetTopLevelStates` 整组覆盖;`ChangeTopLevelStates(window, add, remove)` 只改给出的位、其余原样,`add` 与 `remove` 重叠当场抛;都写回 `_NET_WM_STATE` 与 `WM_STATE`,`Focused` 由服务端维护)与外框尺寸(`SetTopLevelFrameExtents`,写回 `_NET_FRAME_EXTENTS`);宿主那边的环境变了(不带 `TopLevel` 的 `Set*`):键位表(`SetKeymap`,见 §7)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS,只替换 RESOURCE_MANAGER 里的 `Xft.*` 几项)、锁定键(`SetLockState(capsLock, numLock)`,不合成按键,客户端收到 XKB 的 StateNotify)、系统剪贴板有了新文本(`SetClipboardText`,UTF-8 超过 `X11Server.MaxClipboardBytes`(16 MB)当场抛 `ArgumentOutOfRangeException`);卡住时的恢复(`BreakGrabs`:解除一切指针 / 键盘抓取并解冻设备、放开 GrabServer、把浮动的从设备挂回虚拟核心设备,客户端照常收到 Ungrab 模式的事件与 HierarchyChanged);客户端清单(`GetClientsAsync` → `XClientInfo`:编号、连接名、是否以 Retain 模式断开、资源数、记账内存、映射着的顶层、是否正抓着整个服务端 `HoldsServerGrab`)与按编号断开(`DisconnectClient(int)`,Retain 模式断开过的销毁它留下的资源);本机的拖放(`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`,服务端替宿主扮演 XDND 的源;`IsDragAccepted` 是目标最近一次的回应,见 §7「拖放」) |
+宿主按形状选系统光标 —— 像素是只读的 `ReadOnlyMemory<uint>`);响铃(`BellRequested`,按协议从基准音量换算出的 0–100;0 表示不响 —— `xset b off`、Bell −100);X 客户端复制了文本(`ClipboardChanged`);有客户端 GrabServer 抓着太久、别人都在等它(`ServerGrabStalled`,见 §5;默认实现什么也不做);托盘图标停靠进来 / 没了(`SystemTrayIconAdded(icon, title)` / `SystemTrayIconRemoved`,开着 `SystemTray` 时,见 §7「系统托盘」);接受本机输入法输入的 XIM 输入上下文换了或插入点动了(`InputMethodFocusChanged(XInputMethodFocus?)`:所在的顶层、程序画不画预编辑、插入点;null = 焦点所在的程序不用 XIM。开着 `InputMethodName` 时,同一批里只交最后一次,见 §7「本机输入法的 XIM 桥」);X 程序把东西拖到了所有 X 窗口以外、数据已经取来(`OutgoingDragStarted(XOutgoingDrag)`:URI、文字、拖出它的程序的连接名、根坐标),以及宿主还没交回结果时那一次在 X 这边先结束了(`OutgoingDragEnded`,开着 `AcceptOutgoingDrags` 时,见 §7「拖出」) |
+| 宿主 → 库(`X11Server` 的方法,窗口用 `XTopLevelWindow` 句柄指名;参数不合法当场抛异常,窗口已不在时静默忽略) | 输入 `Inject*`:指针移动 / 按钮(内区坐标,按 X 的 16 位范围核对,超出抛 `ArgumentOutOfRangeException`;滚轮换成 Button 4/5,6 以上是水平滚轮与侧键;X 这边没按着的按钮松开不投递,窗口已经不在时的松开照样生效)、指针离开(位置留着最后一次的,所在窗口算根、child 为 None)、按键(`InjectKey(keycode, pressed, repeat)`,X 键码;`repeat` 标明这是宿主的自动重复,见 §7);用户在宿主自己的界面里有动静(`NoteUserActivity`,空闲计时归零、不产生输入事件,每 250 毫秒至多排一个工作项);窗口管理器的动作(名字带 `TopLevel`):焦点(`FocusTopLevel`,null = 没有焦点;同时在 X 里把它抬到普通顶层的最上面,推进 last-focus-change time)、用户移动 / 缩放了原生窗口(`MoveTopLevel` / `ResizeTopLevel`,库据此改几何、发真实的 ConfigureNotify 再补 ICCCM 的合成事件、发 Expose)、关闭按钮(`CloseTopLevel`:有 `WM_DELETE_WINDOW` 协议就发 ClientMessage —— 声明了 `_NET_WM_PING` 的同时 ping 它 —— 否则断开该客户端;override-redirect 的窗口忽略)、强制结束(`KillTopLevelClient`,KillClient 语义,连同这个客户端的其它窗口)、窗口状态(`SetTopLevelStates` 整组覆盖;`ChangeTopLevelStates(window, add, remove)` 只改给出的位、其余原样,`add` 与 `remove` 重叠当场抛;都写回 `_NET_WM_STATE` 与 `WM_STATE`,`Focused` 由服务端维护)与外框尺寸(`SetTopLevelFrameExtents`,写回 `_NET_FRAME_EXTENTS`);宿主那边的环境变了(不带 `TopLevel` 的 `Set*`):键位表(`SetKeymap`,见 §7)、显示器布局(`SetScreenLayout`,发 RANDR 事件)、DPI 与缩放(`SetDisplayScale`,发 XSETTINGS,只替换 RESOURCE_MANAGER 里的 `Xft.*` 几项)、锁定键(`SetLockState(capsLock, numLock)`,不合成按键,客户端收到 XKB 的 StateNotify)、系统剪贴板有了新文本(`SetClipboardText`,UTF-8 超过 `X11Server.MaxClipboardBytes`(16 MB)当场抛 `ArgumentOutOfRangeException`);卡住时的恢复(`BreakGrabs`:解除一切指针 / 键盘抓取并解冻设备、放开 GrabServer、把浮动的从设备挂回虚拟核心设备,客户端照常收到 Ungrab 模式的事件与 HierarchyChanged);客户端清单(`GetClientsAsync` → `XClientInfo`:编号、连接名、是否以 Retain 模式断开、资源数、记账内存、映射着的顶层、是否正抓着整个服务端 `HoldsServerGrab`)与按编号断开(`DisconnectClient(int)`,Retain 模式断开过的销毁它留下的资源);本机的拖放(`InjectDragOver(window, x, y, types)` / `InjectDragLeave()` / `InjectDrop(window, x, y, data)`,服务端替宿主扮演 XDND 的源;`IsDragAccepted` 是目标最近一次的回应,见 §7「拖放」);本机输入法上屏与预编辑(`InjectText(text)`:焦点所在的程序经 XIM 连着时整段以 XIM_COMMIT 交过去,否则借键码;`InjectPreedit(text, caret)`:on-the-spot 的程序经 XIM 的预编辑回调画在自己的输入框里,别的情况不理,见 §7);宿主对服务端交来的事的答复(`Complete*`,第一个参数是那件事):X 程序拖出来的东西,本机那边放下了没有(`CompleteOutgoingDrag(drag, dropped)`,在把松开的按钮注入回来之前调,见 §7「拖出」) |
 
 **生命周期**:构造时执行线程就开始运行,构造出来的实例即使从没 `StartAsync` 也要 `DisposeAsync`。`StartAsync` 的失败模式见 §7
 (显示号被占抛 `SocketException`(`AddressAlreadyInUse`),配置了要监听而一种传输也没开起来抛 `IOException`);失败时已经开起来的监听一并撤回,
@@ -581,9 +584,46 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
     - **非受信客户端**(SECURITY「Keyboard Security」):借来的键码的键值就是用户刚输入的字。键盘事件不送到非受信客户端时,改键位表的通知不发给
       它们,GetKeyboardMapping / XI 的 GetDeviceKeyMapping / XKB GetMap 里这些键码是 NoSymbol;只有输入给非受信程序时用到的键码才让它们看见
       (这时补发只给非受信客户端的通知)。
-    - 换行(CR LF 算一个)按 Return、制表按 Tab,其余控制字符不输入;一次至多 4096 个 UTF-16 码元。XIM 桥(远端程序里的候选窗与插入点)没做。
+    - 换行(CR LF 算一个)按 Return、制表按 Tab,其余控制字符不输入;一次至多 4096 个 UTF-16 码元。键盘焦点所在的程序经 XIM 连着时,
+      字不借键码、整段走 XIM_COMMIT(见下一条);轮到这一段时才决定,排在前面还在等键码的字先输完。
     - 2026-10-10 核对之前:每个新字一轮通知;空闲 200 毫秒就挪用(慢链路上超过空键码数的一段字,客户端为前面的字重取键位表时那个键码已经改成了后面的字);
       等的时候宿主的按键插到前一段字中间;借来的键推成 ONE_LEVEL,CapsLock 下转大写;非受信客户端收得到通知、读得到键值。
+  - **本机输入法的 XIM 桥(F5 第二步,决策 Q1)**:`X11ServerOptions.InputMethodName`(宿主给 `velashell`)非 null 时服务端当 XIM 输入法服务端。
+    - **预连接**(The Input Method Protocol「Default Preconnection Convention」):占住选区 `@server=名字`(属主是服务端自己的窗口),把这个原子加进
+      根窗口的 `XIM_SERVERS`(已有的照留);转换目标 `LOCALES` 回 `@locale=` 加一长串区域名(C、POSIX、全部 ISO 639-1 语言代码、常见的「语言_地区」
+      带不带 `.UTF-8`)—— 组好的字按协商的编码交过去,与程序的区域无关,所以尽量都认;`TRANSPORT` 回 `@transport=X/`。两个回答的属性类型就是目标原子本身。
+      `LOCALES` / `TRANSPORT` 两个原子在开 XIM 时就建好:Xlib 先用「只查不建」的 InternAtom 看它们在不在,不在就当没有输入法服务端
+      (互操作用例里 xterm 因此一直不连,单元测试测不出来)。
+    - **X 传输**(The XIM Transport Specification):程序把 `_XIM_XCONNECT`(格式 32)发到选区属主窗口,服务端为这条连接建一个服务端通信窗口,
+      回 `_XIM_XCONNECT`:窗口、传输版本 0.2、分界长度 20。之后不超过 20 字节的包一条 `_XIM_PROTOCOL`(格式 8,补 0);更长的写成收方通信窗口上的
+      属性(类型 STRING、格式 8),再发一条格式 32 的 `_XIM_PROTOCOL` 告诉长度与属性名,收方读的时候删掉;多条 ClientMessage(`_XIM_MOREDATA` …
+      `_XIM_PROTOCOL`)也认。两份文档的正文与表格互相矛盾(正文说写在发方自己的窗口上,表 1.7 / D.6 说写在 IMS 窗口上;表 1.8 写格式 8 却用 data.l),
+      以 Input Method Protocol 附录 D 的表为准,读的时候发方的窗口也看一眼。服务端往程序窗口上写属性时轮流用 64 个名字,上一包没读走就换下一个。
+      非受信客户端也能用:它写服务端通信窗口上的属性、往 XIM 窗口发 ClientMessage 不按 SECURITY 拦(窗口只属于那条连接)。
+    - **协议**:XIM_CONNECT(按它的 byte order 定这条连接的字节序;不做认证)、OPEN(回全部 IM / IC 属性:IM 只有 `queryInputStyle`;
+      IC 有 `inputStyle`、`clientWindow`、`focusWindow`、`filterEvents`、`preeditAttributes` / `statusAttributes`(嵌套)、`spotLocation`、`lineSpace`、
+      `fontSet`、`area`、`areaNeeded`、颜色与光标、`separatorofNestedList`、`resetState`、`preeditState`)、ENCODING_NEGOTIATION(列表里有 COMPOUND_TEXT 挑它,
+      没有挑 UTF-8,都没有回 -1)、QUERY_EXTENSION(没有扩展)、GET / SET_IM_VALUES、CREATE / DESTROY_IC、SET / GET_IC_VALUES(嵌套的那一层到分隔符为止)、
+      SET / UNSET_IC_FOCUS、RESET_IC、SYNC、TRIGGER_NOTIFY、CLOSE、DISCONNECT;不认识的回 XIM_ERROR BadProtocol,第一个包不是 CONNECT 也是。
+      支持的风格:XIMPreeditCallbacks(on-the-spot,配 StatusNothing 或 StatusCallbacks)、XIMPreeditPosition(over-the-spot)、XIMPreeditNothing(根窗口风格)、
+      XIMPreeditNone;不支持 Area(off-the-spot:要协商几何,宿主画不进程序的窗口),建的时候回 BadStyle。状态区一律不画。
+    - **按键不经 XIM**:每个输入上下文建好就发 XIM_SET_EVENT_MASK(转发掩码、同步掩码都是 0),`filterEvents` 回 KeyPressMask:按键由程序按它自己的键位表解释,
+      组字在宿主那边(本机输入法在本机就吃掉了组字用的键)—— 要是按键经 SSH 转到服务端再转回去,每个键多一个往返。程序万一还是转了事件过来,原样转回、
+      要求同步的回 SYNC_REPLY。
+    - **接受输入的输入上下文**:键盘焦点所在的顶层(焦点是 PointerRoot 时看指针所在的顶层)里报了焦点的那个,有几个时取最后报的;X 的焦点变了、
+      程序报 / 撤焦点、改插入点、建 / 销毁输入上下文、通信窗口或焦点窗口销毁时重挑。报给宿主的 `XInputMethodFocus`:所在的顶层(单窗口模式下是屏幕窗口)、
+      `ClientDrawsPreedit`(风格含 XIMPreeditCallbacks)、`Cursor`(XNSpotLocation 是预编辑第一个字的基线起点,换成顶层内区里一个宽 1、高一行的竖条:
+      行高用程序给的 XNLineSpace,没有就按 DPI 估,96 dpi 时 16;上沿是基线往上八成行高;程序没报插入点时为 null)。相同的不重复报。
+    - **上屏**:`InjectText` 的一段可见字以 XIM_COMMIT(XLookupChars、不要求同步)交给接受输入的输入上下文,按协商的编码 —— COMPOUND_TEXT 时 Latin-1 原样、
+      其余放进 UTF-8 段(`ESC % G … ESC % @`);换行、制表照常按键(回车 / 制表键本来就在键位表里),别的控制字符不输入。先擦掉程序那边的预编辑再上屏。
+    - **预编辑**:`InjectPreedit(text, caret)` 只交给 on-the-spot 的输入上下文:没在显示时先 XIM_PREEDIT_START,再 XIM_PREEDIT_DRAW(caret 与 chg_first /
+      chg_length 按字数 —— Unicode 码位 —— 算,替换上一次的整段;每个字一个 XIMUnderline);空串时 DRAW 删掉整段(no string | no feedback)再 XIM_PREEDIT_DONE。
+      接受输入的输入上下文换了、撤了焦点、RESET_IC 时同样收掉。RESET_IC 回空的预编辑(宿主的输入法自己还在组字)。
+    - **覆盖面**:Xlib 的 XIM 客户端 —— xterm、Emacs、Java(AWT / Swing)、Tk、Motif,以及用 GTK 2/3 的 xim 输入模块的程序(Firefox、Chromium 跟着 GTK);
+      服务端在 XSETTINGS 里写 `Gtk/IMModule = xim`,没设 `GTK_IM_MODULE` 的 GTK 2/3 程序就走它(单窗口模式下服务端不当 XSETTINGS 管理器,没有这一项)。
+      Qt 5 / 6 与 GTK 4 没有 XIM,仍走借键码上屏。程序要在 `XMODIFIERS=@im=velashell` 下启动 —— Xlib 只在写了 `@im=` 时才找输入法服务端,
+      没写就用它自己的组合键处理;宿主在连接后的静默注入里设上它(见宿主仓库 `plan.md`)。
+    - 上限:256 条 XIM 连接、每条连接 1024 个输入上下文,多条 ClientMessage 拼一个包至多攒到 XIM 包长的上限(约 256 KB),超了当坏数据收掉这条连接。
   - **平滑滚动(F6)**:指针设备多两个相对轴 Rel Horiz Scroll / Rel Vert Scroll 与对应的 ScrollClass(XI 2.1,increment 1.0 = 一格);
     `InjectScroll(window, x, y, dx, dy)` 发带滚动轴的 Motion 与 RawMotion,攒够一格再模拟一次按钮 4–7(XI2 那份带 PointerEmulated);
     反过来设备给的滚轮按钮也给用滚动轴的 XI2 客户端发一格滚动。
@@ -654,7 +694,27 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   `XdndLeave`),接受就 `XdndDrop`,不接受、或放在没有目标的地方就 `XdndLeave`。目标经 `XdndSelection`(服务端占有,全显示共享)取数据:
   `TARGETS`、`TIMESTAMP` 与宿主交来的类型(类型就是目标原子;`STRING` 回 STRING、`TEXT` 回 UTF8_STRING),太大的走 INCR;还没放下时只答得出
   `TARGETS`。目标回 `XdndFinished`、下一次拖放开始或放下一分钟之后,数据丢掉。X 程序之间的拖放只靠核心协议,不经过这里;X 程序拖出到本机程序
-  (X → 宿主)没有做。
+  见下一条。
+- **拖出(XDND,X → 宿主)**:`X11ServerOptions.AcceptOutgoingDrags`(宿主在多窗口模式下打开;单窗口模式下根窗口是远端桌面的,不接)。
+  - **目标在哪**:按第 4 版起「拖到根窗口」的约定,根窗口的 `XdndProxy` 指向服务端自己的一个代理窗口(它的 `XdndProxy` 指向自己、`XdndAware` = 5);
+    指针拖到所有 X 窗口以外时(rootless 下那里是本机桌面或本机程序),看根窗口 `XdndProxy` 的源(GTK 这一类)把消息投给代理,窗口字段是根窗口。
+    Java 的 AWT 只把目标找在「指针下面那个根窗口的子窗口」上(MotionNotify 的 child 为空时根本不找),所以 X 程序占了 `XdndSelection`(开始拖了)时,
+    服务端把代理窗口垫到根窗口子窗口的最底下、盖满根窗口,带 `WM_STATE`(Java 只对这样的顶层找 `XdndAware`):那片空白就有了一个接拖放的顶层,
+    真的 X 窗口照样在它上面。悄悄垫上、撤下(不发 CreateNotify / MapNotify),只在拖动期间存在 —— 一秒后起每半秒看一次,`XdndSelection` 的属主
+    不再抓着指针、也没有进行中的拖出就撤掉;源在拖动开始时建的窗口缓存里没有它,照旧按根窗口找到同一个代理。
+  - **流程**:`XdndEnter` 记下源窗口、版本、类型(超过三种时读源窗口的 `XdndTypeList`);每条 `XdndPosition` 回 `XdndStatus` —— 类型里有
+    `text/uri-list` 或文字(UTF8_STRING、`text/plain;charset=utf-8`、COMPOUND_TEXT、STRING、`text/plain`、TEXT)就接受,动作只给 `XdndActionCopy`
+    (本机拿到的是副本,远端的原件不会被当成「移走了」删掉),矩形为空(每动一下都报)。第一次接受时用这条 `XdndPosition` 的时间戳向 `XdndSelection`
+    的属主要数据(协议允许拖着时就取):有 URI 列表要它,文字挑第一个有的;走剪贴板取选区的那一套(每一步 10 秒超时、INCR、属主走了照样结束)。
+    取到之后解出 URI(RFC 2483:去掉注释行与空行)与文字(按类型解码),经 `OutgoingDragStarted(XOutgoingDrag)` 交给宿主,连同源程序的连接名
+    (宿主据此找到 SSH 会话、把文件取回本机)与根坐标;什么都没取到时之后的 `XdndStatus` 都不接受。
+  - **结果**:宿主发起的本机拖放结束后调 `CompleteOutgoingDrag(drag, dropped)`,**再**把松开的按钮注入回来 —— X 程序随后发的 `XdndDrop` 按这个结果回
+    `XdndFinished`(第 5 版:l1 第 0 位「接受并做完了」,l2 是 `XdndActionCopy`,没放成为 None)。宿主说取消了时,之后的 `XdndPosition` 回不接受。
+    宿主还没交回结果时 `XdndLeave`(指针回到了 X 窗口里)、`XdndDrop`(用户在本机拖放开始之前就松了手,回「没接受」)、源窗口销毁,都报
+    `OutgoingDragEnded`,宿主不再发起。旧的那一次的结果不算到新的一次头上(按 `XOutgoingDrag` 对象认)。
+  - 真实客户端用例:Swing 的拖放拖到 X 窗口外面,找到垫着的代理,文字交给宿主,宿主说放下之后 `exportDone` 报 COPY。OpenJDK 17 收到成功的
+    `XdndFinished` 之后收尾时对窗口 0 发一次 ChangeWindowAttributes(BadWindow 0x0);对照过 Swing 把字拖进它自己的文本框(完全不经过服务端的代理)
+    也一样,与服务端无关,AWT 自己吞掉这个错误。
 - **剪贴板**:宿主 → X 时服务端自己占有 CLIPBOARD(开了 `SyncPrimary` 时连同 PRIMARY)并按 ICCCM 回应:TARGETS 里有 MULTIPLE(逐对转换,
   转换不了的那一对把属性换成 None 写回)与 COMPOUND_TEXT(Latin-1 原样、其余放进 UTF-8 段);TEXT 目标在 Latin-1 装得下时回 STRING,装不下回
   UTF8_STRING;超过 256 KB 的按 ICCCM §2.5 的 INCR 分块交(每块 256 KB,块之间请求方 10 秒不取就作废,同时至多 32 个传输);编码只在第一次有人要时做一次。
@@ -681,7 +741,10 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
 - **互操作**(`[TestCategory("Interop")]`,默认跳过):`scripts/xserver/interop/` 构建一个带真实客户端的容器(镜像 `velashell-xclients`:
   x11-apps、xterm、xdotool、xinput、mesa-utils 等,另有 default-jdk —— Swing 用例直接 `java X.java` 跑,验 Java 对窗口管理器的判定),
   用例在本机起服务端、让容器里的真实客户端经 `host.docker.internal:N` 连进来,再把顶层窗口的像素存成 PNG
-  供人看、并做粗粒度断言(非背景像素数)。改了 Dockerfile 要重建镜像。
+  供人看、并做粗粒度断言(非背景像素数)。改了 Dockerfile 要重建镜像。XIM 与拖出各有真实客户端用例:xterm 在 `XMODIFIERS=@im=velashell` 下经 XIM 连上,
+  宿主上屏的中文进了 shell 的 `read`(over-the-spot,报了插入点);Swing 文本框按 on-the-spot 连上,预编辑交给它画、上屏后文本框里正好是那两个字;
+  Swing 往 X 窗口外拖文字,宿主放下之后 `exportDone` 报 COPY。XIM 的协议细节(三种传输、大小端、嵌套属性、错误)另有逐字节的单元测试
+  (`XimTests`,测试客户端扮演 Xlib 那一侧),拖出的流控与收尾见 `OutgoingDragTests`。
 - 规格与实现不一致时**以规范为准**,改实现,并在本文 §10 记一笔。
 
 ## 10. 决策记录
@@ -946,3 +1009,12 @@ override-redirect 窗口不归窗口管理器摆,恒为 false。`_NET_MOVERESIZE
   ② 合成管理器关着时 ARGB 窗口按不透明显示;选区被远端合成器接走又放下时服务端接回来。③ 托盘图标的名字照窗口标题过滤,宿主的提示标出来源。
   ④ Unix 套接字建不起来、TCP 又没开时只服务 SSH 转发,不再整个起不来。⑤ 宿主一侧(按会话分出来的显示拿到全部宿主设置、关掉某个会话的屏幕窗口只收它、
   「标出来源」立即生效、显示地址按实际监听报)见宿主仓库 `plan.md`。
+- **本机输入法的 XIM 桥与拖出(2026-10-10,xs_plan F5 第二步 / 决策 Q1、F16 的另一半)**:
+  ① XIM —— 服务端自己当 XIM 输入法服务端,而不是去桥接远端的 fcitx / ibus:远端多半没装,而宿主手里就有本机的输入法。只走 X 传输(Xlib 自带、
+  不用另开端口);按键不经 XIM 转发(转发掩码 0),组字留在本机、只有上屏的字与预编辑过去,慢链路上打字不多一个往返。风格只做 on-the-spot、
+  over-the-spot 与根窗口三种:off-the-spot 要宿主往程序的窗口里画状态区与预编辑区,做不到。程序得在 `XMODIFIERS=@im=velashell` 下启动 ——
+  sshd 默认不放行这个变量的 env 请求,宿主借连接后的静默注入设上(已经设了的不动)。互操作逮到一个单元测试测不出的问题:Xlib 用「只查不建」的
+  InternAtom 看 `LOCALES` 在不在,服务端得先把它建好。Qt 5 / 6 与 GTK 4 没有 XIM,照旧借键码上屏。
+  ② 拖出 —— 用 XDND 第 4 版起的根窗口 `XdndProxy` 约定,不必猜指针下面是不是本机窗口:凡是落在 X 窗口以外的都交给宿主。Java 不看根窗口的
+  `XdndProxy`,于是拖动期间把代理窗口悄悄垫在最底下、带 `WM_STATE`;不发结构事件,只在源抓着指针的期间存在。动作只给复制。
+  数据在 X 那边就取好(拖着时取,协议允许),宿主拿到的是 URI 与文字;取回远端文件、发起本机拖放是宿主的事(见宿主仓库 `plan.md`)。

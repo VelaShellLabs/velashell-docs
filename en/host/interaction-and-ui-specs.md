@@ -274,9 +274,14 @@ Every X top-level window of the built-in X Server is an Avalonia native window (
   title. Keys and mouse inside X windows belong to the X program, so the entry is in the system menu rather than a shortcut; macOS / Linux have no
   entry yet.
 - **Input method, clipboard, cursor and screen saver**: with "Use this computer's input method in X windows" on (the default) the X window is a
-  client of the local input method — preedit is drawn over the window, the candidate window sits at the last click position (X programs do not
-  tell the host where the caret is) and committed text is typed into the X program (committed text and keys pressed afterwards arrive in order;
-  text committed while Shift is held is still typed; switching away mid-composition clears the preedit). Besides text the clipboard carries HTML and images (images
+  client of the local input method and committed text is typed into the X program (committed text and keys pressed afterwards arrive in order;
+  text committed while Shift is held is still typed; switching away mid-composition clears the preedit). When the remote program connects to the
+  built-in X Server over XIM (xterm, Emacs, Java, Tk, Motif, GTK 2/3 — they must start with `XMODIFIERS=@im=velashell`, which VelaShell sets in
+  the shell after connecting when the session forwards X11 with no display address set and the engine is built-in; a different input method
+  already set on the remote side is left alone), the candidate window follows the insertion point the program reports; programs supporting
+  on-the-spot (Swing text fields, GTK) draw the composing preedit in their own input box, underlined, and for over-the-spot programs (xterm,
+  Emacs) VelaShell overlays the preedit on the insertion point's line. Programs not on XIM (Qt 5 / 6, GTK 4, or without that variable) behave as
+  before: the preedit is drawn over the window and the candidate window sits at the last click position. Besides text the clipboard carries HTML and images (images
   and rich text copied from screenshot tools, GIMP or LibreOffice paste locally, and local screenshots paste into remote programs). When a remote
   program holding the pointer pulls it back somewhere (continuous dragging, CAD rotation) the local cursor moves along; when it asks to confine the
   pointer to a window, the cursor cannot leave while an X window is active and is released when switching to a local window (Windows and Linux X11
@@ -306,7 +311,17 @@ Every X top-level window of the built-in X Server is an Avalonia native window (
   uploaded through **that same session's SFTP** to a new `/tmp/velashell-drop-random/` (mode 0700) and the program gets the remote paths
   (`text/uri-list` and plain-text paths), with a toast “Uploading N item(s) to user@host:port for the X program…” while it uploads; if the session
   is gone the files are not accepted, and an upload failure shows an error toast. Uploaded files stay on the remote host — the program still needs
-  them — and are not deleted for it. Programs that connected locally get local paths. Dragging out of an X program into a local program is not done.
+  them — and are not deleted for it. Programs that connected locally get local paths.
+- **Dragging out of X programs** (multi-window mode): pressing and dragging in an X program to anywhere outside every X window (the local
+  desktop, Explorer / Finder, a local program's window) is taken over by VelaShell as a local drag-and-drop; dropping it is always a **copy** (the
+  remote original is untouched). Text is handed over directly. Files depend on where the program runs: a program forwarded through an SSH session
+  gives remote paths, so the files (directories with their contents) are first fetched through **that same session's SFTP** into a new directory
+  under the `velashell-xdrag` temporary directory, with a toast “Fetching N item(s) dragged out of user@host:port; keep holding the mouse
+  button…” — only then does it become a local drag, so the mouse button has to stay down; releasing before that drops nothing and says so; a
+  disconnected session or a transfer failure shows an error toast. Fetched files stay in the temporary directory (the target may still be
+  copying) and are cleared on a later drag-out after a day; characters not allowed in local file names become `_`. Programs that connected
+  locally give local paths directly. Things dragged out and back onto an X window are not accepted (that would only send freshly fetched files
+  back). Single-window mode does not take drags out (whatever is dragged outside the X desktop window belongs to the remote desktop).
 - **Closing**: the native close button asks the client to close itself (`WM_DELETE_WINDOW`); menus and tooltips do not pass a close on. When a program
   is stuck — it advertises `_NET_WM_PING` and did not reply within 5 seconds — a warning-style confirmation “Not Responding” appears: "“title” is not
   responding. Force quit this X program? Its other windows will close too, and unsaved work will be lost.", with a danger button “Force Quit” that
