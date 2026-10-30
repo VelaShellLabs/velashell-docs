@@ -782,6 +782,63 @@ Complete example: [`plugins/VelaShell.Plugin.Redis`](https://github.com/VelaShel
 Quickest start: `dotnet new velaplugin-workspace` (see §2.4; it comes with a field for going through an SSH tunnel — delete it by following
 the comments if you do not need it).
 
+#### 5.14.1 Workspace variants and custom pages (`VariantKey` / `Variants` / `Pages`)
+
+A workspace often stands for a "family" of connection types (MySQL / PostgreSQL / SQLite …). Instead of registering one tab per
+type, register one workspace and use **variants** to describe what the connection dialog looks like once a type is chosen.
+
+**Variants (`WorkspaceDescriptor.VariantKey` / `Variants`)**
+
+- `VariantKey` names **one field key** in `Fields`; that field's value is the "current type". `Variants` is a list of
+  `WorkspaceVariant`; the one whose `Value` equals the field's value applies. When the profile has no value for the key, the field's
+  `DefaultValue` is used (the same fallback chain as when the launch settings are assembled).
+- A variant overrides only what it declares; **anything left `null` is inherited from the descriptor**:
+  - Port (`DefaultPort`): the host follows the variant only while the port **is still a default value**; a port the user typed is left alone.
+  - The host-field label.
+  - `Features`: **replaced as a whole, not merged.** Once a variant sets `Features`, the entire capability set comes from the variant, so
+    leaving a bit out turns it off. Network variants should be supersets of the descriptor's `Features`; a file-based variant (SQLite)
+    uses `NoCredentials | NoEndpoint` and omits `SshTunnel` and `CertificateTrust`.
+  - Whether credentials, the SSH tunnel and certificate trust are available follows the variant's `Features`; the connection dialog and the
+    pre-open check read the same result.
+- The variant field itself is **no longer shown as a row** in the dialog (see the type-picker step in
+  [Interaction and UI Specs §13.1](../host/interaction-and-ui-specs.md)); it remains the carrier of the value and is persisted in
+  `PluginSettings` as usual.
+
+**Icon on the type-picker card (`WorkspaceVariant.Icon`)**
+
+- Type `PluginIcon?`, the same shape as the descriptor `Icon` and the session tab; `null` falls back to `WorkspaceDescriptor.Icon`.
+- The **name** on the card is not declared again on the variant: the host takes the `Label` of the entry in the `VariantKey` field's
+  `Choices` whose `Value` matches.
+- Whether the cards appear is not an SDK switch; the host decides: the `VariantKey` field is a `Choice`, not hidden, not free-text
+  (`AllowsCustomValue` is `false`), with at least two candidates. If not, the dialog is exactly as before.
+- Available since: TBD (replaced at release).
+
+**Custom pages (`WorkspaceDescriptor.Pages` / `ProtocolSettingPage` / `ProtocolSettingField.Page`)**
+
+```csharp
+new WorkspaceDescriptor {
+    Pages  = [ new ProtocolSettingPage("database", "Database"), new ProtocolSettingPage("ssl", "SSL") ],
+    Fields = [ new ProtocolSettingField { Key = "schema", Page = "database", /* … */ } ],
+}
+```
+
+- `ProtocolSettingPage(Key, Label)`: `Key` is a stable identifier compared **ordinally** and independent of language; `Label` is localized
+  by the plugin (the same way as a field's `Label` and `Choices`: re-register the descriptor when the locale changes).
+- The order of `Pages` is the tab order, placed between "General" and "Advanced"; the labels of "General" and "Advanced" come from the
+  host and are not in this list.
+- Why key + label rather than an enum: "Database" and "SSL" are domain pages; the host cannot prepare a closed set of localized labels for
+  arbitrary plugins, and every new page would need an SDK release.
+- `ProtocolSettingField.Page`:
+  - **Takes precedence over `IsAdvanced`**: a field with `Page` goes to that page and `IsAdvanced` is no longer consulted; `IsAdvanced`
+    only decides whether a field **without** `Page` goes to "Advanced" or "General". "Advanced" is not made a page because it has
+    host-specific behavior (count badge, modified-value dot, auto-expand when editing an existing profile), which custom pages do not have.
+  - A key not in `Pages`: the host treats it as `null` and **does not report an error** (the same attitude as a `VisibleWhen` that
+    names a missing key). Guard the spelling with a contract test in the plugin.
+  - **ANDed** with `VisibleWhen`: the field is shown or hidden by its condition inside its page; a page whose fields are all invisible
+    is hidden, and if the user is on it they fall back to "General".
+  - Only effective on descriptors that declare `Pages`: `ProtocolDescriptor` (file / terminal protocols) has no `Pages` yet, so `Page` is ignored there.
+- Available since: TBD (replaced at release).
+
 ## 6. Isolated Process Mode (`isolated`)
 
 Declare `"hostMode": "isolated"` in the manifest and the plugin runs in a separate
