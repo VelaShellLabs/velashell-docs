@@ -973,7 +973,7 @@ internal sealed class MyWorkspaceProvider(IPluginContext context) : IWorkspacePr
 - 卡片上的**名字**不在变体上重复声明:宿主取 `VariantKey` 字段 `Choices` 里 `Value` 相同那一项的 `Label`。
 - 出不出卡片不是 SDK 开关,由宿主判定:`VariantKey` 指向的字段是 `Choice`、不隐藏、不可手输(`AllowsCustomValue` 为
   `false`)、候选项不少于两个。不满足时连接框与此前完全一致。
-- 可用版本:TBD(发版时替换)。
+- 可用版本:2.1.5。
 
 **自定义分页(`WorkspaceDescriptor.Pages` / `ProtocolSettingPage` / `ProtocolSettingField.Page`)**
 
@@ -997,7 +997,7 @@ new WorkspaceDescriptor {
   - 与 `VisibleWhen` 是**"与"**关系:字段在它那一页里照常按条件显隐;一页的字段全都不可见时页签隐藏,
     正停在那一页的会落回"常规"。
   - 只对声明了 `Pages` 的描述符有效:`ProtocolDescriptor`(文件 / 终端协议)暂无 `Pages`,那里的 `Page` 被忽略。
-- 可用版本:TBD(发版时替换)。
+- 可用版本:2.1.5。
 
 ## 6. 隔离进程模式(isolated)
 

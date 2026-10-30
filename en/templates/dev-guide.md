@@ -811,7 +811,7 @@ type, register one workspace and use **variants** to describe what the connectio
   `Choices` whose `Value` matches.
 - Whether the cards appear is not an SDK switch; the host decides: the `VariantKey` field is a `Choice`, not hidden, not free-text
   (`AllowsCustomValue` is `false`), with at least two candidates. If not, the dialog is exactly as before.
-- Available since: TBD (replaced at release).
+- Available since: 2.1.5.
 
 **Custom pages (`WorkspaceDescriptor.Pages` / `ProtocolSettingPage` / `ProtocolSettingField.Page`)**
 
@@ -837,7 +837,7 @@ new WorkspaceDescriptor {
   - **ANDed** with `VisibleWhen`: the field is shown or hidden by its condition inside its page; a page whose fields are all invisible
     is hidden, and if the user is on it they fall back to "General".
   - Only effective on descriptors that declare `Pages`: `ProtocolDescriptor` (file / terminal protocols) has no `Pages` yet, so `Page` is ignored there.
-- Available since: TBD (replaced at release).
+- Available since: 2.1.5.
 
 ## 6. Isolated Process Mode (`isolated`)
 
