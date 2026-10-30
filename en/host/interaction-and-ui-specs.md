@@ -1589,17 +1589,20 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
     to the generic plugin icon). The default value is preselected. The destination preview in the footer's left is hidden (there is no
     endpoint yet); on the right `Cancel` (outline) / `Next` (accent pill, `IsDefault`).
   - **Interaction**: a single click only selects, without leaving; a double click selects and goes "Next"; `Enter` = "Next" (the dialog's
-    default button); cards are buttons, `Tab` order = candidate order, `Space` / `Enter` on a card selects it. `Cancel` closes the dialog.
+    default button); cards are buttons, `Tab` order = candidate order; with a card focused, `Enter` selects it and goes "Next" (same as a double
+    click) and `Space` only selects. On entering stage 1 the focus lands on the selected card, so `Enter` can go straight on. `Cancel` closes the dialog.
   - **Next**: writes the chosen type into the variant field, the port / host label / credentials / tunnel change as in the table above,
     and stage 2 opens on the "General" page. The port follows only while it is a default value; every other value already entered (host,
-    user name, fields) is left untouched.
-  - **Stage 2 (form)**: the page tabs and form as usual, with one extra header row at the top of the form, "Type: MySQL"; the footer shows
+    user name, fields) is left untouched. Choosing the same type again and pressing Next (after "Change" when editing, or after "Back")
+    changes nothing, port included; only for a new connection whose type has not been confirmed yet (for example after switching back
+    from another protocol) is the port refreshed from the variant once.
+  - **Stage 2 (form)**: the page tabs and form as usual, with one extra header row at the top of the form, "Type MySQL" (label + current type name, no colon); the footer shows
     `Back` (outline, **new connections only**) / `Test` / `Save` / `Connect` (the button set is not changed to "OK").
   - **Back**: returns to stage 1 with the current type preselected; **no entered value is cleared and the port is not touched**, so the
     values are all still there after "Next".
-  - **Editing an existing profile**: opens straight on the form with no `Back`; the header reads "Type: MySQL · Change", and "Change"
+  - **Editing an existing profile**: opens straight on the form with no `Back`; the header reads "Type MySQL · Change" (the dot is drawn), and "Change"
     returns to the cards, after which "Next" switches the type (the workspace id is unchanged, entered values are kept, the port follows
-    only if it is a default). `Cancel` here also closes the dialog.
+    only if it is a default; pressing Next without changing the type changes nothing). `Cancel` here also closes the dialog.
   - **Switching protocol tabs**: switching to another plugin tab or a built-in protocol resets this step; coming back before the type
     was confirmed shows the cards again, and after it was confirmed stays on the form.
 
@@ -1611,6 +1614,12 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   | Workspace without variants | shown | — | — | destination preview | `Test` `Save` `Connect` (as before) |
 
   \* `IsDefault`.
+- **Plugin field pages** (page keys come from the SDK's `Pages` / `Page`, see [Development Guide §5.14.1](../templates/dev-guide.md); available since: TBD):
+  - A field's page key **takes precedence over** `IsAdvanced`; an unknown page key is treated as unset and falls back to the default place ("General" or "Advanced").
+  - Custom pages have no count badge, no modified-value dot and no auto-expand when editing (only "Advanced" has these three).
+  - When all fields of a page are invisible the page tab is hidden, and if the user is on it they fall back to "General".
+  - If the descriptor has no custom pages (or all are hidden), the whole group of custom page tabs is absent and the dialog is as before.
+  - In the type-card stage the custom page tabs are hidden together with the tab strip.
 
 ### 13.2 Password Verification Dialog (Two Steps)
 
