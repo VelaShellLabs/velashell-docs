@@ -190,6 +190,8 @@ Actual length, remote metadata before/after transfer and available digests are c
 | `Events` (`IHostEvents`)            | session connect/disconnect, theme and locale changes | Subscriptions are cleaned up by the host on deactivation                                                                                                   |
 | `Theme` (`IHostThemeApi`)           | `Current` / `Colors` / `GetColor` / `Changed`        | Theme identity, the fully resolved `Vela*` palette, and a signal that covers every kind of theme change. See §3.5                                          |
 
+The host routes first-party `velashell.ai` `DisplayMode.Document` panels to a dedicated right region. The host owns width and pin/auto-hide preferences rather than using `PlacementRatio` or emitting `PlacementRatioChanged`. Hiding or collapsing keeps the handle open, and `ActivateAsync` restores the same control. Ordinary plugin document width contracts and the SDK package remain unchanged; see [UI extensions](../plugins/08-ui-extensions.md) for the full host policy.
+
 > **The four `inProcess`-only capabilities** (`RemoteTunnel`, `TerminalView`, `Protocols`,
 > `Workspaces`) throw "capability unavailable" in isolated mode. They hand out live native
 > objects or raw streams, which have no equivalent across a process boundary — if you need them,
