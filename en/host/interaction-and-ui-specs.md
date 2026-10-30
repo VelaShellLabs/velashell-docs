@@ -1567,6 +1567,51 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   `NoEndpoint`; hidden while the host is empty. It updates as you type, so you can check at a glance where you are about
   to connect. Right = `Test` / `Save` (outline) / `Connect` (accent pill, DESIGN.md §5.1), all 28 high.
 
+- **Workspace variants** (a plugin workspace's `VariantKey` / `Variants`; SDK contract in [Development Guide §5.14.1](../templates/dev-guide.md)):
+  once a type is chosen the dialog is reshaped by that type's variant; whatever the variant does not declare is inherited from the descriptor.
+
+  | Follows the variant | Rule |
+  | --- | --- |
+  | Port | The variant's `DefaultPort`. **Followed only while the current port "is a default value"** (the descriptor's default or any variant's default); a port the user typed (e.g. 13306) is left alone. Switching to another plugin tab takes that tab's default port, not the previous tab's variant port |
+  | Host label | The variant's host label |
+  | Credentials | Shown or hidden by the variant's `Features` (`NoCredentials` / `AnonymousAccess`); the credential-source picker is collapsed with them. Values are only hidden, not cleared |
+  | SSH tunnel, certificate trust | Follow the variant's `Features`; the pre-open check and the dialog read the same result |
+  | `Features` | **Replaced as a whole**, not merged; with a missing key the variant is looked up by the field's `DefaultValue`, and with no matching variant the descriptor's `Features` apply |
+
+  The variant field's row is **never shown** in the dialog (it only carries the value); if it is the only plugin field on the "General" page, that page's section heading is omitted too.
+- **Type-picker step** (the first step when creating a plugin workspace connection; for a plugin without variants it does not exist and the dialog is pixel-identical to before):
+  - **When it appears** (decided by the host, not an SDK switch): `VariantKey` is set and the field it names is a `Choice`, not hidden,
+    not free-text (`AllowsCustomValue` is `false`), with at least 2 candidates; and this is a **new** connection (editing an existing
+    one always opens the form) whose type has not yet been confirmed. Dynamic choices, free-text, a single candidate, a hidden field
+    and no `VariantKey` all show no cards.
+  - **Stage 1 (pick a type)**: the right column hides the page-tab strip and the form and shows the heading "Choose a connection type"
+    plus wrapping type cards (name from the choice `Label`; icon from the variant `Icon`, falling back to the descriptor `Icon`, then
+    to the generic plugin icon). The default value is preselected. The destination preview in the footer's left is hidden (there is no
+    endpoint yet); on the right `Cancel` (outline) / `Next` (accent pill, `IsDefault`).
+  - **Interaction**: a single click only selects, without leaving; a double click selects and goes "Next"; `Enter` = "Next" (the dialog's
+    default button); cards are buttons, `Tab` order = candidate order, `Space` / `Enter` on a card selects it. `Cancel` closes the dialog.
+  - **Next**: writes the chosen type into the variant field, the port / host label / credentials / tunnel change as in the table above,
+    and stage 2 opens on the "General" page. The port follows only while it is a default value; every other value already entered (host,
+    user name, fields) is left untouched.
+  - **Stage 2 (form)**: the page tabs and form as usual, with one extra header row at the top of the form, "Type: MySQL"; the footer shows
+    `Back` (outline, **new connections only**) / `Test` / `Save` / `Connect` (the button set is not changed to "OK").
+  - **Back**: returns to stage 1 with the current type preselected; **no entered value is cleared and the port is not touched**, so the
+    values are all still there after "Next".
+  - **Editing an existing profile**: opens straight on the form with no `Back`; the header reads "Type: MySQL · Change", and "Change"
+    returns to the cards, after which "Next" switches the type (the workspace id is unchanged, entered values are kept, the port follows
+    only if it is a default). `Cancel` here also closes the dialog.
+  - **Switching protocol tabs**: switching to another plugin tab or a built-in protocol resets this step; coming back before the type
+    was confirmed shows the cards again, and after it was confirmed stays on the form.
+
+  | Stage | Page tabs / form | Card panel | "Type" header | Footer left | Footer right |
+  | --- | --- | --- | --- | --- | --- |
+  | Pick type (new) | hidden | shown | — | hidden | `Cancel` `Next`* |
+  | Form (new) | shown | hidden | shown (no "Change") | destination preview | `Back` `Test` `Save` `Connect` |
+  | Form (edit) | shown | hidden | shown + "Change" | destination preview | `Test` `Save` `Connect` |
+  | Workspace without variants | shown | — | — | destination preview | `Test` `Save` `Connect` (as before) |
+
+  \* `IsDefault`.
+
 ### 13.2 Password Verification Dialog (Two Steps)
 
 - **Step 1 (`oNZIM`, window 520 DIP)**: username input, target and known-host fingerprint; `Cancel` / `Next`.

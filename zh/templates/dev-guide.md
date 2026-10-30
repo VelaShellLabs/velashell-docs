@@ -948,6 +948,57 @@ internal sealed class MyWorkspaceProvider(IPluginContext context) : IWorkspacePr
 完整示例:[`plugins/VelaShell.Plugin.Redis`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Redis)(键空间浏览器 + 类型详情 + 声明式连接表单)。
 最快的起点:`dotnet new velaplugin-workspace`(见 §2.4,默认带一个经 SSH 隧道的字段,不需要就按注释删掉)。
 
+#### 5.14.1 工作台变体与自定义分页(`VariantKey` / `Variants` / `Pages`)
+
+一个工作台往往对应"一族"连接类型(MySQL / PostgreSQL / SQLite …)。与其为每种注册一个页签,不如注册一个工作台,
+再用**变体**描述"选了某一种之后连接框长什么样"。
+
+**变体(`WorkspaceDescriptor.VariantKey` / `Variants`)**
+
+- `VariantKey` 指向 `Fields` 里的**一个字段键**,该字段的取值就是"当前类型";`Variants` 是一组 `WorkspaceVariant`,
+  `Value` 与该字段取值相等的那个生效。配置里没有这个键时回落到字段的 `DefaultValue`(与启动时组装设置同一条回落链)。
+- 变体只覆盖它声明了的部分,**没声明(`null`)的沿用描述符**:
+  - 端口(`DefaultPort`):宿主只在端口**仍是默认值**时跟随变体;用户手填的端口不动。
+  - 主机栏标签。
+  - `Features`:**整体替换,不是叠加**。变体写了 `Features` 就整组能力位都按变体算,漏写一位等于关掉一位。
+    联网类变体应写成描述符 `Features` 的超集;文件型(SQLite)写 `NoCredentials | NoEndpoint`,且不含 `SshTunnel`
+    与 `CertificateTrust`。
+  - 凭据、SSH 隧道、证书信任是否可用随变体的 `Features` 走;连接框与"打开前判定"读的是同一份结果。
+- 变体字段本身在连接框里**不再显示成一行**(见[交互与界面规格 §13.1](../host/交互与界面规格.md) 的类型选择步骤),
+  它仍是值的载体,照常随 `PluginSettings` 落盘。
+
+**类型选择卡片的图标(`WorkspaceVariant.Icon`)**
+
+- 类型 `PluginIcon?`,与描述符 `Icon`、会话标签页共用同一种形态;`null` 回落到 `WorkspaceDescriptor.Icon`。
+- 卡片上的**名字**不在变体上重复声明:宿主取 `VariantKey` 字段 `Choices` 里 `Value` 相同那一项的 `Label`。
+- 出不出卡片不是 SDK 开关,由宿主判定:`VariantKey` 指向的字段是 `Choice`、不隐藏、不可手输(`AllowsCustomValue` 为
+  `false`)、候选项不少于两个。不满足时连接框与此前完全一致。
+- 可用版本:TBD(发版时替换)。
+
+**自定义分页(`WorkspaceDescriptor.Pages` / `ProtocolSettingPage` / `ProtocolSettingField.Page`)**
+
+```csharp
+new WorkspaceDescriptor {
+    Pages  = [ new ProtocolSettingPage("database", "数据库"), new ProtocolSettingPage("ssl", "SSL") ],
+    Fields = [ new ProtocolSettingField { Key = "schema", Page = "database", /* … */ } ],
+}
+```
+
+- `ProtocolSettingPage(Key, Label)`:`Key` 是稳定标识,**序数比较**,不随语言变化;`Label` 由插件自行本地化
+  (与字段 `Label`、`Choices` 同一套做法,locale 变化时重新注册描述符)。
+- `Pages` 的顺序即页签顺序,排在"常规"与"高级"之间;"常规""高级"的文案由宿主出,不在此列表里。
+- 为什么是键 + 文案而不是枚举:"数据库""SSL"是领域页,宿主无法为任意插件预备封闭集合的本地化文案,
+  每加一页还要发一版 SDK。
+- `ProtocolSettingField.Page`:
+  - **优先于 `IsAdvanced`**:填了 `Page` 的字段进那一页,`IsAdvanced` 不再看;`IsAdvanced` 只决定**没有** `Page`
+    的字段去"高级"还是"常规"。"高级"没有做成一页,因为它有宿主专属行为(数量徽标、改过值的圆点、编辑既有配置时自动展开),
+    自定义分页不做这三样。
+  - 键不在 `Pages` 里:宿主按 `null` 处理,**不报错**(与 `VisibleWhen` 引用了不存在的键同一态度)。拼写靠插件的契约测试守住。
+  - 与 `VisibleWhen` 是**"与"**关系:字段在它那一页里照常按条件显隐;一页的字段全都不可见时页签隐藏,
+    正停在那一页的会落回"常规"。
+  - 只对声明了 `Pages` 的描述符有效:`ProtocolDescriptor`(文件 / 终端协议)暂无 `Pages`,那里的 `Page` 被忽略。
+- 可用版本:TBD(发版时替换)。
+
 ## 6. 隔离进程模式(isolated)
 
 在 manifest 里声明 `"hostMode": "isolated"`,插件即运行在独立的
