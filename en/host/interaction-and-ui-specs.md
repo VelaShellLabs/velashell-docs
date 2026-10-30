@@ -1615,7 +1615,7 @@ Since 2026-09-30 the dialog is a “protocol rail on the left + paged form on th
   | Workspace without variants | shown | — | — | destination preview | `Test` `Save` `Connect` (as before) |
 
   \* `IsDefault`.
-- **Plugin field pages** (page keys come from the SDK's `Pages` / `Page`, see [Development Guide §5.14.1](../templates/dev-guide.md); available since: TBD):
+- **Plugin field pages** (page keys come from the SDK's `Pages` / `Page`, see [Development Guide §5.14.1](../templates/dev-guide.md); available since: 2.1.5):
   - A field's page key **takes precedence over** `IsAdvanced`; an unknown page key is treated as unset and falls back to the default place ("General" or "Advanced").
   - Custom pages have no count badge, no modified-value dot and no auto-expand when editing (only "Advanced" has these three).
   - When all fields of a page are invisible the page tab is hidden, and if the user is on it they fall back to "General".
