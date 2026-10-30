@@ -10,6 +10,8 @@
 > 并移除宿主 Win32 实现;仅保留 `ui/embed` RPC 协议供未来复用。跨平台的停靠嵌入稳态
 > 方案仍是本篇 §4 的共享内存图像表面(远期)。现状 API 见 dev-guide §5.9。
 
+> **AI 专属区的宿主策略**：第一方 `velashell.ai` 的进程内 `DisplayMode.Document` 面板由宿主放入主窗口最右侧专属区，不创建 `DockDocument`、不改变当前激活文档。宿主管理像素宽度与固定/自动隐藏偏好；`Placement`、`PlacementRatio` 不参与该区域布局，也不发送 `PlacementRatioChanged`。折叠与隐藏保留原控件和 `IPluginPanel.IsOpen`，不触发 `Closed`；`ActivateAsync` 恢复显示，`CloseAsync` / 停用才移除内容并通知关闭。AI 的独立窗口仍走原窗口路径，和专属区分别复用。通用 SDK 宽度接口保留给普通插件文档分栏，其他插件仍走原停靠路径。
+
 前提(D6):插件进程零 Avalonia 依赖,一切 UI 由宿主渲染。三个层次,
 复杂度递增:
 

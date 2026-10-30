@@ -186,6 +186,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | `Events` (`IHostEvents`)            | 会话连接/断开、主题与语言切换                 | 订阅由宿主在停用时自动清理                                                                                          |
 | `Theme` (`IHostThemeApi`)           | `Current` / `Colors` / `GetColor` / `Changed` | 主题身份 + 整套已解析的 `Vela*` 配色 + 覆盖全部换肤情形的信号。见 §3.5                                              |
 
+宿主为第一方 `velashell.ai` 的 `DisplayMode.Document` 提供专属右侧区域：宽度与固定/自动隐藏由宿主管理，不使用 `PlacementRatio` 或发出 `PlacementRatioChanged`。隐藏、折叠不关闭句柄，`ActivateAsync` 恢复同一控件。普通插件文档分栏的宽度契约与 SDK 包保持不变；完整宿主策略见 [UI 扩展](../plugins/08-ui-extensions.md)。
+
 > **`inProcess` 专属的四项**(`RemoteTunnel` / `TerminalView` / `Protocols` / `Workspaces`)
 > 在隔离模式下调用会抛"能力不可用"。它们交出去的都是活的原生对象或裸流,
 > 跨进程边界没有等价物 —— 需要它们就把 `hostMode` 设成 `inProcess`。
