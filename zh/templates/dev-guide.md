@@ -44,8 +44,10 @@
 
 ### 2.1 第一方插件在哪儿
 
-官方维护的插件(AI / Redis / S3 / Telnet,以及示例插件 HelloWorld)在
-[VelaShellLabs/velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins),不在本仓库。
+官方维护的插件(Redis / S3 / Telnet / 串口 / MongoDB / Docker 面板 / RDP)在
+[VelaShellLabs/velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins),不在主仓库。
+例外是 AI 插件:它住在主仓库 joesdu/VelaShell 的 `plugins/` 下,随主程序同仓构建、同版发布
+(借宿主的 AvaloniaEdit、只能进程内装载,理由见那边的 `plugins/README.md`)。
 
 **它们与你自己的插件走完全同一条路径** —— 从 nuget.org 引用
 `VelaShell.PluginSdk.Build`,没有任何"仓库内特权"。所以下面 §2.2 讲的就是全部,
@@ -55,8 +57,8 @@
 那个仓库额外定义了两件**只与"随主程序分发"有关**的事,你写第三方插件用不到,
 但读它的 csproj 时会撞见:
 
-- `<VelaPluginShip>`(默认 `true`):`false` 的插件不进 `velashell-plugins-<版本>.zip`,
-  只在本机构建时铺出来当范例(示例插件 HelloWorld 就是 `false`);
+- `<VelaPluginShip>`(默认 `true`):`false` 的插件不进发行产物(Release 挂的 `.vpx` 与 `build/PluginBundle.proj`
+  收出的 `plugins/` 布局),只在本机构建时铺出来(目前所有插件都是 `true`);
 - 构建后把输出镜像到 `artifacts/plugins/<目录名>/` 与 `VELASHELL_DEV_APP_DIR` 指定的
   应用目录 —— 相当于内建了一条 `vela-plugin dev init`。
 
@@ -387,7 +389,7 @@ await series.DeleteAsync(new Dictionary<string, string> { ["conv"] = id }, ct); 
 - **查询语义**:先按标签/时间过滤,再由宿主排序取 `Limit`。匹配点上万时扫描会被截断,
   请用 `Since`/`Until` 或更细的标签收窄;
 - **配额**(`TimeSeriesLimits`):每插件 ≤8 个 measurement、每表 ≤32 列、标签值 ≤200 字符、
-  文本字段 ≤1MB、单批 ≤1000 点、单查 ≤5000 条。名称限 `[a-z][a-z0-9_]*`;
+  文本字段 ≤1MB、单批 ≤1000 点、单查 ≤5000 条。measurement 名与列名限 `[a-z][a-z0-9_]*`、至多 40 字符;
 - 无 DB 的 headless 宿主上 `OpenAsync` 抛 `InvalidOperationException`(**不会**静默丢数据),
   插件应据此降级。单测用 `InMemoryTimeSeries`(同一套校验与覆盖语义)。
 
@@ -462,8 +464,9 @@ ExecStreamResult done = await context.RemoteExec.StreamAsync(sid,
 - 每插件最多 `IRemoteExecApi.MaxConcurrentStreams`(4)条流同时在飞,超了抛
   `InvalidOperationException`。流不限时且各占一个 SSH 通道,没有上限的话一个忘了取消的
   插件能把对端的 `MaxSessions` 耗光 —— 那时坏的是用户的连接,不只是这个插件。
-- **隔离模式下"不限时"做不到**:取消令牌不跨进程传播(§6),未指定 `Timeout` 的流会被
-  补上两小时的死线。要即时取消的流式插件请用 `inProcess`。
+- **隔离模式**:宿主在握手里报 `SupportsExecutionOperations`(SDK 2.1.0 起的宿主为 true)时,取消令牌经
+  `exec/cancel` 传到宿主,未指定 `Timeout` 的流同样不限时;对着更老的宿主,隔离进程收不到取消,未指定
+  `Timeout` 的流会被补上两小时的死线 —— 要在老宿主上即时取消就用 `inProcess`。见 [IPC §7.1](../plugins/05-ipc-protocol.md#71-执行操作sdk-210)。
 
 > 交互式命令(要伪终端、要键盘输入)两者都不适用 —— 那是终端标签的事,
 > 用 `context.Terminal.WriteAsync` 把命令敲进去(需用户授权)。
@@ -561,16 +564,16 @@ context.Events.LocaleChanged    += locale => ...;
 插件用**完整的 Avalonia** 自行设计界面:编译期 AXAML 或纯代码任选,自带样式、
 资源、国际化,也可以引入任意第三方组件包(随插件目录分发,ALC 隔离互不干扰)。
 
-**唯一硬约束:Avalonia 版本与宿主一致。** Avalonia 相关包必须 compile-only:
+**唯一硬约束:Avalonia 版本与宿主一致。** 这件事 `VelaShell.PluginSdk.Build` 已经替你办了:它把 Avalonia
+以精确版本、compile-only 的方式传给插件工程(包里那条引用带 `ExcludeAssets="runtime"`)—— Avalonia 的 dll
+绝不复制进插件目录,运行时由装载方共享同一套(进程内 = 宿主的;隔离进程 = PluginHost 自带的)。
+锁的是哪一版以 SDK 仓库 `Directory.Build.props` 的 `VelaAvaloniaVersion` 为准(SDK 2.1.5 锁的是 12.1.4)。
+**插件工程不要自己再写 Avalonia 的 `PackageReference`**:解析出来的版本对不上时构建期直接报 `VELA1001`。
 
-```xml
-<!-- csproj:版本 = 宿主版本(当前 12.1.3);Avalonia dll 绝不复制进插件目录,
-     运行时由装载方共享同一套(进程内 = 宿主的;隔离进程 = PluginHost 自带的)。 -->
-<PackageReference Include="Avalonia" Version="12.1.3" ExcludeAssets="runtime" />
-```
-
-基于 Avalonia 的第三方组件包(如控件库)则**正常引用**(它们的 dll 要随插件
-分发,只有 `Avalonia*` 本体被装载器强制共享)。
+基于 Avalonia 的第三方组件包(如控件库)则**正常引用**(它们的 dll 要随插件分发)。例外是**程序集名以
+`Avalonia` 开头**的包(如 `AvaloniaEdit`):装载器按名字前缀判定共享,它们同样回落到装载方那一份 ——
+只能用宿主自己带着的,而且同样 compile-only、与宿主同版本(SDK 导出 `$(VelaSdkPinnedAvaloniaEditVersion)` 供核对),
+见 [SDK 参考 §7](../sdk/sdk-reference.md)。
 
 打开面板:内容工厂由宿主在 **UI 线程**调用,返回你的控件即可:
 
@@ -688,8 +691,8 @@ new()
   像素级盖住,最小化之后更是完全看不见 —— 用户只会以为点了没反应。
 - 国际化自理:按 `context.Host.Locale` 取词,订阅 `LocaleChanged` 热更新。
 - 插件停用时其全部面板由宿主自动关闭。
-- 完整示例(编译期 AXAML + 双语文案 + 会话/远程执行联动):
-  [`plugins/VelaShell.Plugin.HelloWorld`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.HelloWorld)(DemoPanelView.axaml)。
+- 最小的起点是 `dotnet new velaplugin-ui`(编译期 AXAML 面板 + 命令,见 §2.2);真实规模的完整示例(编译期 AXAML、
+  双语文案、经已保存的 SSH 会话开隧道):[`plugins/VelaShell.Plugin.Mongo`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Mongo)。
 
 #### 往消息中心发通知(`PostNotificationAsync`,SDK 2.1.3)
 
@@ -1066,7 +1069,7 @@ new WorkspaceDescriptor {
 | Storage / Log | ✅ KV 经 RPC 落宿主 SonnetDB(插件进程不落本地文件);日志转发宿主并本地 Trace 兜底 |
 | Secrets / Clipboard | ✅ RPC 路由到宿主执行(机密只存宿主侧加密落盘) |
 | 停靠进主窗口标签区 | ❌ **一律独立卡片窗口**(稳定,与主程序统一)。跨进程 dock 嵌入(HWND 收养)与 dock 切标签的 reparenting 有根本张力(卡顿/窗口飘出),**已弃用**;真·dock 标签页请用 inProcess。跨平台稳态方案 = 蓝图 08 共享内存表面(远期) |
-| `CancellationToken` 跨进程传播 | ⚠️ 不传播;以两侧超时兜底(exec 随 `ExecOptions.Timeout`;流式 exec 未指定 `Timeout` 时补两小时死线,见 §5.5) |
+| `CancellationToken` 跨进程传播 | ⚠️ 一般不传播,以两侧超时兜底(exec 随 `ExecOptions.Timeout`);**流式 / sudo 执行例外**:宿主报 `SupportsExecutionOperations`(SDK 2.1.0 起)时经 `exec/cancel` 传到宿主、流不限时,更老的宿主上未指定 `Timeout` 的流补两小时死线(见 §5.5) |
 
 - **选型建议**:第一方/可信插件用默认 `inProcess`(零 IPC 开销、面板可停靠拖拽);
   第三方或实验性插件用 `isolated`(多一个进程换崩溃隔离;面板为独立卡片窗口)。

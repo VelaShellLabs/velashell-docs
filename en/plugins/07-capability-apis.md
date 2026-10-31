@@ -166,7 +166,7 @@ public interface ITimeSeries
 
 It lives in the host's single SonnetDB; the physical measurement name is `pts_<plugin namespace>_<short name>`, the
 namespace is derived from the plugin id (the plugin cannot choose it), and uninstalling drops everything under the prefix.
-Semantics and quotas are in the SDK reference ([§3.2](../sdk/sdk-reference.md)); isolated processes are routed to the same
+Semantics and quotas are in [dev-guide §5.2b](../templates/dev-guide.md#52b-timeseries-private-time-series-store); isolated processes are routed to the same
 implementation through the `ts/*` methods (see 05). **Plugins never connect to the database directly and get no SQL entry
 point** — external input such as tag values is always parameterized, and column names are limited to `[a-z0-9_]`.
 

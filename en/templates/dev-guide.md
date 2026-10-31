@@ -36,8 +36,10 @@ The host-side implementation lives in the **main repository** [joesdu/VelaShell]
 
 ### 2.1 Where the First-Party Plugins Live
 
-The officially maintained plugins (AI / Redis / S3 / Telnet, plus the HelloWorld example) live in
-[VelaShellLabs/velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins), not in this repository.
+The officially maintained plugins (Redis / S3 / Telnet / Serial / MongoDB / Docker panel / RDP) live in
+[VelaShellLabs/velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins), not in the main repository.
+The exception is the AI plugin: it lives under `plugins/` in the main repository joesdu/VelaShell and is built and
+released with the app (it borrows the host's AvaloniaEdit and can only load in-process; see `plugins/README.md` there).
 
 **They take exactly the same path your own plugin does** — they reference
 `VelaShell.PluginSdk.Build` from nuget.org, with no in-repository privileges. So §2.2 below is the
@@ -47,8 +49,8 @@ third-party dependencies shipped alongside the plugin), read any project under `
 That repository defines two extra things that only concern **shipping with the main application**.
 You will not need them for a third-party plugin, but you will run into them when reading its csproj files:
 
-- `<VelaPluginShip>` (default `true`): plugins set to `false` are excluded from
-  `velashell-plugins-<version>.zip` and only laid out locally as examples (the HelloWorld example is `false`);
+- `<VelaPluginShip>` (default `true`): plugins set to `false` are left out of the release artifacts (the `.vpx`
+  files attached to a Release and the `plugins/` layout `build/PluginBundle.proj` collects) and only laid out locally (every plugin is `true` today);
 - after each build the output is mirrored to `artifacts/plugins/<directory name>/` and to the
   application directory named by `VELASHELL_DEV_APP_DIR` — effectively a built-in `vela-plugin dev init`.
 
@@ -330,6 +332,52 @@ Data is stored in the host's **SonnetDB** (`plugin_data` collection, primary key
 - **Automatic cleanup on uninstall**: after the plugin directory is removed from `plugins/`, the host clears its database namespace and data directory as a whole on the next startup (`.disabled` means disabled, not uninstalled, so data is retained);
 - A single value should generally be ≤256KB; write large data directly to files under `context.DataDirectory` (also swept on uninstall). A headless host without a database automatically falls back to JSON files in the data directory.
 
+### 5.2b TimeSeries: Private Time-Series Store
+
+Use it for data that is appended over time and looked up by tag (conversation records, metric samples, event streams); small configuration still belongs in Storage.
+
+```csharp
+ITimeSeries series = await context.TimeSeries.OpenAsync(new("chat_messages",
+[
+    TimeSeriesColumn.Tag("conv"),                                   // tag = index dimension
+    TimeSeriesColumn.Field("role", TimeSeriesValueKind.Text),
+    TimeSeriesColumn.Field("seq",  TimeSeriesValueKind.Integer),
+    TimeSeriesColumn.Field("text", TimeSeriesValueKind.Text)
+]), ct);
+
+var clock = new TimeSeriesClock();                                  // strictly increasing timestamps
+await series.WriteAsync(new(clock.Next(),
+    new Dictionary<string, string> { ["conv"] = id },
+    new Dictionary<string, TimeSeriesValue>
+    {
+        ["role"] = TimeSeriesValue.FromText("user"),
+        ["seq"]  = TimeSeriesValue.FromInteger(0),
+        ["text"] = TimeSeriesValue.FromText(message)
+    }), ct);
+
+IReadOnlyList<TimeSeriesPoint> latest = await series.QueryAsync(new()
+{
+    Tags = new Dictionary<string, string> { ["conv"] = id },
+    Descending = false,
+    Limit = 500
+}, ct);
+await series.DeleteAsync(new Dictionary<string, string> { ["conv"] = id }, ct);   // delete a whole series
+```
+
+The data goes into a time-series measurement in the host's **SonnetDB**, with the physical name `pts_<plugin namespace>_<short name>`:
+
+- **Strict isolation by plugin**: the namespace is derived from the plugin id (with a hash fallback, so `a.b` and `a-b` do not collide),
+  and a plugin can only see its own measurements; uninstalling drops everything under the prefix;
+- **Same series, same millisecond = overwrite**: a series is the measurement plus the full set of tag values. For high-frequency writes always
+  take timestamps from `TimeSeriesClock.Next()`; conversely, the rule can be used **on purpose** — writing "one summary per conversation" at a
+  fixed timestamp naturally keeps only the latest one (that is how the AI plugin's conversation list works);
+- **Query semantics**: filter by tags / time first, then the host sorts and takes `Limit`. With tens of thousands of matching points the scan
+  is truncated, so narrow it with `Since` / `Until` or finer tags;
+- **Quotas** (`TimeSeriesLimits`): ≤8 measurements per plugin, ≤32 columns per measurement, tag values ≤200 characters,
+  text fields ≤1 MB, ≤1000 points per batch, ≤5000 rows per query. Measurement and column names are limited to `[a-z][a-z0-9_]*`, at most 40 characters;
+- On a headless host without a database `OpenAsync` throws `InvalidOperationException` (it **never** drops data silently),
+  and the plugin should degrade accordingly. Unit tests use `InMemoryTimeSeries` (the same validation and overwrite semantics).
+
 ### 5.3 Sessions: Session Enumeration (Redacted)
 
 ```csharp
@@ -354,14 +402,120 @@ await context.RemoteFs.DownloadFileAsync(sid, "/var/log/app.log", localPath, pro
 - `ReadAllBytesAsync` has a 16MB limit by default; use `OpenReadAsync` (**read-only sequential stream**, process while reading without a temporary file) or `DownloadFileAsync` for large files. In isolated mode, `OpenReadAsync` fetches chunks over RPC and does not support Seek.
 - The host throttles progress callbacks (≥100ms), so you can update state directly.
 
-### 5.5 RemoteExec: One-Off Remote Commands
+### 5.5 RemoteExec: Remote Commands (One-Off / Streaming)
+
+A separate exec channel: it does not enter the user's terminal or pollute shell history and environment. Two forms:
+
+**One-off** (probe commands) —
 
 ```csharp
 ExecResult r = await context.RemoteExec.RunAsync(sid, "docker ps --format json",
     new ExecOptions { Timeout = TimeSpan.FromSeconds(10) }, ct);
+
+if (!r.IsSuccess)                     // a non-zero exit code does **not** throw — a failed command is a normal result
+{
+    context.Log.Warn(r.FailureText);  // prefers the first line of stderr, falling back to stdout / the exit code
+}
+Parse(r.Output);                      // stdout and stderr are two separate streams
 ```
 
-Uses a separate exec channel: it does not enter the user's terminal or pollute shell history and environment. The default timeout is 30s, with a maximum of 10min. It is suitable for probe commands, not interactive or long-running processes.
+- The default timeout is 30s, capped at 10min; a timeout throws `TimeoutException`.
+- **`Output` contains standard output only**; `Error` is standard error and `ExitCode` the exit code — all three are on
+  `ExecResult`. Stop building `2>&1; echo $?` sentinels yourself: merging the two streams lets a single `WARNING:` line choke the
+  code that parses `--format json`, and the sentinel breaks as soon as the user's login shell is fish/csh.
+
+**Streaming** (long-running commands: `docker logs -f`, `docker events`, `tail -F`) —
+
+```csharp
+sealed class LineSink(Action<string> onLine) : IProgress<ExecOutput>
+{
+    public void Report(ExecOutput o) => onLine(o.Line);   // forward synchronously; order is arrival order
+}
+
+ExecStreamResult done = await context.RemoteExec.StreamAsync(sid,
+    "docker logs -f --tail 200 web",
+    new ExecStreamOptions { Timeout = null },             // null = no deadline; finish through the cancellation token
+    new LineSink(AppendToView), panelClosedToken);
+```
+
+- Output is called back **line by line**, and the host does not throttle it (the value of logs is that they are immediate); batch it yourself if you need to.
+- **Do not pass `System.Progress<T>`**: it `Post`s every callback to the synchronization context or the thread pool, so neither order
+  nor thread is guaranteed any more — harmless for a progress percentage, a disaster for a screen of logs. The host calls `Report`
+  sequentially on the thread that reads the lines, so as long as your implementation is synchronous, line order is guaranteed.
+- When the cancellation token fires, the host sends `TERM` to the remote process and closes the channel, and the method throws
+  `OperationCanceledException`; when `Timeout` expires it throws `TimeoutException`. **The plugin must hold that token and fire it.**
+- At most `IRemoteExecApi.MaxConcurrentStreams` (4) streams per plugin can be in flight at once; beyond that the call throws
+  `InvalidOperationException`. Streams have no deadline and each holds an SSH channel; without a cap, a plugin that forgot to cancel
+  could exhaust the server's `MaxSessions` — and then what breaks is the user's connection, not just this plugin.
+- **Isolated mode**: when the host reports `SupportsExecutionOperations` in the handshake (true for hosts since SDK 2.1.0), the
+  cancellation token reaches the host through `exec/cancel` and a stream without `Timeout` has no deadline there either; against older
+  hosts the isolated process cannot deliver the cancellation, so a stream without `Timeout` gets a two-hour deadline — use `inProcess`
+  if you need immediate cancellation on old hosts. See [IPC §7.1](../plugins/05-ipc-protocol.md#71-execution-operations-sdk-210).
+
+> Neither form suits interactive commands (those that need a pseudo-terminal or keyboard input) — that is the terminal tab's job;
+> type the command in with `context.Terminal.WriteAsync` (requires user authorization).
+
+### 5.5b RemoteTunnel: Raw Byte Streams to a Remote Socket / TCP Endpoint (SDK 1.2)
+
+```csharp
+await using Stream stream = await context.RemoteTunnel
+    .OpenUnixSocketAsync(sessionId, "/var/run/docker.sock", cancellationToken: token);
+// A remote TCP endpoint works too (the address is resolved from the **remote** side):
+// await context.RemoteTunnel.OpenTcpAsync(sessionId, "127.0.0.1", 6379, cancellationToken: token);
+```
+
+**When you need it.** Both forms of remote execution are **text**: `RunAsync` decodes the whole output as UTF-8 into
+one string, and `StreamAsync` calls back line by line split on `\n`. For a binary protocol that is not "a bit slower", it is
+**silent data corruption** — UTF-8 decoding replaces invalid bytes with U+FFFD (irreversibly), and line splitting cuts a frame
+in two at `0x0A`. The Docker Engine API's chunked transfer, the tar stream of `/archive` and the 8-byte multiplexed frames of
+`/exec` all fall into this category. To speak such a protocol, use a tunnel.
+
+- The returned `Stream` is readable and writable; `Dispose` closes the SSH channel and returns the quota — **the caller must dispose it**.
+- The cancellation token applies only to **establishing** the tunnel; once the channel is up, reads and writes are governed by the
+  caller's own tokens and the remote end. A long-lived connection that just sits there, like `docker events`, is the normal shape of a
+  tunnel; giving it an overall deadline would only make the UI drop the stream mysteriously at minute N.
+- At most `IRemoteTunnelApi.MaxConcurrentTunnels` (16) per plugin, for the same reason as streaming execution.
+- **`inProcess` only**: what it hands out is a live stream, and proxying it across processes gains nothing beyond copying every byte
+  once more. Calling it in an isolated process throws `NotSupportedException`.
+
+> Unlike the host's local port forwarding, a tunnel **does not open a listening port on the local machine**; the stream goes only to the
+> plugin that asked for it. When the other end is a root-equivalent socket, that difference is not an optimization but a precondition.
+
+### 5.5c TerminalView: Borrowing the Host's Terminal Emulator (SDK 1.3)
+
+A plugin that wants a **real terminal** (one that can run `top` / `vim` / `less`) does not have to write its own ANSI parser:
+
+```csharp
+if (!context.TerminalView.IsAvailable)
+{
+    // Older host or isolated process: fall back to line-based output rather than letting the button blow up.
+    return;
+}
+// Must be called on the UI thread (views are constructed there anyway).
+IPluginTerminalView view = context.TerminalView.Create(new() { ScrollbackLines = 5000 });
+var host = new ContentControl { Content = (Control)view.Control };
+
+// The remote size must follow the control, or vim keeps drawing at the old size and the screen comes out misaligned.
+view.Resized += (cols, rows) => _ = session.ResizeAsync(rows, cols);
+
+// One line wires up the duplex stream: reading in the background, rendering back on the UI thread, user keystrokes
+// written back in order — the host does all of it.
+await view.AttachAsync(session.Stream, token);
+```
+
+- The `Control` handed out is an Avalonia control (surfaced as `object` — the SDK layer deliberately knows nothing about UI frameworks,
+  the same convention as the content factory of `IUiApi.ShowPanelAsync`).
+- Its appearance **follows the host's terminal settings** by default (font, size, line height, colours, cursor, gutter).
+  A user who has tuned the terminal font once should not have to do it again because the terminal is in a plugin panel.
+- `AttachAsync` attaches one stream at a time; attaching another first disconnects the previous one. It does **not** dispose the stream
+  passed in.
+- `Dispose` destroys the control and disconnects the current stream.
+- **`inProcess` only**: what it hands out is a live native control, which cannot be embedded across processes.
+  Calling it in an isolated process throws `NotSupportedException` — ask `IsAvailable` first.
+
+> How it divides the work with `ITerminalApi`: that one is a side channel onto **the host's existing sessions** (read the buffer, search
+> the output, write back with authorization); this one is the plugin's **own** terminal. The former operates someone else's terminal, the
+> latter owns one of its own.
 
 ### 5.6 Commands: Command Palette
 
@@ -394,15 +548,9 @@ Handlers are invoked off the UI thread and **must return quickly without throwin
 
 Plugins use **full Avalonia** to design their own UI: choose compile-time AXAML or pure code, bring your own styles, resources, and localization, and add any third-party component packages (distributed in the plugin directory and isolated from other plugins by the ALC).
 
-**The only hard constraint: the Avalonia version must match the host.** Avalonia-related packages must be compile-only:
+**The only hard constraint: the Avalonia version must match the host.** `VelaShell.PluginSdk.Build` already takes care of it: it hands Avalonia to the plugin project at an exact version and compile-only (the reference in the package carries `ExcludeAssets="runtime"`) — Avalonia DLLs are never copied into the plugin directory, and the loader shares the same set at runtime (in-process = the host's; isolated process = bundled with PluginHost). Which version is pinned is decided by `VelaAvaloniaVersion` in the SDK repository's `Directory.Build.props` (SDK 2.1.5 pins 12.1.4). **Do not add your own `PackageReference` to Avalonia in the plugin project**: if the resolved version does not match, the build fails with `VELA1001`.
 
-```xml
-<!-- csproj: version = host version (currently 12.1.3); Avalonia DLLs are never copied into the plugin directory,
-     and the loader shares the same set at runtime (in-process = the host's; isolated process = bundled with PluginHost). -->
-<PackageReference Include="Avalonia" Version="12.1.3" ExcludeAssets="runtime" />
-```
-
-Third-party packages based on Avalonia, such as control libraries, should be referenced normally (their DLLs must be distributed with the plugin; only the `Avalonia*` assemblies themselves are forcibly shared by the loader).
+Third-party packages based on Avalonia, such as control libraries, are referenced normally (their DLLs ship with the plugin). The exception is packages whose **assembly name starts with `Avalonia`** (such as `AvaloniaEdit`): the loader decides sharing by name prefix, so they fall back to the loading side's copy too — only ones the host itself ships can be used, and they must likewise be compile-only and match the host's version (the SDK exports `$(VelaSdkPinnedAvaloniaEditVersion)` for checking); see [SDK reference §7](../sdk/sdk-reference.md).
 
 Opening a panel: the host invokes the content factory on the **UI thread**, and you only need to return your control:
 
@@ -515,7 +663,7 @@ Discipline:
   exactly that; the next release fixes it.)
 - Localization is the plugin's responsibility: retrieve translations through `context.Host.Locale` and hot-update on `LocaleChanged`.
 - The host automatically closes all of a plugin's panels when the plugin is deactivated.
-- Complete example (compile-time AXAML + bilingual copy + session/remote execution integration): [`plugins/VelaShell.Plugin.HelloWorld`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.HelloWorld) (DemoPanelView.axaml).
+- The smallest starting point is `dotnet new velaplugin-ui` (a compile-time AXAML panel + a command, see §2.2); a complete example at real scale (compile-time AXAML, bilingual copy, tunnelling over a saved SSH session): [`plugins/VelaShell.Plugin.Mongo`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Mongo).
 
 #### Posting to the message center (`PostNotificationAsync`, SDK 2.1.3)
 
@@ -910,7 +1058,7 @@ Declare `"hostMode": "isolated"` in the manifest and the plugin runs in a separa
 | Storage / Log | ✅ KV is routed over RPC into the host's SonnetDB (the plugin process does not write local files); logs are forwarded to the host with local Trace as a fallback |
 | Secrets / Clipboard | ✅ Routed over RPC to execute on the host (secrets are encrypted and persisted only on the host side) |
 | Dock into the main window's tab area | ❌ **Always a separate card window** (stable and consistent with the main program). Cross-process dock embedding (HWND adoption) has fundamental tension with dock tab reparenting (stuttering and windows floating out), and is **deprecated**; use inProcess for true docked tabs. The stable cross-platform solution is the shared-memory surface in blueprint 08 (future) |
-| `CancellationToken` propagation across processes | ⚠️ Not propagated; both sides use timeouts as a fallback (`exec` follows `ExecOptions.Timeout`) |
+| `CancellationToken` propagation across processes | ⚠️ Generally not propagated; both sides use timeouts as a fallback (`exec` follows `ExecOptions.Timeout`). **Streaming / sudo execution is the exception**: when the host reports `SupportsExecutionOperations` (since SDK 2.1.0) cancellation reaches it through `exec/cancel` and streams have no deadline; on older hosts a stream without `Timeout` gets a two-hour deadline (see §5.5) |
 
 - **Selection guidance**: use the default `inProcess` for first-party or trusted plugins (zero IPC overhead and draggable docked panels); use `isolated` for third-party or experimental plugins (one extra process provides crash isolation, with panels displayed in separate card windows).
 
