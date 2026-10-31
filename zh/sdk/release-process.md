@@ -1,20 +1,25 @@
 # 发版流程(契约 SDK)
 
-> 本篇只讲**本仓库**怎么发版。`vela-plugin` / `VelaShell.PluginSdk.Build` 见
+> 本篇只讲**本仓库**(velashell-plugin-sdk)怎么发版。`vela-plugin` 见
 > [velashell-plugin-cli](../cli/release-process.md),
 > `dotnet new` 模板见
 > [velashell-plugin-templates](../templates/release-process.md)。
 
-本仓库一次发布产出两个包,共用 Release 标签里的版本号:
+本仓库一次发布产出三个包,共用 Release 标签里的版本号:
 
 | 包 | 内容 |
 | --- | --- |
 | `VelaShell.PluginSdk` | 契约程序集 |
 | `VelaShell.PluginSdk.Testing` | 测试替身 |
+| `VelaShell.PluginSdk.Build` | 插件工程**只需引用的那一个包**:targets + 随包分发的打包器 + 依赖锁 |
 
-**下游不必跟着发。** 拆库(2026-08-27)之后 cli 与 templates 两个仓库各有各的版本号,
-它们只在想吃到新契约时才把自己引用的 `VelaShell.PluginSdk` 版本抬上来。SDK 发 1.6.0
-不代表 `vela-plugin` 要变成 1.6.0 —— 那正是拆库要的效果。
+`.Build` 于 2026-09-11 从 velashell-plugin-cli 搬来;`.vpx` 打包器(`src/VelaShell.PluginSdk.Packer`,
+`IsPackable=false`)也在本仓库,不单独发包,只以构建产物的形式躺在 `.Build` 包的 `tools/` 下。
+`.Build` 对契约与打包器都是 `ProjectReference`,所以发给插件作者的契约与打包器永远就是同一次发布的这一版。
+
+**下游不必跟着发。** cli 与 templates 两个仓库各有各的版本号:cli 只在想吃到新契约时才把自己引用的
+`VelaShell.PluginSdk` 版本抬上来,模板仓库只在想让新建工程指向新版时才抬 `VelaBuildPackageVersion`
+(生成的工程引用哪一版 `.Build`)。SDK 发 1.6.0 不代表 `vela-plugin` 要变成 1.6.0 —— 那正是拆库要的效果。
 
 ---
 
@@ -142,27 +147,32 @@
 控件类型对不上,而且要等到用户装上插件才炸。
 
 单仓库时代这个核对是 `VelaShell.PluginSdk.Build` 直接 `XmlPeek` 宿主的
-`src/Directory.Packages.props` 做的。拆库之后读不到对方的文件了,于是反过来:
+`src/Directory.Packages.props` 做的。拆库之后读不到宿主的文件了,于是反过来,由本仓库给出权威值:
 
 ```
-Directory.Build.props: <VelaAvaloniaVersion>12.1.3</VelaAvaloniaVersion>
-        ↓ 打包时写进 buildTransitive/VelaShell.PluginSdk.props
-$(VelaSdkPinnedAvaloniaVersion)
-        ↓ 引用 VelaShell.PluginSdk 的工程都吃得到
-  ├── 宿主 src/Directory.Build.targets 的 VerifyAvaloniaMatchesSdk
-  └── cli 仓库 VelaShell.PluginSdk.Build 的 VerifyAvaloniaVersionPin
+Directory.Build.props: <VelaAvaloniaVersion>x.y.z</VelaAvaloniaVersion>      ← 权威
+  ├── 打包时写进 VelaShell.PluginSdk 包的 buildTransitive/VelaShell.PluginSdk.props
+  │     → $(VelaSdkPinnedAvaloniaVersion),引用 VelaShell.PluginSdk 的工程都吃得到
+  │       ├── 宿主 src/Directory.Build.targets 的 VerifyAvaloniaMatchesSdk
+  │       └── velashell-plugins 测试工程的同名核对(VELAP1000)
+  └── 同仓库的 VelaShell.PluginSdk.Build 直接读这个属性(VerifyAvaloniaVersionPin):
+        csproj 上那条精确区间 [x.y.z] 必须等于它(VELA1006),
+        build/VelaShell.PluginSdk.Build.props 里的同名默认值必须等于那条区间(VELA1000),
+        属性缺失本身也报错(VELA1005)
 ```
 
-包里那个 props 文件是这个事实传给下游的**唯一通道**,它没打进包也不会让 `pack` 失败 ——
+包里那个 props 文件是这个事实传给**宿主**的唯一通道,它没打进包也不会让 `pack` 失败 ——
 所以 CI 与 Release 都有一步「Verify the pin props shipped in the package」,拆开 nupkg 核对。
+`.Build` 那一侧不走这条通道(同仓库,直接读属性)。
 
 **改 `VelaAvaloniaVersion` 的完整动作**:
 
 1. 与宿主同一波发布(宿主必须引用同一版本);
-2. 发一版 SDK;
-3. 去 cli 仓库把 `VelaSdkPackageVersion` 抬到这一版,并同步它的 `VelaAvaloniaVersion` ——
-   否则那道 `VerifyAvaloniaVersionPin` 会红;
-4. 发一版 `VelaShell.PluginSdk.Build`,插件工程才拿得到新锁。
+2. **同一个提交里**把 `.Build` 的两处副本一起改掉:`VelaShell.PluginSdk.Build.csproj` 上 Avalonia 的精确区间、
+   `build/VelaShell.PluginSdk.Build.props` 里的 `VelaAvaloniaVersion` 默认值 —— 否则 VELA1006 / VELA1000 当场红;
+3. 发一版 SDK —— 三个包同一次发出,插件工程抬到这一版 `.Build` 就拿到了新锁;
+4. 下游跟上:宿主抬 SDK 包;velashell-plugins 抬 `.Build` / `.Testing`,并按 VELAP1000 把测试工程的
+   `Avalonia*` 改成新值;模板仓库要让新建工程指过去,再抬 `VelaBuildPackageVersion`。
 
 ---
 
@@ -180,3 +190,28 @@ Release 目录彼此隔离,不会把未签名产物混进要发布的包里。
 
 > cli 与 templates 两个仓库都不签名,因此**不需要**这把钥匙 ——
 > 未签名程序集可以引用已签名的,方向是对的。
+
+---
+
+## 六、端到端冒烟
+
+发布前(CI 与 Release 都跑)会跑 `scripts/Invoke-Smoke.ps1 -Feed ./artifacts/nuget -Version <版本>`:拿刚打出的包,
+把 `tests/smoke/` 下那个手写的最小插件工程(与 `velaplugin-ui` 模板同形:命令 + 面板 + 编译期 AXAML)复制到临时目录、
+从本地源还原、`dotnet build -t:PackVpx`、确认真出了 `.vpx`、用 `.Build` 包 `tools/` 里的打包器把容器读回来、
+查共享程序集有没有漏进插件输出目录。本地源只装本仓库刚打出的三个包,产物不出本仓库 —— 这是 CI 的常规步骤,
+不是给别的仓库造本地包的办法。
+
+**这一步不是形式。** 插件工程是仓库外环境,仓库内的 `Directory.Build.props` 一条也吃不到
+(夹具里那两个空的 `Directory.Build.props`/`.targets` 就是为了切断向上查找)。
+历史上正是它先发现了两个坑:
+
+* SDK 带 `RequiresPreviewFeatures`,插件工程不开预览开关就全线 `CA2252`;
+* NuGet 默认不传递 `build` 资产,Avalonia 的 AXAML 编译器到不了插件工程 —— 现象是
+  运行时找不到控件,而不是构建报错。
+
+两个坑都只有在「什么都不继承」的前提下才会显形。它还守着「打包器真的进了包」:读回用的打包器刻意从包里取,
+漏打了在这里就红,而不是等插件作者 `-t:PackVpx` 时拿到 `VELA1003`。**改了 `.Build` 的 targets 或打包器的命令面,必须跑它。**
+
+> 这一步 2026-09-11 随 `.Build` 从 cli 仓库搬来。更早(拆库之前)它用的是 `dotnet new velaplugin-ui`;模板搬走之后
+> 不能再那样做:那会让模板仓库出问题时本仓库的 CI 无端变红,而且发本仓库的包还得先有模板包。
+> 模板本身的端到端验证由模板仓库自己的 CI 负责。

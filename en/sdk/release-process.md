@@ -1,21 +1,28 @@
 # Release process (contract SDK)
 
-> This page covers how **this repository** is released. For `vela-plugin` / `VelaShell.PluginSdk.Build` see
+> This page covers how **this repository** (velashell-plugin-sdk) is released. For `vela-plugin` see
 > [velashell-plugin-cli](../cli/release-process.md);
 > for the `dotnet new` templates see
 > [velashell-plugin-templates](../templates/release-process.md).
 
-One release of this repository produces two packages, which share the version number in the Release tag:
+One release of this repository produces three packages, which share the version number in the Release tag:
 
 | Package | Contents |
 | --- | --- |
 | `VelaShell.PluginSdk` | The contract assembly |
 | `VelaShell.PluginSdk.Testing` | Test doubles |
+| `VelaShell.PluginSdk.Build` | The **one package a plugin project references**: targets + the bundled packer + the dependency pins |
 
-**Downstream does not have to release along with it.** Since the repository split (2026-08-27) the cli and
-templates repositories each have their own version number, and they raise the `VelaShell.PluginSdk` version they
-reference only when they want the new contract. The SDK shipping 1.6.0 does not mean `vela-plugin` has to become
-1.6.0 — that is exactly what the split was for.
+`.Build` moved here from velashell-plugin-cli on 2026-09-11; the `.vpx` packer (`src/VelaShell.PluginSdk.Packer`,
+`IsPackable=false`) lives in this repository too and is not a package of its own — it ships only as build output
+under the `.Build` package's `tools/`. `.Build` reaches both the contract and the packer through `ProjectReference`,
+so the contract and packer handed to plugin authors are always the ones from that same release.
+
+**Downstream does not have to release along with it.** The cli and templates repositories each have their own
+version number: the cli raises the `VelaShell.PluginSdk` version it references only when it wants the new contract,
+and the templates repository raises `VelaBuildPackageVersion` (which `.Build` version generated projects reference)
+only when it wants new projects to point at the new release. The SDK shipping 1.6.0 does not mean `vela-plugin` has
+to become 1.6.0 — that is exactly what the split was for.
 
 ---
 
@@ -157,29 +164,37 @@ side, so a version drift means control types that do not match across ALCs, and 
 installs the plugin.
 
 In the single-repository days, `VelaShell.PluginSdk.Build` made this check by `XmlPeek`-ing the host's
-`src/Directory.Packages.props` directly. After the split neither side can read the other's files any more, so it
-now runs the other way round:
+`src/Directory.Packages.props` directly. After the split the host's files are out of reach, so it now runs the
+other way round, with this repository supplying the authoritative value:
 
 ```
-Directory.Build.props: <VelaAvaloniaVersion>12.1.3</VelaAvaloniaVersion>
-        ↓ written into buildTransitive/VelaShell.PluginSdk.props at pack time
-$(VelaSdkPinnedAvaloniaVersion)
-        ↓ visible to every project that references VelaShell.PluginSdk
-  ├── VerifyAvaloniaMatchesSdk in the host's src/Directory.Build.targets
-  └── VerifyAvaloniaVersionPin in VelaShell.PluginSdk.Build (cli repository)
+Directory.Build.props: <VelaAvaloniaVersion>x.y.z</VelaAvaloniaVersion>      ← the authority
+  ├── written into the VelaShell.PluginSdk package's buildTransitive/VelaShell.PluginSdk.props at pack time
+  │     → $(VelaSdkPinnedAvaloniaVersion), visible to every project that references VelaShell.PluginSdk
+  │       ├── VerifyAvaloniaMatchesSdk in the host's src/Directory.Build.targets
+  │       └── the check of the same name in velashell-plugins' test projects (VELAP1000)
+  └── read directly by VelaShell.PluginSdk.Build in this same repository (VerifyAvaloniaVersionPin):
+        the exact range [x.y.z] on its csproj must equal it (VELA1006),
+        the default of the same name in build/VelaShell.PluginSdk.Build.props must equal that range (VELA1000),
+        and a missing property is itself an error (VELA1005)
 ```
 
-That props file in the package is the **only channel** that carries this fact downstream, and leaving it out of
+That props file in the package is the only channel that carries this fact to the **host**, and leaving it out of
 the package does not make `pack` fail — so both CI and Release have a "Verify the pin props shipped in the
-package" step that unpacks the nupkg and checks it.
+package" step that unpacks the nupkg and checks it. The `.Build` side does not use that channel (same repository,
+it reads the property directly).
 
 **The full procedure for changing `VelaAvaloniaVersion`**:
 
 1. Ship it in the same wave as the host (the host must reference the same version);
-2. Release the SDK;
-3. In the cli repository, raise `VelaSdkPackageVersion` to that release and update its `VelaAvaloniaVersion` to
-   match — otherwise its `VerifyAvaloniaVersionPin` goes red;
-4. Release `VelaShell.PluginSdk.Build`; only then do plugin projects get the new pin.
+2. In **the same commit**, change both copies inside `.Build`: the exact Avalonia range on
+   `VelaShell.PluginSdk.Build.csproj` and the `VelaAvaloniaVersion` default in `build/VelaShell.PluginSdk.Build.props`
+   — otherwise VELA1006 / VELA1000 go red on the spot;
+3. Release the SDK — all three packages go out together, so plugin projects get the new pin as soon as they move to
+   that `.Build`;
+4. Downstream follows: the host raises its SDK packages; velashell-plugins raises `.Build` / `.Testing` and, as
+   VELAP1000 tells it, moves its test projects' `Avalonia*` to the new value; the templates repository raises
+   `VelaBuildPackageVersion` when it wants new projects to point there.
 
 ---
 
@@ -199,3 +214,35 @@ The key is not checked in (`*.snk` is in `.gitignore`); CI restores it to the re
 
 > Neither the cli nor the templates repository signs anything, so they **do not need** this key —
 > an unsigned assembly may reference a signed one, which is the right direction.
+
+---
+
+## 6. End-to-end smoke test
+
+Before a release (both CI and Release run it), `scripts/Invoke-Smoke.ps1 -Feed ./artifacts/nuget -Version <version>`
+runs: with the freshly packed packages, it copies the hand-written minimal plugin project under `tests/smoke/` (the
+same shape as the `velaplugin-ui` template: a command + a panel + compile-time AXAML) into a temporary directory,
+restores from the local source, runs `dotnet build -t:PackVpx`, confirms a `.vpx` really came out, reads the container
+back with the packer from the `.Build` package's `tools/`, and checks whether any shared assembly leaked into the plugin
+output directory. The local source holds only the three packages this repository has just packed, and nothing leaves
+the repository — it is a routine CI step, not a way to hand local packages to other repositories.
+
+**This step is not a formality.** A plugin project is an environment outside the repository and inherits none of
+the repository's `Directory.Build.props` (the two empty `Directory.Build.props`/`.targets` in the fixture are
+there to cut off the upward search). Historically it is what caught two pitfalls first:
+
+* The SDK carries `RequiresPreviewFeatures`, so a plugin project that does not turn on the preview switch gets
+  `CA2252` across the board;
+* NuGet does not flow `build` assets transitively by default, so Avalonia's AXAML compiler never reaches the
+  plugin project — the symptom is controls that cannot be found at run time, not a build error.
+
+Both pitfalls only show up when nothing at all is inherited. It also guards "the packer really made it into the
+package": the packer used for the read-back is deliberately taken from the package, so a missing packer turns this
+step red instead of handing plugin authors a `VELA1003` at `-t:PackVpx` time. **Run it whenever you change `.Build`'s
+targets or the packer's command surface.**
+
+> This step moved here from the cli repository with `.Build` on 2026-09-11. Earlier still (before the split) it used
+> `dotnet new velaplugin-ui`; with the templates moved out it can no longer do that: a problem in the templates
+> repository would turn this repository's CI red for no reason, and releasing this repository's packages would first
+> require a templates package. End-to-end verification of the templates themselves is the job of the templates
+> repository's own CI.
