@@ -527,4 +527,5 @@ Mistakes (a missing side, a port out of range, a target without a port, a socket
   a `RemoteForward port` written into the config is itself the config author's explicit choice; `any` / `none` / a list mean what they say.
 - 〔Decision〕**`ExitOnForwardFailure yes`: if one forward fails to start, everything already started is torn down and the whole call fails** (`SshForwardException`, `ForwardSetupFailed`, with the line in the message) ——
   scripts and automation need exactly "don't run if a required forward is not up". Without it the failure goes to `onFailure` and the rest start as usual.
-- Combinations the library does not support yet (the server listening on a socket with a local TCP target, or the reverse) are handled as "this one failed to start".
+- Each side of a remote forward may be a port or a socket (`07-forwarding.md` §4.4): a listen side containing `/` goes into `RemotePortForwardOptions.ListenSocketPath`, a target side containing `/` uses `StartToUnixSocketAsync`.
+  Only a target-less `RemoteForward /path` that listens on a socket (remote dynamic forwarding has just the port form) is handled as "this one failed to start" (`Unsupported`). 〔History〕"The server listening on a socket with a local TCP target" and the reverse used to be handled that way too — the library had no entry point for them then.

@@ -16,7 +16,7 @@
 | --- | :-: | --- | --- |
 | **Local forwarding** | `-L` | Us (local machine) | A `direct-tcpip` channel |
 | **Dynamic forwarding** | `-D` | Us (local machine, running SOCKS5) | A `direct-tcpip` channel, target given by the SOCKS handshake |
-| **Remote forwarding** | `-R` | The server | The server opens a `forwarded-tcpip` channel; we connect to the local target |
+| **Remote forwarding** | `-R` | The server (on a port or a Unix socket, §4.4) | The server opens a `forwarded-tcpip` (or `forwarded-streamlocal@openssh.com`) channel; we connect to the local target (TCP or a Unix socket) |
 | **Remote dynamic forwarding** | `-R [bind:]port` (no target) | The server | The server opens a `forwarded-tcpip` channel carrying SOCKS5; we connect to the target it asks for, subject to an allowlist (§4.6) |
 | **Direct tunnel** | None (`-W` is close) | Nobody listens | `direct-tcpip` / `direct-streamlocal`; the stream is handed straight to the caller |
 
@@ -274,7 +274,7 @@ and the server log had no connect failed.
 anything else gets 1. 〔History〕Early versions always replied 1.
 
 〔Decision〕**The `Source` of the connection events is the originator in `forwarded-tcpip`** (who connected to the port exposed on the server): an `IPEndPoint` when it parses as an IP address,
-otherwise a `DnsEndPoint` with the host name (not resolved); Unix socket forwarding has no such field, so it is `null`. 〔History〕Early versions discarded it, so `Source` was always `null`.
+otherwise a `DnsEndPoint` with the host name (not resolved); when the server listens on a socket (`forwarded-streamlocal`) there is no such field, so it is `null` (§4.4). 〔History〕Early versions discarded it, so `Source` was always `null`.
 
 ### 4.2 Three musts
 
@@ -299,7 +299,7 @@ The `cancel-tcpip-forward` global request, with the same fields as `tcpip-forwar
 〔Decision〕After cancellation, **continue accepting in-flight `forwarded-tcpip` channels** for a few seconds (`DrainGrace`, 2 seconds);
 otherwise connections that are being established get rejected for no apparent reason. Disposal proceeds in this order:
 
-1. Send `cancel-tcpip-forward` (`cancel-streamlocal-forward@openssh.com` for the Unix socket variant). From this moment `IsActive` is false.
+1. Send `cancel-tcpip-forward` (`cancel-streamlocal-forward@openssh.com` when the server listens on a socket, §4.4). From this moment `IsActive` is false.
 2. During the grace period the handler stays in place: matching forwarded channels are still accepted and relayed, and existing connections keep relaying.
 3. When the grace period ends, the handler is removed — forwarded channels arriving after that are rejected.
 4. All of this forwarder's connections are ended, aborted as errors (§2.2): the local target receives an RST, and the server's channel receives a `CLOSE` without `EOF`.
@@ -319,17 +319,63 @@ a cancel request with `want_reply = false` is sent (no reply is registered, so n
 Which arrives first — the reply or "the caller gave up" — is settled by an atomic state, and whichever comes second sends the cancel, so even simultaneous arrival is covered.
 It used to only remove the local handler: the server's listener stayed open until the connection dropped and every incoming connection was refused; an immediate retry on a fixed port always failed with "port already in use".
 
-### 4.4 Unix socket variant
+### 4.4 Unix domain sockets
 
-`streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com`
-(global requests) + `forwarded-streamlocal@openssh.com` (channel type);
-the fields replace `addr ‖ port` with a single `string socket_path`.
+> Basis: `streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com` (global requests) and
+> `forwarded-streamlocal@openssh.com` (channel type) in OpenSSH `PROTOCOL`; the path forms of ssh(1) `-R`.
+
+**Each** side of a remote forward may be TCP or a Unix domain socket, so all four combinations exist, symmetric with local forwarding (§2.5):
+**the server side** (who listens) is decided by `ListenSocketPath` in the options, **the local side** (where a forwarded connection goes) by the start method.
+
+| Form | API | Server listener (global request) | Forwarded channel | Local target |
+| --- | --- | --- | --- | --- |
+| `-R [bind:]port:host:hostport` | `RemotePortForwarder.StartAsync(connection, host, port, options)` | `tcpip-forward` (`bind_addr ‖ bind_port`) | `forwarded-tcpip` | TCP `host:port` |
+| `-R [bind:]port:/local/path` | `RemotePortForwarder.StartToUnixSocketAsync(connection, local path, options)` | `tcpip-forward` | `forwarded-tcpip` | a local socket |
+| `-R /server/path:host:hostport` | `StartAsync` + `RemotePortForwardOptions.ListenSocketPath` | `streamlocal-forward@openssh.com` (`socket_path`) | `forwarded-streamlocal@openssh.com` (`socket_path ‖ reserved`) | TCP `host:port` |
+| `-R /server/path:/local/path` | `StartToUnixSocketAsync` + `ListenSocketPath` | `streamlocal-forward@openssh.com` | `forwarded-streamlocal@openssh.com` | a local socket |
+
+Use: the program on the server only speaks sockets (or only ports) while the local service is the other kind — for example handing the local database on
+`127.0.0.1:5432` to the server as `/run/user/1000/pg.sock` for tools that connect by socket, or the other way round, a port on the server leading back to the local `docker.sock`.
+When the server listens on a socket, **other users on the remote machine can neither see nor connect to it** (file permissions decide), whereas a port is open to everyone on that machine.
+
+The two sides **do not affect each other**:
+
+- **The server side decides everything on the wire**: which global request is sent, which channel type forwarded connections use, how they are claimed, which request cancels, and which kind a refusal gets.
+  - Listening on a port: §4.1–§4.3 apply unchanged (with port 0 the actual port is in the reply, connections are claimed by "bind address + port", cancellation sends `cancel-tcpip-forward`).
+    A refusal is `RemoteListenRejected` (`Endpoint` is `bind:port`, plus `Port`).
+  - Listening on a socket: the fields replace `addr ‖ port` with a single `string socket_path`; the reply **has no payload** (the requester chose the path, so there is no "actual path" to return),
+    and anything that comes with it is ignored; forwarded connections are claimed by the path **byte for byte**, without normalization (`/tmp/a.sock` and `/tmp//a.sock` are two listeners, for the same reason addresses are not normalized in §4.2);
+    cancellation sends `cancel-streamlocal-forward@openssh.com` (just `socket_path`). A refusal is `RemoteSocketListenRejected` (`Endpoint` is the path).
+    With `ListenSocketPath` set, `BindAddress` / `BindPort` no longer apply, `BoundPort` is 0 and `RemoteEndpointName` is the path.
+- **The local side only decides how to reach the target when a forwarded connection arrives**: a TCP target by host name and port, a socket target by its path. Both are **connected before the channel is confirmed** (§4.1):
+  if that fails, reply `CHANNEL_OPEN_FAILURE(2)` with a description that only says it cannot connect to the forwarded local target, and record `Error` locally (`TargetConnect`, with `Target` being `host:port` or the path itself).
+  Whether a socket exists at the path and anyone listens on it is only known when a forwarded connection arrives — just like a TCP target, nothing is tried while starting the forward.
+- The `Source` of the connection events depends only on the server side: listening on a port, it is the originator in `forwarded-tcpip` (§4.1); listening on a socket,
+  `forwarded-streamlocal` has no such field, so it is `null`.
+- Metering, connection slots, the copy loop, half-close and error teardown (§2.2), the grace period and disposal (§4.3) and the lifetime (§4.5) are the same for all four.
+  A local socket may not support linger 0, so aborting it on error just closes it (the same rule as §2.2).
+
+〔Decision〕**The local socket path is checked when the forward starts**: an empty string throws `ArgumentException`; one that is too long (108 bytes on Linux / Windows, 104 on macOS, both including the terminating 0)
+throws `SshForwardException` (`ForwardSetupFailed`, kind `SocketPathTooLong`, `Endpoint` is the path) — both before the listen request is sent, so nothing is opened on the server.
+〔History〕It used to go unchecked: a path that was too long failed only when a forwarded connection arrived, before connecting; every forwarded connection was refused and no `Error` was raised, which looked like a problem on the server side.
+
+〔Decision〕**The server socket path is only checked for being non-empty** (`ArgumentException` when set): it lives on the server's file system, so the length limit, whether the directory exists and whether it is writable are the server's call,
+and a no is `RemoteSocketListenRejected`. OpenSSH refuses when the path already exists (unless the server sets `StreamLocalBindUnlink yes`); that is most likely "not cleaned up last time".
+
+〔Decision〕**Remote dynamic forwarding (§4.6) listens only on a port**: `StartDynamicAsync` throws `ArgumentException` for options with `ListenSocketPath` set, and sends nothing.
+ssh(1)'s target-less `-R` has only the `[bind:]port` form; a target-less `RemoteForward /path` in `ssh_config` is handled as "this one failed to start" (`09-dialing.md` §7.3).
+
+〔History〕Only "TCP on both sides" (`StartAsync`) and "sockets on both sides" (`StartUnixSocketAsync(connection, local path, server path)`) used to be public;
+"server port → local socket" and "server socket → local TCP" had no entry point — the forwarder could express them internally, there was just no way to start one.
+The server side is now always expressed by `ListenSocketPath`, "sockets on both sides" became `StartToUnixSocketAsync` + `ListenSocketPath`, and `StartUnixSocketAsync` was removed (one entry point per feature).
 
 ### 4.5 State and lifetime
 
 | Property | Meaning |
 | --- | --- |
-| `BoundPort` | The port the server **actually** bound: taken from the `REQUEST_SUCCESS` payload when port 0 was requested, otherwise the requested port. 0 for the Unix socket variant |
+| `BoundPort` | The port the server **actually** bound: taken from the `REQUEST_SUCCESS` payload when port 0 was requested, otherwise the requested port. 0 when the server listens on a socket |
+| `RemoteSocketPath` | The path when the server listens on a socket (that is, `ListenSocketPath`); `null` when it listens on a port |
+| `RemoteEndpointName` | The server side for people to read: `bind:port` or the socket path |
 | `IsActive` | False once disposal has begun, or once the SSH connection has dropped. It reads the connection's state directly and does not wait for any callback |
 
 〔Decision〕If port 0 was requested and the server replies `REQUEST_SUCCESS` without a port: remove the handler and throw.
@@ -1284,7 +1330,9 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | Situation | Handling |
 | --- | --- |
 | Local port already in use | Throw `SshForwardException`, **leave no half-open listener**. Kind `ListenFailed` (`Endpoint`; in use vs no permission is in the inner socket error code); the IPv6 loopback half failing to bind is `Ipv6LoopbackBindFailed`; a Unix socket path that already exists is `SocketPathExists`, one that is too long `SocketPathTooLong` |
-| `tcpip-forward` rejected | Throw; the message points out "the server may have disabled AllowTcpForwarding / GatewayPorts". Kind `RemoteListenRejected` (`Port`; privileged ports below 1024 get their own wording); a rejected `streamlocal-forward` is `RemoteSocketListenRejected`; asking the server to pick a port and getting no port in the reply is `NoBoundPortInReply` |
+| `tcpip-forward` rejected | Throw; the message points out "the server may have disabled AllowTcpForwarding / GatewayPorts". Kind `RemoteListenRejected` (`Port`; privileged ports below 1024 get their own wording); a rejected `streamlocal-forward` is `RemoteSocketListenRejected`; asking the server to pick a port and getting no port in the reply is `NoBoundPortInReply`. The kind depends only on the server side (port or socket), not on what the local target is (§4.4) |
+| A remote forward's local socket path is empty / too long | Throws when the forward starts, before the listen request is sent: an empty string `ArgumentException`; too long `SshForwardException` (`ForwardSetupFailed`, kind `SocketPathTooLong`) (§4.4) |
+| A remote dynamic forward asked to listen on a socket on the server | `ArgumentException`, nothing sent — only the port form exists (§4.4) |
 | A forward fails to start under `ssh_config`'s `ExitOnForwardFailure yes` | `SshForwardException`, kind `ConfigForwardFailed`, with that line in `ConfigLine` (`StartForwardsAsync`, `09-dialing.md` §7.3) |
 | Channel open fails for a single connection | Raise the `Error` event, close that one inbound connection, **the forwarder keeps running** |
 | A single connection fails while relaying | Both sides aborted together (local RST, channel `CLOSE` without `EOF`), `Error` raised, the forwarder keeps running (§2.2) |
@@ -1296,7 +1344,7 @@ A stream from a connector (§7.5.9) has no "reset" to offer, so abort degrades t
 | SOCKS handshake times out (30 seconds by default) | Close that one, raise `Error` (`ForwardErrorReason.SocksHandshake`), the forwarder keeps running (§3.3) |
 | No matching forwarder for `forwarded-tcpip` | Reply `CHANNEL_OPEN_FAILURE(1)`; `(3)` when the connection has no remote forward at all. These refusals sent only to the server have kinds as well (no matching forward `UnmatchedForwardedChannel`, X11 expired `X11ForwardingExpired`, channel limit `ChannelLimitReached`, local target unreachable `LocalTargetUnreachable`); a stopped forwarder is `Stopped` |
 | A forwarded channel arrives during a remote forward's disposal grace period | Accepted as usual if it matches (§4.3) |
-| Invalid forwarding options (`MaxConnections` below 1, a listening port outside 0–65535, a non-positive SOCKS handshake timeout, a null bind address) | 〔Decision〕Throw `ArgumentOutOfRangeException` / `ArgumentNullException` when set; if anything fails after the listener is up, the listener is closed on the spot. 〔History〕They used to go unchecked: with `MaxConnections = 0` the listener was already up when constructing the forwarder threw, and the port stayed taken until GC |
+| Invalid forwarding options (`MaxConnections` below 1, a listening port outside 0–65535, a non-positive SOCKS handshake timeout, a null bind address, an empty `ListenSocketPath` for a remote forward) | 〔Decision〕Throw `ArgumentOutOfRangeException` / `ArgumentNullException` / `ArgumentException` when set; if anything fails after the listener is up, the listener is closed on the spot. 〔History〕They used to go unchecked: with `MaxConnections = 0` the listener was already up when constructing the forwarder threw, and the port stayed taken until GC |
 | Starting a forward on a connection that is already disconnected (or disposed) | Fail outright: `ObjectDisposedException` once disposed, the recorded fault once declared dead — the same for local, dynamic and remote, and no listener is opened. 〔History〕Local / dynamic forwarding used to open the listener anyway and "succeed", returning a forwarder with `IsActive = false` |
 | Concurrent connections exceed the limit (〔Decision〕default 1024 per forwarder) | Reject new inbound connections and raise `Error`; existing connections are unaffected. Local/dynamic forwarding: close that inbound connection, `Error` (`ForwardErrorReason.ConnectionLimit`) — 〔Decision〕the event fires **at most once per second**, carrying how many were rejected in the meantime; the error count in the metrics still records every rejection (〔History〕it used to fire for every rejection, so a burst of connections at the limit made the host push each one to the UI). A connection the peer resets before accept (`ConnectionReset` / `ConnectionAborted`) causes no backoff and no report — it is that connection's own business and the listener is fine (〔History〕it used to be reported as an accept failure, backing the whole listener off from 50 ms). Remote forwarding: reply `CHANNEL_OPEN_FAILURE(4)` (resource shortage, §4.1), and likewise count it in `errors` and raise `Error` (`ConnectionLimit`, also at most once per second); 〔History〕it used to refuse that channel only, with no event and no count |
 | An event subscriber throws | Swallowed; other subscribers and the connection are unaffected (§5) |

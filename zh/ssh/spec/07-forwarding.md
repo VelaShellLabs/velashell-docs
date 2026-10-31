@@ -14,7 +14,7 @@
 | --- | :-: | --- | --- |
 | **本地转发** | `-L` | 我们（本机） | `direct-tcpip` 通道 |
 | **动态转发** | `-D` | 我们（本机，跑 SOCKS5） | `direct-tcpip` 通道，目标由 SOCKS 握手给出 |
-| **远程转发** | `-R` | 服务端 | 服务端发起 `forwarded-tcpip` 通道，我们连本地目标 |
+| **远程转发** | `-R` | 服务端（端口或 Unix 套接字，§4.4） | 服务端发起 `forwarded-tcpip`（或 `forwarded-streamlocal@openssh.com`）通道，我们连本机目标（TCP 或 Unix 套接字） |
 | **远程动态转发** | `-R [bind:]port`（不给目标） | 服务端 | 服务端发起 `forwarded-tcpip` 通道，通道里跑 SOCKS5，我们按放行名单连它要的目标（§4.6） |
 | **直连隧道** | 无（`-W` 近似） | 无人监听 | `direct-tcpip` / `direct-streamlocal`，流直接交给调用方 |
 
@@ -272,7 +272,7 @@ sequenceDiagram
 其余回 1。〔历史〕早期一律回 1。
 
 〔决策〕**连接事件的 `Source` 是 `forwarded-tcpip` 里的 originator**（是谁连上了服务端那个暴露出来的端口）：认得出是 IP 地址就是 `IPEndPoint`，
-否则按主机名给 `DnsEndPoint`（不去解析）；Unix 套接字转发没有这一段，是 `null`。〔历史〕早期整个丢掉，`Source` 永远是 `null`。
+否则按主机名给 `DnsEndPoint`（不去解析）；服务端在套接字上监听时（`forwarded-streamlocal`）没有这一段，是 `null`（§4.4）。〔历史〕早期整个丢掉，`Source` 永远是 `null`。
 
 ### 4.2 三个必须
 
@@ -297,7 +297,7 @@ sequenceDiagram
 〔决策〕取消后**仍要继续接受在途的 `forwarded-tcpip` 通道**若干秒（`DrainGrace`，2 秒），
 否则正在建立的连接会被莫名拒绝。释放按这个顺序走：
 
-1. 发 `cancel-tcpip-forward`（Unix 套接字变体发 `cancel-streamlocal-forward@openssh.com`）。从这一刻起 `IsActive` 为 false。
+1. 发 `cancel-tcpip-forward`（服务端在套接字上监听时发 `cancel-streamlocal-forward@openssh.com`，§4.4）。从这一刻起 `IsActive` 为 false。
 2. 宽限期里处理器照旧在位：对得上的回连照常接下、照常搬，已有连接也照常搬。
 3. 宽限期到，摘掉处理器 —— 之后再来的回连被拒。
 4. 结束这个转发器的全部连接，按出错中止（§2.2）：本机目标收到 RST，服务端那条通道收到不带 `EOF` 的 `CLOSE`。
@@ -317,17 +317,63 @@ SSH 连接已经断了（取消请求发不出去，或者宽限期里断了）�
 应答与「调用方不要了」谁先到由一个原子状态排定，晚到的那一方负责补发 —— 两者同时到达也不漏。
 曾经只摘掉本端的处理器：服务端的监听一直开到连接断开，连进来的全被拒；固定端口紧接着重试，必报「端口已被占用」。
 
-### 4.4 Unix 套接字变体
+### 4.4 Unix 域套接字
 
-`streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com`
-（全局请求）+ `forwarded-streamlocal@openssh.com`（通道类型），
-字段把 `addr ‖ port` 换成一个 `string socket_path`。
+> 依据：OpenSSH `PROTOCOL` 的 `streamlocal-forward@openssh.com` / `cancel-streamlocal-forward@openssh.com`（全局请求）与
+> `forwarded-streamlocal@openssh.com`（通道类型）；ssh(1) 的 `-R` 两头写路径的写法。
+
+远程转发的两头**各自**可以是 TCP 或 Unix 域套接字，四种组合都有，与本地转发（§2.5）对称：
+**服务端那头**（谁监听）由参数里的 `ListenSocketPath` 决定，**本机那头**（回连连到哪）由起法决定。
+
+| 写法 | API | 服务端监听（全局请求） | 回连通道 | 本机连哪里 |
+| --- | --- | --- | --- | --- |
+| `-R [bind:]port:host:hostport` | `RemotePortForwarder.StartAsync(connection, host, port, options)` | `tcpip-forward`（`bind_addr ‖ bind_port`） | `forwarded-tcpip` | TCP `host:port` |
+| `-R [bind:]port:/本机/路径` | `RemotePortForwarder.StartToUnixSocketAsync(connection, 本机路径, options)` | `tcpip-forward` | `forwarded-tcpip` | 本机的套接字 |
+| `-R /服务器/路径:host:hostport` | `StartAsync` + `RemotePortForwardOptions.ListenSocketPath` | `streamlocal-forward@openssh.com`（`socket_path`） | `forwarded-streamlocal@openssh.com`（`socket_path ‖ reserved`） | TCP `host:port` |
+| `-R /服务器/路径:/本机/路径` | `StartToUnixSocketAsync` + `ListenSocketPath` | `streamlocal-forward@openssh.com` | `forwarded-streamlocal@openssh.com` | 本机的套接字 |
+
+用途：服务器上的程序只认套接字（或只认端口），而本机那个服务是另一种 —— 比如把本机 `127.0.0.1:5432` 的数据库交到服务器的
+`/run/user/1000/pg.sock`，远端的工具按套接字连；或者反过来，服务器上的端口回连到本机的 `docker.sock`。
+服务端在套接字上监听时，**远端机器上的其它用户看不到也连不上**（文件权限说了算），端口则是同机所有人都能连的。
+
+两头**互不牵连**：
+
+- **服务端那头决定协议上的一切**：发哪个全局请求、回连走哪种通道、按什么认领回连、取消时发哪个请求、被拒时报哪个种类。
+  - 在端口上监听：§4.1–§4.3 原样适用（端口 0 时实际端口在应答里，按「绑定地址 + 端口」认领，取消发 `cancel-tcpip-forward`）。
+    被拒是 `RemoteListenRejected`（`Endpoint` 为 `bind:port`，`Port`）。
+  - 在套接字上监听：字段把 `addr ‖ port` 换成一个 `string socket_path`；应答**没有载荷**（路径是请求方给的，没有「实际路径」要回），
+    带了也不读；回连按路径**逐字节**认领，不做规范化（`/tmp/a.sock` 与 `/tmp//a.sock` 是两个监听，与 §4.2 不规范化地址同一个理由）；
+    取消发 `cancel-streamlocal-forward@openssh.com`（只有 `socket_path`）。被拒是 `RemoteSocketListenRejected`（`Endpoint` 为路径）。
+    设了 `ListenSocketPath` 时 `BindAddress` / `BindPort` 不再起作用，`BoundPort` 为 0，`RemoteEndpointName` 是那个路径。
+- **本机那头只决定回连来了怎么连目标**：TCP 目标按主机名与端口连，套接字目标连那个路径。两种都**先连好再确认**（§4.1）：
+  连不上回 `CHANNEL_OPEN_FAILURE(2)`，描述只说「连不上转发的本机目标」，本地记 `Error`（`TargetConnect`，`Target` 是 `host:port` 或路径本身）。
+  路径上有没有套接字、有没有人在听，要等回连来了才知道 —— 与 TCP 目标一样，起转发时不先去连一次。
+- 连接事件的 `Source` 只看服务端那头：在端口上监听时是 `forwarded-tcpip` 里的 originator（§4.1）；在套接字上监听时
+  `forwarded-streamlocal` 没有这一段，是 `null`。
+- 计量、并发名额、搬运循环、半关闭与出错收尾（§2.2）、宽限期与释放（§4.3）、生命周期（§4.5）四种一样。
+  本机那头是套接字时不一定支持 linger 0，出错中止时只是关掉（与 §2.2 同一条）。
+
+〔决策〕**本机套接字路径在起转发时就查**：空串抛 `ArgumentException`；太长（Linux / Windows 108 字节、macOS 104 字节，都含结尾的 0）
+抛 `SshForwardException`（`ForwardSetupFailed`，种类 `SocketPathTooLong`，`Endpoint` 为路径）—— 都在发监听请求之前，服务端那头什么都没开。
+〔历史〕曾经不查：超长的路径要等回连来了、在连之前才失败，每一条回连都被拒，却不报 `Error`，看起来像是服务端那头的问题。
+
+〔决策〕**服务端套接字路径只查非空**（设值时就抛 `ArgumentException`）：它在服务端的文件系统上，长度上限、目录在不在、能不能写都由服务端说了算，
+不行就是 `RemoteSocketListenRejected`。路径已经存在时 OpenSSH 会拒绝（除非服务端配了 `StreamLocalBindUnlink yes`），这多半是「上一次没清干净」。
+
+〔决策〕**远程动态转发（§4.6）只在端口上监听**：`StartDynamicAsync` 收到设了 `ListenSocketPath` 的参数时抛 `ArgumentException`，不发请求。
+ssh(1) 不给目标的 `-R` 只有 `[bind:]port` 一种写法；`ssh_config` 里不给目标的 `RemoteForward /路径` 照「这一条没起来」处理（`09-dialing.md` §7.3）。
+
+〔历史〕曾经只公开「两头 TCP」（`StartAsync`）与「两头套接字」（`StartUnixSocketAsync(connection, 本机路径, 服务器路径)`）两种，
+「服务器端口 → 本机套接字」「服务器套接字 → 本机 TCP」没有入口 —— 转发器内部早就能表达，只是没有起法。
+现在服务端那头统一由 `ListenSocketPath` 表达，「两头套接字」并入 `StartToUnixSocketAsync` + `ListenSocketPath`，`StartUnixSocketAsync` 删掉（同一个功能只留一个入口）。
 
 ### 4.5 状态与生命周期
 
 | 属性 | 含义 |
 | --- | --- |
-| `BoundPort` | 服务端**实际**绑的端口：请求端口 0 时取自 `REQUEST_SUCCESS` 的载荷，否则就是请求的端口。Unix 套接字变体为 0 |
+| `BoundPort` | 服务端**实际**绑的端口：请求端口 0 时取自 `REQUEST_SUCCESS` 的载荷，否则就是请求的端口。服务端在套接字上监听时为 0 |
+| `RemoteSocketPath` | 服务端在套接字上监听时是那个路径（即 `ListenSocketPath`），在端口上监听时为 `null` |
+| `RemoteEndpointName` | 给人看的服务端那头：`bind:port` 或套接字路径 |
 | `IsActive` | 开始释放之后、或 SSH 连接断了之后为 false。直接看连接的状态，不等任何回调 |
 
 〔决策〕请求端口 0、服务端回了 `REQUEST_SUCCESS` 却没带端口：摘掉处理器并抛出。
@@ -1267,7 +1313,9 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | 情况 | 处理 |
 | --- | --- |
 | 本地端口被占用 | 抛 `SshForwardException`，**不留半挂的监听**。种类 `ListenFailed`（`Endpoint`；被占用与没有权限看内层的套接字错误码）；IPv6 环回那一半起不来 `Ipv6LoopbackBindFailed`；Unix 套接字路径已存在 `SocketPathExists`、超长 `SocketPathTooLong` |
-| `tcpip-forward` 被拒 | 抛，消息里点明「服务端可能禁用了 AllowTcpForwarding / GatewayPorts」。种类 `RemoteListenRejected`（`Port`；1024 以下的特权端口另有说法）；`streamlocal-forward` 被拒 `RemoteSocketListenRejected`；要求服务端分配端口而应答里没有端口 `NoBoundPortInReply` |
+| `tcpip-forward` 被拒 | 抛，消息里点明「服务端可能禁用了 AllowTcpForwarding / GatewayPorts」。种类 `RemoteListenRejected`（`Port`；1024 以下的特权端口另有说法）；`streamlocal-forward` 被拒 `RemoteSocketListenRejected`；要求服务端分配端口而应答里没有端口 `NoBoundPortInReply`。种类只看服务端那头（端口还是套接字），与本机目标是什么无关（§4.4） |
+| 远程转发的本机套接字路径为空 / 太长 | 起转发时就抛，不发监听请求：空串 `ArgumentException`；太长 `SshForwardException`（`ForwardSetupFailed`，种类 `SocketPathTooLong`）（§4.4） |
+| 远程动态转发要在服务端的套接字上监听 | `ArgumentException`，不发请求 —— 只有端口一种写法（§4.4） |
 | `ssh_config` 的 `ExitOnForwardFailure yes` 下某一条转发起不来 | `SshForwardException`，种类 `ConfigForwardFailed`，`ConfigLine` 是那一条（`StartForwardsAsync`，`09-dialing.md` §7.3） |
 | 单条连接的通道打开失败 | 触发 `Error` 事件，关掉这一条入站，**转发器继续跑** |
 | 单条连接搬运中出错 | 两侧一起中止（本机 RST，通道不带 `EOF` 的 `CLOSE`），触发 `Error`，转发器继续（§2.2） |
@@ -1279,7 +1327,7 @@ X 协议里客户端发完就是连接结束，没有「发完了还等回复」
 | SOCKS 握手超时（默认 30 秒） | 关掉这一条，触发 `Error`（`ForwardErrorReason.SocksHandshake`），转发器继续（§3.3） |
 | `forwarded-tcpip` 找不到对应转发器 | 回 `CHANNEL_OPEN_FAILURE(1)`；这条连接上一个远程转发都没有时回 `(3)`。只回给服务端的这几种拒绝同样有种类（对不上转发 `UnmatchedForwardedChannel`、X11 已过期 `X11ForwardingExpired`、通道上限 `ChannelLimitReached`、连不上本机目标 `LocalTargetUnreachable`），转发器停了是 `Stopped` |
 | 远程转发释放的宽限期内到达的回连 | 对得上就照常接下（§4.3） |
-| 转发参数的非法值（`MaxConnections` 小于 1、监听端口不在 0–65535、SOCKS 握手时限不为正、绑定地址为 null） | 〔决策〕设值时就抛 `ArgumentOutOfRangeException` / `ArgumentNullException`；起监听之后出了任何错，监听当场关掉。〔历史〕曾经不拦：`MaxConnections = 0` 时监听已经起来、构造转发器才抛，端口一直占到 GC |
+| 转发参数的非法值（`MaxConnections` 小于 1、监听端口不在 0–65535、SOCKS 握手时限不为正、绑定地址为 null、远程转发的 `ListenSocketPath` 为空串） | 〔决策〕设值时就抛 `ArgumentOutOfRangeException` / `ArgumentNullException` / `ArgumentException`；起监听之后出了任何错，监听当场关掉。〔历史〕曾经不拦：`MaxConnections = 0` 时监听已经起来、构造转发器才抛，端口一直占到 GC |
 | 在已经断开（或释放）的连接上起转发 | 照实失败：释放了抛 `ObjectDisposedException`，判死了抛那次故障 —— 本地、动态、远程三种一致，不起监听。〔历史〕本地 / 动态转发曾经照样起监听、「成功」返回一个 `IsActive = false` 的转发器 |
 | 并发连接数超上限（〔决策〕默认 1024/转发器） | 拒绝新入站并触发 `Error`，已有连接不受影响。本地/动态转发：关掉这条入站，`Error`（`ForwardErrorReason.ConnectionLimit`）—— 〔决策〕事件**每秒至多一次**，带着这期间拒了几条；度量里的错误计数照常每条都记（〔历史〕曾经每拒一条报一次，上限撞满时一大波连接让宿主逐条推到界面上）。对端在 accept 之前就重置了的那一条（`ConnectionReset` / `ConnectionAborted`）不退避、也不报 —— 那是那一条自己的事，监听好好的（〔历史〕曾经照「接受失败」报错、整个监听退避 50 ms 起步）。远程转发：回 `CHANNEL_OPEN_FAILURE(4)`（resource shortage，§4.1），同样计入 `errors`、触发 `Error`（`ConnectionLimit`，同样每秒至多一次）；〔历史〕曾经只拒掉那条通道，不发事件，也不计数 |
 | 事件订阅者抛异常 | 吞掉，不影响其它订阅者与那条连接（§5） |

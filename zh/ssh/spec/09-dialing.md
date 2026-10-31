@@ -526,4 +526,5 @@ CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不�
   写进配置的 `RemoteForward 端口` 本身就是配置作者的明确选择；`any` / `none` / 名单照字面。
 - 〔决策〕**`ExitOnForwardFailure yes`：有一条没起来，已起的全部撤掉、整体失败**（`SshForwardException`，`ForwardSetupFailed`，消息带那一行）——
   脚本与自动化场景要的就是「必需的转发起不来就别跑」。没开时这一条报给 `onFailure`，其余照起。
-- 本库还不支持的组合（服务端在套接字上监听、本机目标是 TCP，或者反过来）照「这一条没起来」处理。
+- 远程转发两头各自可以是端口或套接字（`07-forwarding.md` §4.4）：含 `/` 的监听一头落到 `RemotePortForwardOptions.ListenSocketPath`，含 `/` 的目标一头走 `StartToUnixSocketAsync`。
+  只有不给目标、却在套接字上监听的 `RemoteForward /路径`（远程动态转发只有端口一种写法）照「这一条没起来」处理（`Unsupported`）。〔历史〕曾经「服务端在套接字上监听、本机目标是 TCP」与反过来那种也照「这一条没起来」处理 —— 库当时没有这两种的入口。
