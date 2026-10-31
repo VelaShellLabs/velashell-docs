@@ -278,7 +278,7 @@
 | `src/VelaShell/ViewModels/FileBrowserViewModel.cs` | 隐藏文件(切换回写设置)、完成通知和传输日志 |
 | `src/VelaShell.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs` | SSH 超时、心跳和主机指纹策略 |
 | `src/VelaShell.Core/Models/OutputRule.cs`、`src/VelaShell.Core/OutputRules/` | 输出规则的模型、编译(线性时间引擎)与口令守卫(第二十三批) |
-| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | 自动应答的判定(只看光标行、本地敲字不答、冷却与每分钟上限) |
+| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | 自动应答的判定(只看光标行、带 shell 提示符标记的行不答、本地敲字不答、冷却与每分钟上限) |
 | `src/VelaShell/ViewModels/OutputRulesViewModel.cs`、`src/VelaShell/Views/Settings/OutputRulesPage.axaml` | 「输出规则」设置页 |
 
 ## 14. 整改记录
@@ -743,6 +743,6 @@ SSH 库早已实现主机证书与 `@cert-authority`([03-key-exchange.md](../ssh
   `Normalize` 钳数值、丢空条目、超过 64 条截断;校验不过的规则不删,由编译跳过、设置页标出原因。「恢复默认」会把规则表一起清空。
 - **规则随设置同步,前提是表里不许有口令**:应答规则的正则字面上提到口令一类词(password / passphrase / PIN / OTP / token / secret / 验证码 / 密码 / 口令,中日韩),或会命中 15 条常见口令提示原文之一,
   就不许设成自动应答(`OutputRuleSecretGuard`,宁可多拦:`:\s*$`、`.*` 这类不带关键词的写法也拦得住);编辑框里这种规则「完成」不可点,直接点窗口「保存」时这种草稿丢掉不写。高亮规则不受限(把日志里的 password 标红是正当用法)。
-- **触发器的口径**(`Terminal/Semantics/OutputTriggerScanner`):只对远端输出;只看主屏光标所在的逻辑行;自上次回车以来本地有过输入就不答;命中后等对端安静 300 ms;同一行只答一次;冷却推迟不丢、每分钟上限到了暂停一分钟;
+- **触发器的口径**(`Terminal/Semantics/OutputTriggerScanner`):只对远端输出;只看主屏光标所在的逻辑行,带 OSC 133 提示符标记的不答(2026-10-31 起);自上次回车以来本地有过输入就不答;命中后等对端安静 300 ms;同一行只答一次;冷却推迟不丢、每分钟上限到了暂停一分钟;
   默认不进同步输入频道。细则见交互规格 §5.2.3。
 - **不做的**:录制与日志的遮盖(第十四批)接这张表、让用户加自己的遮盖规则 —— 留在 `feature-plan.md`;多步 expect 对话、变量、按标签 / 标记划作用范围都没做。

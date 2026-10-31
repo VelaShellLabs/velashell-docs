@@ -278,7 +278,7 @@ Key Management and Snippets are moved out of the Settings Center and become stan
 | `src/VelaShell/ViewModels/FileBrowserViewModel.cs` | Hidden files (toggle writes back to settings), completion notifications, and transfer logs |
 | `src/VelaShell.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs` | SSH timeout, heartbeat, and host fingerprint policies |
 | `src/VelaShell.Core/Models/OutputRule.cs`, `src/VelaShell.Core/OutputRules/` | Output rule model, compilation (linear-time engine) and password guard (twenty-third batch) |
-| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | Auto-answer decisions (cursor line only, no answer while typing locally, cooldown and per-minute limit) |
+| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | Auto-answer decisions (cursor line only, no answer on a line carrying shell prompt marks, no answer while typing locally, cooldown and per-minute limit) |
 | `src/VelaShell/ViewModels/OutputRulesViewModel.cs`, `src/VelaShell/Views/Settings/OutputRulesPage.axaml` | The "Output Rules" settings page |
 
 ## 14. Remediation Record
@@ -850,6 +850,6 @@ The built-in semantic highlighting is 7 compile-time regular expressions (`Seman
   `Normalize` clamps numbers, drops empty entries and truncates past 64; rules failing validation are not deleted but skipped by the compiler and flagged on the page. "Restore defaults" clears the table too.
 - **Rules sync with the settings, on the condition that the table never holds a password**: an auto-answer rule whose pattern literally mentions password-like words (password / passphrase / PIN / OTP / token / secret and their CJK equivalents), or that would match one of 15 common password prompts,
   cannot be set to auto-answer (`OutputRuleSecretGuard`, erring on the side of refusing — patterns without keywords such as `:\s*$` or `.*` are caught too); for such a rule "Done" stays disabled in the editor, and a draft like that is dropped when the window's "Save" is clicked. Highlight rules are not restricted (marking "password" in red in a log is legitimate).
-- **Trigger rules** (`Terminal/Semantics/OutputTriggerScanner`): remote output only; only the logical line the cursor is on, main screen; no answer when there has been local input since the last Enter; wait for 300 ms of quiet; one answer per line; the cooldown postpones rather than drops, and the per-minute limit pauses for a minute;
+- **Trigger rules** (`Terminal/Semantics/OutputTriggerScanner`): remote output only; only the logical line the cursor is on, main screen, and not one carrying OSC 133 prompt marks (since 2026-10-31); no answer when there has been local input since the last Enter; wait for 300 ms of quiet; one answer per line; the cooldown postpones rather than drops, and the per-minute limit pauses for a minute;
   not forwarded to sync input channels by default. Details in §5.2.3 of the interaction specs.
 - **Not done**: wiring recording and log masking (fourteenth batch) to this table so users can add their own masking rules — left in `feature-plan.md`; multi-step expect dialogs, variables and scoping by tab / marker are not done either.
