@@ -26,6 +26,7 @@ VelaShell 主程序自身的架构、设计规格与调研记录。English: [`..
 | [SFTP双栏与WinSCP差距分析.md](SFTP双栏与WinSCP差距分析.md) | 双栏 SFTP 与 WinSCP 的逐项差距决策清单 |
 | [FTP客户端可行性调研.md](FTP客户端可行性调研.md) | FTP / FTPS 支持的取舍 |
 | [Telnet与串口可行性调研.md](Telnet与串口可行性调研.md) | Telnet / 串口会话类型的可行性与改造清单 |
+| [RDP远程桌面插件设计与使用.md](RDP远程桌面插件设计与使用.md) | FreeRDP + Avalonia 工作台、文本/图像/文件剪贴板、显式文件夹映射、六种 RID 原生交付与验证边界 |
 | [Redis客户端插件化调研与设计.md](Redis客户端插件化调研与设计.md) | Redis 界面客户端:工作台连接类型、引擎取舍与界面设计 |
 | [MongoDB工作台插件设计.md](MongoDB工作台插件设计.md) | MongoDB 工作台:从命令面板打开、插件自己管连接(对象树根上的已保存连接、设计稿 10 的连接对话框、经宿主 SSH 会话的跳板)、23 个画板的落点、暂存区与写护栏 |
 | [S3协议插件化设计.md](S3协议插件化设计.md) | S3 对象存储接入插件的设计 |

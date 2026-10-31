@@ -27,6 +27,7 @@ Architecture, design specs and research for the VelaShell main application.
 | [sftp-dual-pane-winscp-gap-analysis.md](sftp-dual-pane-winscp-gap-analysis.md) | Dual-pane SFTP vs WinSCP, item by item |
 | [ftp-client-feasibility-research.md](ftp-client-feasibility-research.md) | Trade-offs behind FTP / FTPS support |
 | [telnet-and-serial-feasibility-research.md](telnet-and-serial-feasibility-research.md) | Feasibility and work list for Telnet / serial sessions |
+| [rdp-plugin-design-and-use.md](rdp-plugin-design-and-use.md) | FreeRDP + Avalonia workspace, text/image/file clipboard, explicit folder mapping, six-RID native delivery and verification boundaries |
 | [redis-client-plugin-research-and-design.md](redis-client-plugin-research-and-design.md) | Redis GUI client: workspace connection type, engine trade-offs, UI design |
 | [mongodb-workbench-plugin-design.md](mongodb-workbench-plugin-design.md) | MongoDB workbench: opened from the command palette, connections managed by the plugin (saved connections at the tree root, the board-10 connection dialog, SSH jump through a host SSH session), where each of the 23 boards landed, staging and write guards |
 | [s3-protocol-plugin-design.md](s3-protocol-plugin-design.md) | Design of the S3 object-storage plugin |
