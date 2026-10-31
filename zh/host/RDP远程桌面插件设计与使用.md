@@ -30,6 +30,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | 桌面宽度（`width`） | 1920;320–8192（初值与回退，连上后跟随窗口) |
 | 桌面高度（`height`） | 1080;200–8192（初值与回退,连上后跟随窗口) |
 | 连接超时（`timeout`） | 15 秒;1–120 |
+| 安全层（`security`,高级） | `auto` 自动(默认);`nla` 仅 NLA;`tls` 仅 TLS,见[认证与证书策略](#认证与证书策略) |
 | 双向剪贴板（`clipboard`） | `false`;明确开启后支持文本、图像与文件 |
 | 本机磁盘（`drive:<盘>`,「磁盘映射」页） | 每块本机磁盘一个复选框,全部默认不勾选 |
 | 自定义文件夹（`drives`,「磁盘映射」页） | 空;`名称=绝对路径`,多条用分号分隔 |
@@ -69,7 +70,11 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 ## 认证与证书策略
 
-协商 TLS;服务器要求时走 NLA。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
+安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
+
+**自动模式的回退。** 若服务器在客户端发出第一条 CredSSP 消息之后就拒绝——这条消息只是 NTLM NEGOTIATE,不含用户名,也不含任何凭据证明——表现为以 `errorCode` 0x80090302(SEC_E_UNSUPPORTED_FUNCTION)作答,或直接中止 TLS 会话(本地 SChannel 报 0x80090304「无法连接到本地安全机构」;对同一台服务器、字节完全相同的消息,两种形态会交替出现),说明服务器不接受传入的 NTLM。这是服务器策略,不是凭据问题。自动模式随即**只提供 TLS 重连一次**,证书照样校验,插件日志记一条警告。若服务器连 TLS 也拒绝(RDP_NEG_FAILURE `HYBRID_REQUIRED_BY_SERVER`),即服务器要求 NLA 却不接受 NTLM,错误会说明这是服务器端设置、与用户名和密码无关,并给出两种修法:在服务器上允许传入 NTLM(本地安全策略 › 安全选项 ›「网络安全: 限制 NTLM: 传入 NTLM 流量」设为「允许所有」),或关闭「仅允许运行使用网络级别身份验证的远程桌面的计算机连接」。密码错误(服务器在 NTLM 认证之后拒绝)仍报认证失败,**不会**触发回退。
+
+**连接失败的诊断。** 错误指明失败的阶段(TCP、安全协商、TLS、NLA、MCS、登录、许可、能力交换)和原因链,含 SChannel / 套接字错误码;TLS 握手之后的失败还附上协商出的 TLS 版本。服务器在 NLA 中拒绝登录时,按它返回的状态码给出具体原因(用户名或密码错误、密码过期、账号锁定或停用、不允许远程登录)。插件日志(`velashell.rdp`)记录每次失败的完整异常;TLS 握手之后的失败再附上加密套件和服务器发来的 TLS 记录头(只记类型与长度,例如 `Alert 26 B`,从不保存载荷),用来区分「服务器中止」与本地解密问题。
 
 宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,需要重新明确批准。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 .NET 的 `NegotiateAuthentication` 做 NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
 
@@ -96,4 +101,4 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 - **动态分辨率**:经显示控制通道请求调整桌面,实测 1024×768 ⇄ 1280×1024 往返生效,重激活后帧缓冲与状态栏随之更新。
 - **宿主内渲染**:真实 `RdpWorkspaceView` 与 `RdpDesktopControl` 经 Avalonia headless Skia 渲染托管引擎的帧,即宿主装载的同一套控件树;实测视图会把远程桌面调整到视口尺寸。
 
-NLA/CredSSP 以离线 ASN.1 单测覆盖;当前没有支持 NLA 的测试服务器,**真实 Windows 服务器的 NLA 登录尚未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
+NLA/CredSSP 除离线 ASN.1 单测外,对 FreeRDP shadow 服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:NLA 登录到桌面;错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
