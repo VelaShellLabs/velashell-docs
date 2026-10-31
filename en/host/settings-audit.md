@@ -807,7 +807,9 @@ The **default of `Security.ConfirmFirstFingerprint` changes from off to on** (ho
 - **One-time migration**: a stored `false` cannot tell the old default from a user's choice, so it follows the same pattern as the
   fingerprint-change block (fifth batch) — switch it on once, stamp `Security.FirstFingerprintDefaultMigrated`, and respect the user from
   then on. The flag is registered as a migration field (`SettingsCategories.MigrationFields`), so the audit does not count it as a settings
-  change while export and sync still carry it (seventeenth batch).
+  change while export and sync still carry it (seventeenth batch). On pull every migration flag is OR-ed with the local one, so a
+  migration done on either side is not run again (since 2026-10-31; before, a payload pushed by an older version that did not know the
+  flag came in as `false` and the migration was redone on every sync round).
 - **Behavior**: connections from anywhere in the UI, test connection and connection diagnostics, standalone SFTP, tunnels started by hand
   or by "Establish when the app starts", plugin `open_session`, "Resume" in the transfer queue and external launches (after their
   confirmation) all show the "Host Trust" dialog for an unseen host, and reject when there is no main window to show it on. Automatic
