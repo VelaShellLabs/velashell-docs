@@ -14,11 +14,11 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 解码与 MPPC 批量解压、BGRA 帧缓冲;分片的快速路径更新会重组。
 - **Input** —— 快速路径键盘/鼠标/Unicode。
-- **Channels** —— 剪贴板(cliprdr)与共享文件夹(rdpdr)走分块的静态虚拟通道;动态虚拟通道(drdynvc,MS-RDPEDYC)上只开启显示控制通道(MS-RDPEDISP)以协商动态分辨率,其余动态通道(音频、GFX 图形管线)一律拒绝,服务器保持经典位图路径。
+- **Channels** —— 剪贴板(cliprdr)与磁盘映射(rdpdr)走分块的静态虚拟通道;动态虚拟通道(drdynvc,MS-RDPEDYC)上只开启显示控制通道(MS-RDPEDISP)以协商动态分辨率,其余动态通道(音频、GFX 图形管线)一律拒绝,服务器保持经典位图路径。
 
 库里的 `RdpManagedSession` 以 SDK 无关的 `ConnectAsync(RdpClientOptions, …)` 实现 `IRdpSession` / `IRdpClipboardTransport` 契约;插件引用该库,提供桌面视图、输入队列、剪贴板桥接与编解码,并负责把宿主的连接请求映射成库的 `RdpClientOptions`、把库抛出的异常翻译成宿主协议异常。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
-范围包括桌面分辨率跟随窗口(动态分辨率)、适应窗口/实际尺寸、键鼠/Unicode、Ctrl+Alt+Delete、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及显式本地文件夹映射。不协商音频播放/采集、多显示器或绘图指令加速(RemoteFX/GFX);服务器以经典 RLE 位图更新呈现,弱网时启用 MPPC 流压缩降低带宽。
+范围包括桌面分辨率跟随窗口(动态分辨率)、适应窗口/实际尺寸、键鼠/Unicode、Ctrl+Alt+Delete、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹)。不协商音频播放/采集、多显示器或绘图指令加速(RemoteFX/GFX);服务器以经典 RLE 位图更新呈现,弱网时启用 MPPC 流压缩降低带宽。
 
 ## 连接与操作
 
@@ -31,7 +31,8 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | 桌面高度（`height`） | 1080;200–8192（初值与回退,连上后跟随窗口) |
 | 连接超时（`timeout`） | 15 秒;1–120 |
 | 双向剪贴板（`clipboard`） | `false`;明确开启后支持文本、图像与文件 |
-| 共享文件夹（`drives`） | 空,只共享显式映射 |
+| 本机磁盘（`drive:<盘>`,「磁盘映射」页） | 每块本机磁盘一个复选框,全部默认不勾选 |
+| 自定义文件夹（`drives`,「磁盘映射」页） | 空;`名称=绝对路径`,多条用分号分隔 |
 | SSH 跳板机（`jumpSession`） | 无,由宿主 SSH 会话选择器提供 |
 | 已信任 SHA-256（`trustedThumbprint`） | 隐藏设置,由证书批准流程提供,精确叶证书 pin |
 
@@ -56,11 +57,15 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 拒绝不安全文件名、路径穿越和符号链接。在这些限制内保留目录结构。剪贴板传输由插件管理 RDP 通道,不是宿主 SFTP 传输队列,也不代表授予全部宿主文件 API 权限。
 
-### 显式磁盘/文件夹映射
+### 磁盘映射
 
-“共享文件夹”初始为空,每行写 `名称=绝对路径`。Windows 示例:`work=C:\Work\Share`;Linux:`work=/home/alice/share`;macOS:`work=/Users/alice/share`。
+连接对话框的「磁盘映射」页仿照 mstsc「本地资源 → 驱动器」,每块本机磁盘一个复选框。Windows 列出全部盘符,按类型命名,如「本地磁盘 (C:)」「可移动磁盘 (E:)」「网络驱动器 (Z:)」「光盘驱动器 (F:)」;Linux / macOS 列出根目录(`/`)、主目录(`~`)以及 `/media`、`/run/media`、`/mnt`、`/Volumes` 下的挂载点。全部**默认不勾选**。
 
-名称必须唯一,只允许 **1–8 位 ASCII 字母、数字或下划线**,不允许连字符;最多 **32 个映射**。目录必须存在。远程 Windows 桌面可通过 `\\tsclient\work` 访问。每条映射授予远程对该文件夹的**读写访问**;不会隐式共享主目录、系统盘或可移动盘。路径限制在映射目录内,拒绝路径穿越与符号链接。映射目录与经剪贴板发送文件是两个独立选择。
+枚举磁盘只读盘符与类型(或挂载点),不读取介质、不查询卷,因此断开的网络驱动器或空光驱不会拖慢插件激活。插件每 5 秒检查一次磁盘集合,只有变化时才重新注册连接表单(同一个实现实例:已打开的远程桌面标签不受影响,正在编辑的对话框也不会丢失已填内容),稍后插上的 U 盘在下次打开连接对话框时出现。连接时已勾选、但当前不存在的磁盘(U 盘已拔出、网络驱动器离线)直接跳过,不报错。
+
+同一页的「自定义文件夹」用于只共享某个目录:写 `名称=绝对路径`,多条用**分号**分隔(宿主把文本设置渲染为单行输入框,无法换行)。Windows 示例:`work=C:\Work\Share;docs=D:\Docs`;Linux:`work=/home/alice/share`;macOS:`work=/Users/alice/share`。早先保存的按行分隔的值仍可识别。
+
+名称必须唯一,也不能与已勾选磁盘的名称(`C`、`E`、`root`、`home` 等)重复;只允许 **1–8 位 ASCII 字母、数字或下划线**,不允许连字符;磁盘与文件夹合计最多 **32 个映射**。目录必须存在。远程 Windows 桌面通过 `\\tsclient\<名称>` 访问,xrdp 会话在 `~/thinclient_drives/<名称>`。每个映射授予远程对该磁盘或文件夹的**读写访问**;除了用户勾选的磁盘和填写的文件夹,不共享任何主目录、系统盘或可移动盘。路径限制在映射目录内,拒绝路径穿越与符号链接。映射磁盘或目录与经剪贴板发送文件是两个独立选择。
 
 ## 认证与证书策略
 
@@ -87,7 +92,7 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 
 - TLS 协商与叶证书 pin 信任;无 pin 拒绝自签证书并抛出 SHA-256 供宿主信任流程。
 - 桌面渲染:交错 RLE **与 MPPC 批量压缩**(服务器开启 `bulk_compression` 时,实测解压压缩 PDU、像素精确)。
-- 键鼠/Unicode 输入;文本与图像剪贴板往返;共享文件夹读与写。
+- 键鼠/Unicode 输入;文本与图像剪贴板往返;磁盘映射:勾选的磁盘可被远程读取(含系统盘根目录 `C:\` 的列目录),自定义文件夹读与写。
 - **动态分辨率**:经显示控制通道请求调整桌面,实测 1024×768 ⇄ 1280×1024 往返生效,重激活后帧缓冲与状态栏随之更新。
 - **宿主内渲染**:真实 `RdpWorkspaceView` 与 `RdpDesktopControl` 经 Avalonia headless Skia 渲染托管引擎的帧,即宿主装载的同一套控件树;实测视图会把远程桌面调整到视口尺寸。
 

@@ -14,11 +14,11 @@ The protocol stack is the standalone C# library `VelaShell.Rdp` (MIT, released w
 - **PDUs** — client info, licensing, capability exchange, connection finalization.
 - **Graphics** — interleaved-RLE decode and MPPC bulk decompression, a BGRA framebuffer; fragmented fast-path updates are reassembled.
 - **Input** — fast-path keyboard/mouse/Unicode.
-- **Channels** — clipboard (cliprdr) and shared folders (rdpdr) over chunked static virtual channels; the dynamic virtual channel (drdynvc, MS-RDPEDYC) opens only the Display Control channel (MS-RDPEDISP) to negotiate dynamic resolution, and declines every other dynamic channel (audio, the GFX graphics pipeline) so the server keeps to the classic bitmap path.
+- **Channels** — clipboard (cliprdr) and drive mapping (rdpdr) over chunked static virtual channels; the dynamic virtual channel (drdynvc, MS-RDPEDYC) opens only the Display Control channel (MS-RDPEDISP) to negotiate dynamic resolution, and declines every other dynamic channel (audio, the GFX graphics pipeline) so the server keeps to the classic bitmap path.
 
 The library's `RdpManagedSession` implements the `IRdpSession` / `IRdpClipboardTransport` contracts through an SDK-agnostic `ConnectAsync(RdpClientOptions, …)`; the plugin references the library, supplies the desktop view, input queue and clipboard bridge/codec, and maps the host's connect request to the library's `RdpClientOptions` while translating the library's exceptions into the host protocol exceptions. The host owns connection forms, credentials, certificate approval, session tabs and optional SSH jump transport; the plugin supplies the workspace and remote desktop. Connection, event pumping and teardown run asynchronously on the session worker task, interrupted by a cancellation token. The engine runs in-process and shares the host crash boundary; this is not process isolation or a filesystem sandbox. See [the SDK reference](../sdk/sdk-reference.md), [developer guide](../templates/dev-guide.md) and [current trust boundaries](../plugins/12-security-threat-model.md).
 
-Implemented scope: desktop resolution that follows the window (dynamic resolution), fit/actual-size display, keyboard/mouse/Unicode input, Ctrl+Alt+Delete, in-view reconnect when a session drops, text/image/file clipboard, directory transfers and explicitly mapped local directories. It does not negotiate audio, multiple monitors or drawing-order acceleration (RemoteFX/GFX); the server renders via classic RLE bitmap updates, with MPPC stream compression on weak links to cut bandwidth.
+Implemented scope: desktop resolution that follows the window (dynamic resolution), fit/actual-size display, keyboard/mouse/Unicode input, Ctrl+Alt+Delete, in-view reconnect when a session drops, text/image/file clipboard, directory transfers and mstsc-style drive mapping (tick local disks or list custom folders). It does not negotiate audio, multiple monitors or drawing-order acceleration (RemoteFX/GFX); the server renders via classic RLE bitmap updates, with MPPC stream compression on weak links to cut bandwidth.
 
 ## Connect and use
 
@@ -31,7 +31,8 @@ Install the signed `velashell.rdp-<version>.vpx` from the plugin release using t
 | Desktop height (`height`) | 1080; 200–8192 (initial size and fallback; follows the window once connected) |
 | Connect timeout (`timeout`) | 15 seconds; 1–120 |
 | Bidirectional clipboard (`clipboard`) | `false`; explicit opt-in for text, images and files |
-| Shared folders (`drives`) | Empty; explicit mappings only |
+| Local disks (`drive:<disk>`, **Drive mapping** page) | One checkbox per local disk, all unchecked by default |
+| Custom folders (`drives`, **Drive mapping** page) | Empty; `name=absolute-path`, several separated by semicolons |
 | SSH jump host (`jumpSession`) | None; host SSH-session selector |
 | Trusted SHA-256 (`trustedThumbprint`) | Hidden setting supplied through certificate approval; exact leaf pin |
 
@@ -56,11 +57,15 @@ Clipboard is **off by default**. Enabling it lets the remote desktop read and re
 
 Unsafe names, traversal and symbolic links are rejected. Directory structure is preserved within these limits. Clipboard transfers are plugin-managed RDP operations, not the host SFTP transfer queue or a grant to every host file API.
 
-### Explicit disk/folder mapping
+### Drive mapping
 
-**Shared folders** starts empty. Add one `name=absolute-path` per line, for example `work=C:\Work\Share` on Windows, `work=/home/alice/share` on Linux or `work=/Users/alice/share` on macOS.
+The connection dialog's **Drive mapping** page follows mstsc's *Local Resources → Drives*: one checkbox per local disk. On Windows every drive letter is listed, labelled by type — "Local Disk (C:)", "Removable Disk (E:)", "Network Drive (Z:)", "CD/DVD Drive (F:)"; on Linux / macOS the root (`/`), the home folder (`~`) and mounts under `/media`, `/run/media`, `/mnt` and `/Volumes`. All are **unchecked by default**.
 
-Names must be unique and contain **1–8 ASCII letters, digits or underscores**; hyphens are not allowed. At most **32 mappings** are accepted. Directories must already exist. The remote Windows desktop sees the mapping as `\\tsclient\work`. Each mapping grants remote **read/write access** to that folder. No home directory, system disk or removable drive is shared implicitly. Paths are confined to the mapping; traversal and symbolic links are rejected. Mapping a directory and sending files through the clipboard are separate choices.
+Disks are enumerated from drive letters and types (or mount points) only — no media access, no volume query — so a disconnected network drive or an empty optical drive cannot slow plugin activation. Every 5 seconds the plugin checks the set of disks and re-registers the connection form only when it changed (with the same provider instance: open remote-desktop tabs are unaffected, and a dialog being edited keeps what was typed), so a USB disk plugged in later appears the next time the connection dialog opens. A ticked disk that is absent at connect time (USB unplugged, network drive offline) is skipped, not an error.
+
+**Custom folders** on the same page share a single directory: enter `name=absolute-path`, separating several with **semicolons** (the host renders text settings as a single-line box, so there are no newlines). Examples: `work=C:\Work\Share;docs=D:\Docs` on Windows, `work=/home/alice/share` on Linux, `work=/Users/alice/share` on macOS. Line-separated values saved by earlier versions are still read.
+
+Names must be unique, and must not clash with a ticked disk's name (`C`, `E`, `root`, `home`, …); they contain **1–8 ASCII letters, digits or underscores**, hyphens not allowed. Disks and folders together allow at most **32 mappings**. Directories must already exist. The remote Windows desktop reaches a mapping as `\\tsclient\<name>`; an xrdp session at `~/thinclient_drives/<name>`. Each mapping grants remote **read/write access** to that disk or folder; nothing beyond the ticked disks and the listed folders is shared — no home directory, system disk or removable drive. Paths are confined to the mapping; traversal and symbolic links are rejected. Mapping a disk or directory and sending files through the clipboard are separate choices.
 
 ## Authentication and certificate policy
 
@@ -87,7 +92,7 @@ Unit tests cover settings, the clipboard codec, the headless UI and the CredSSP/
 
 - TLS negotiation and leaf-certificate pin trust; without a pin a self-signed certificate is rejected and its SHA-256 is surfaced for the host trust flow.
 - Desktop rendering: interleaved RLE **and MPPC bulk compression** (with the server's `bulk_compression` enabled, compressed PDUs decompress pixel-exact).
-- Keyboard/mouse/Unicode input; text and image clipboard round-trips; shared-folder read and write.
+- Keyboard/mouse/Unicode input; text and image clipboard round-trips; drive mapping — ticked disks read remotely (including a listing of the system drive root `C:\`), custom-folder read and write.
 - **Dynamic resolution**: a resize over the Display Control channel, validated as a 1024×768 ⇄ 1280×1024 round-trip; the framebuffer and status bar follow the reactivation.
 - **In-host rendering**: the real `RdpWorkspaceView` and `RdpDesktopControl` render the engine's frames through Avalonia's headless Skia pipeline — the same control tree the host loads; the view is observed to resize the remote desktop to its viewport.
 
