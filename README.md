@@ -93,7 +93,7 @@ flowchart TB
 | [velashell-plugin-sdk](https://github.com/VelaShellLabs/velashell-plugin-sdk) | `VelaShell.PluginSdk`、`.Testing`、`.Build`(插件工程引用的那一个包,2026-09-11 从 velashell-plugin-cli 搬来) |
 | [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli) | `vela-plugin` 命令行 |
 | [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates) | `dotnet new velaplugin*` 模板(基础 / 面板 / 协议 / 工作台) |
-| [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins) | 第一方插件:Redis / S3 / Telnet / 串口 / [Docker 管理面板](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.DockerPanel) |
+| [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins) | 第一方插件:Redis / S3 / Telnet / 串口 / RDP / [Docker 管理面板](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.DockerPanel) |
 | [velashell-markets](https://github.com/VelaShellLabs/velashell-markets) | 插件市场:上传、审核、检索与分发 |
 | [velashell-identity](https://github.com/VelaShellLabs/velashell-identity) | 统一认证服务(OIDC / OpenIddict):生态的信任根,下游只验令牌 |
 | [velashell-feeds](https://github.com/VelaShellLabs/velashell-feeds) | 资讯服务:CVE 聚合与公告/广告投放,给消息中心供稿 |
