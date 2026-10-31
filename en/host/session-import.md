@@ -130,8 +130,8 @@ would import nothing at all.
 | `ForwardX11Trusted` | Trusted (`-Y`) | Only an explicit `yes` / `no` is taken; **unset follows VelaShell's default (trusted)**, while OpenSSH treats unset as untrusted — a host with only `ForwardX11 yes` gets a preview note "imported as trusted (-Y) per VelaShell's default; OpenSSH would use untrusted (-X) here", rather than silently translating OpenSSH's default (the rule the maintainers set on 2026-10-25) |
 | `ObscureKeystrokeTiming` | Keystroke timing obfuscation | `yes` / `interval:N` (1–1000 ms) turn it on, `no` off; **unset = off** (OpenSSH defaults to on; not copied). VelaShell's interval is fixed at 20 ms, so an `interval:N` with N other than 20 gets a note; an unrecognized value is not imported |
 | `LocalForward` | Local forward tunnel | Each side may be a port or a Unix socket (a side containing `/` is a socket and goes into `LocalSocketPath` / `RemoteSocketPath`). With no listen address it binds 127.0.0.1 (0.0.0.0 with `GatewayPorts yes`); `*` means all interfaces |
-| `RemoteForward listen target` | Remote forward tunnel | Two TCP sides, or two sockets (the server listen path goes into `RemoteSocketPath`, the local target into `LocalSocketPath`); only one side a socket is skipped (the SSH library offers just these two combinations and the tunnel service refuses the mix too). With no listen address the server decides (loopback) |
-| `RemoteForward [address:]port` (no target) | Remote dynamic SOCKS tunnel (`RemoteDynamicForward`) | The listen address defaults to 127.0.0.1; the allow list comes from the host's `PermitRemoteOpen`; there is no remote dynamic forward on a socket, so that is skipped |
+| `RemoteForward listen target` | Remote forward tunnel | Each side may be a port or a socket (the server listen path goes into `RemoteSocketPath`, the local target's path into `LocalSocketPath`; all four combinations are imported since 2026-10-31 — before that, one socket side was skipped). With no listen address the server decides (loopback) |
+| `RemoteForward [address:]port` (no target) | Remote dynamic SOCKS tunnel (`RemoteDynamicForward`) | The listen address defaults to 127.0.0.1; the allow list comes from the host's `PermitRemoteOpen`; there is no remote dynamic forward listening on a socket (only the port form exists), so that is skipped and the import notes say why |
 | `PermitRemoteOpen` | Allow list of remote dynamic forwards | One per host, shared by all of that host's remote dynamic forwards, validated by the same rules as the tunnel form. **When it is missing, those forwards are not imported**: OpenSSH then treats it as `any`, but a tunnel's allow list has no default — write `any` to allow everything; `none` and invalid values are skipped too |
 | `DynamicForward` | Dynamic forward (SOCKS) tunnel | Listen-address rules as for `LocalForward` |
 
@@ -180,7 +180,7 @@ configured with an `IdentityFile` is **misleading** — it is not missing a cred
 credential is of another kind.
 
 Below the name and address there may also be a grey line of **import notes**: how many tunnels the forwards became, and the settings
-that could not be mapped and were skipped (forwards on port 0 or with only one socket side, remote dynamic forwards without an allow list,
+that could not be mapped and were skipped (forwards on port 0, remote dynamic forwards listening on a socket, remote dynamic forwards without an allow list,
 agent endpoints not usable on this computer, unset environment variables, a forwarding agent different from the authentication one, the trust-level difference
 when only `ForwardX11 yes` is written, the interval difference of `ObscureKeystrokeTiming interval:N`, unrecognized yes / no values, algorithms this version does not implement, extra keys), one per line.
 
@@ -419,9 +419,10 @@ blocks that can be pasted straight into `~/.ssh/config`, so the command-line ssh
 - **Forwards**: tunnels are written back as the three forward keywords, with the socket side as a path; a remote dynamic tunnel becomes a
   target-less `RemoteForward` and **is always written together with `PermitRemoteOpen`** — without it OpenSSH allows `any`, so one missing
   line would widen a tightened list to everything. A host can carry only one `PermitRemoteOpen`: remote dynamic tunnels whose list differs from
-  the first one, remote dynamic tunnels with an empty list, and remote forwards with only one socket side are written as
+  the first one and remote dynamic tunnels with an empty list are written as
   `# <the original line>  (VelaShell: <reason in English>)` comments instead of taking the union (a union would loosen the stricter one); the
-  comments are not read back on import.
+  comments are not read back on import. Each side of a remote forward is written as a path or `host:port` (since 2026-10-31 a forward with only
+  one socket side is written as well).
 - **No passwords or passphrases** (ssh_config never holds them); UTF-8 without a BOM, `.conf` by default. The completion message says how many
   connections were exported and that no passwords are included.
 
