@@ -616,6 +616,9 @@ Rules from Settings → Output Rules (§14.6) whose action is "Auto-answer" send
       file and renames it over the original). After a save, a 600 ms debounce, then a wait until the file is readable (up
       to 3 more tries × 300 ms while the editor briefly holds a lock), and the copy is uploaded to its original path
       through the transfer overlay, which shows a row as usual; a save made during the upload is uploaded right after it.
+      An event on a copy whose length and mtime still match the last copy known to equal the remote (e.g. macOS FSEvents
+      delivering the download's creation event late, or a rename away and back) uploads nothing; after an upload the uploaded
+      snapshot is remembered, so one save is never uploaded twice (since 2026-10-31).
     - Opening the same remote file again (same session, same path) **reuses** the session: if the local copy is clean it
       first re-downloads the latest content; if it has changes not yet uploaded, or the last upload failed, the local copy
       is not overwritten and the message reads “X still has changes that were never uploaded. Kept your local copy at
@@ -625,8 +628,12 @@ Rules from Settings → Output Rules (§14.6) whose action is "Auto-answer" send
       two cases: when the panel it belongs to is torn down — an SFTP document tab (single or dual pane) or a terminal tab
       closes, finishing the last upload before SFTP / SSH is disconnected (waiting up to 2 minutes; terminal tabs since
       2026-10-25 — before, sessions opened from the terminal side panel's file browser had no such exit and stayed until the
-      app exited); when the terminal drops, its side panel is torn down and its editing sessions end with it, and since the
-      connection is already gone, anything not uploaded is kept as a draft with its location reported; and when the app
+      app exited); when the terminal drops (including the automatic reconnect that follows), its side panel is torn down and its editing
+      sessions end with it, but **no copy is deleted** (since 2026-10-31; before, clean copies were deleted silently while the
+      editor still had them open): watching stops, anything not uploaded is kept as a draft, clean copies keep their clean
+      marker (swept by the 7-day rule below, or listed as a draft on the next start if edited afterwards), and each ended
+      session shows a toast “The connection dropped, so editing X has ended: later saves will not be uploaded. The local copy
+      stays at PATH.”; uploading does not resume after a reconnect (it is bound to the old panel); and when the app
       exits (waiting up to 5 seconds).
     - A failed upload: the transfer row turns red, the file panel reports “Remote update failed (file name): reason”, and
       the local copy stays. Anything still not uploaded at wrap-up keeps its copy and temporary directory, with the message
@@ -689,7 +696,7 @@ Rules from Settings → Output Rules (§14.6) whose action is "Auto-answer" send
     - **Compare Directories**: compares the current level of both panes and selects the differing items in each pane (newer or unique items; different-size items and conflicts are selected in both). The verdict is cleared as soon as either pane changes directory.
     - **Synchronize…** opens a separate window (same window spec as route tracing; one per document, clicking again brings it to the front). Top to bottom: options (local directory + Browse, remote directory, direction segments, mode segments, compare-by criteria (modification time / file size / SHA-256 checksum, the last checked by default with a tooltip explaining the fallback), Delete files, Existing files only, file mask) → preview list (checkbox | action | path | local size and time | remote size and time; delete rows use the danger color) → summary / notes (unhandled conflicts, directory links not followed, server cannot set modification times) / errors → status bar (progress and status text; Select all, Select none, Keep remote up to date, Compare, Cancel, Synchronize).
     - Changing any option discards the preview; a plan containing deletions asks for confirmation before running; after running, the window re-checks automatically and the status bar states whether any differences remain.
-    - When an FTP connection has a server time zone set (§13.1, FTP “Advanced” page, since 2026-10-24), the synchronize window (keep remote up to date included) and Compare Directories convert the times LIST reports to UTC with it, and by-day comparison truncates in the server's calendar; MLSD times are UTC already and are not shifted. The file panel's time column still shows the server's own clock.
+    - When an FTP connection has a server time zone set (§13.1, FTP “Advanced” page, since 2026-10-24), the synchronize window (keep remote up to date included) and Compare Directories convert the times LIST reports to UTC with it, and by-day comparison truncates in the server's calendar; MLSD times are UTC already and are not shifted. Entries without a time are not converted and are compared by size only, as of unknown time (since 2026-10-31; before, a server time zone east of UTC made Compare Directories fail on them). The file panel's time column still shows the server's own clock.
     - **Keep remote up to date**: the list area becomes an activity log (newest first) and the button reads "Stop watching"; closing the window or the document stops watching.
     - Option meanings, execution order, and comparison rules are in section VII of [sftp-dual-pane-winscp-gap-analysis.md](sftp-dual-pane-winscp-gap-analysis.md).
   - **Directory bookmarks** (since 2026-10-14): the document toolbar provides "Save current directories" and "Bookmarks". Each bookmark stores a name, an absolute local directory, and an absolute remote directory for the current connection; the list applies both paths together and supports editing and deletion. "Manage bookmarks" opens a dedicated management window.
@@ -702,10 +709,15 @@ Rules from Settings → Output Rules (§14.6) whose action is "Auto-answer" send
     - Fields: search location (defaults to the panel's current directory, must be an absolute path starting with `/`), file name (e.g. `*.log`; without wildcards it means “name contains”), containing text (optional, matched literally, files only), ignore case (on by default); at least one of file name and text is required. Enter starts the search.
     - Results arrive one by one; double-click, Enter or the row's “Show in the file pane” button: a directory is entered, a file has its directory opened and is selected and scrolled into view, a deleted one is not selected; a hidden dot file turns on “show hidden files” for that panel only, without writing it back to the settings.
     - At most 500 items and 2 minutes per search (fixed, not settings); hitting the limit or the time-out says plainly that the results are incomplete. “Stop” is always available, and closing the window stops it. Esc stops a running search first, and closes on the next press.
+      Reaching the item limit stops at once (since 2026-10-31): the 501st result cancels the exec, the library sends TERM and the script's trap kills the whole process group, so the remote `find` / `grep` stops too and it reports “limit reached” rather than a time-out
+      (before, `head` exiting only killed the batch `sh`, and the search ran until the tree was walked or the 2 minutes ran out).
     - The remote login shell is checked first: bash, zsh, POSIX sh and fish can search; Windows cmd / PowerShell and csh-like shells get “not supported”, and when the shell cannot be determined (command execution disabled, SFTP-only account, time-out) it says so — in both cases **not a single command is sent**. User input is passed only as single-quoted positional parameters to a fixed script, never spliced into the command; searching from `/` skips `/proc`, `/sys` and `/dev`, and links are not followed.
     - **Session encoding** (since 2026-10-25): when the session encoding is not UTF-8 (e.g. GBK), results are shown in the session encoding and clicking one selects that row; the three inputs are encoded into the session encoding's bytes (octal escapes restored with `printf`, since the exec request itself can only be UTF-8),
       and the whole search matches bytes in the C locale — musl systems such as Alpine match nothing at all for a non-UTF-8 pattern in a UTF-8 locale; the price is that `?` matches one byte rather than one Chinese character, and ignoring case works only for ASCII.
       When the input has characters the session encoding cannot represent, that search is sent as UTF-8 as is (and most likely finds nothing).
+      In UTF-8 sessions, undecodable name bytes in results follow the same rule as SFTP (U+DC00+byte), so locating such a result works; a search root containing such bytes is passed to the server as the original bytes (octal via `printf`).
+      The file-name pattern is encoded character by character: a multibyte character whose trail byte is `\ [ ] * ?` (Big5 「功」 A5 5C, Shift_JIS 「表」 95 5C, …) gets a `\` before that byte, so it matches literally (since 2026-10-31; before, 「功能」 was never found);
+      in the C locale `-iname` / `grep -i` also case-fold trail bytes that fall in the letter range, which only adds false positives and misses nothing.
     - **Names containing a newline** (since 2026-10-25): each counts as one result instead of two. `find -exec … {} +` hands the paths to a small batch script that ends each record with `\0`; `tr` swaps newlines and `\0`, and `head` then counts records
       (not `-print0`: BusyBox's `head` has no `-z` and its `grep` no `-Z`); names containing `\r` are shown as they are, too. On a very old BusyBox whose `find` lacks `-exec … +`, a probe detects it and the old line-based output is used
       (newline names still split in two, and a content search finds nothing).
