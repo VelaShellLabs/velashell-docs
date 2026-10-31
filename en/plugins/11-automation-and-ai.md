@@ -179,6 +179,12 @@ Download host permission is separate from upload/terminal/session-opening permis
    Success on any model clears the whole-key cooldown; a cooldown for one model clears only on success with that model. The "cooling down" on the settings page's key rows reflects only the whole key.
 6. **Empty primary slot**: when Key 1 is removed (only the primary slot's secret is cleared) while extra slots remain, the list still shows an empty "Key 1" ("(empty — use the pencil to fill it in)") that cannot be shown, removed or tested; the pencil fills it and Save puts it back into the primary slot;
    "Test all" tests only rows with a key.
+7. **Switch notice card** (2026-10-31): when failover moves to another endpoint, or the same model moves to another key, that reply gets a "Provider switched" card right below its header — the first line reads "Now using provider·model" (when the provider has more than one key it also names "Key N · ●●●●last four", written as on the settings page's key rows; the key itself never appears),
+   and the lines below give "endpoint: why" for each hop (rate limited / authentication failed or access denied / timed out / server error or overloaded / could not connect / empty reply / connection settings changed, plus the HTTP status when the server returned one; the same classification that decides switching);
+   when the turn finishes and the switch sticks (the selection still points at the endpoint that answered, or the same model's new key has become the current slot with rotation off) it adds "later requests also go here, and are billed here".
+   Several switches in one turn update the same card (beyond 4 hops: the first, a count of the middle ones, the last two); candidates already skipped at the probe stage are not hops. A turn that did not finish keeps the card, without the "later requests" line.
+   **It never enters the model context**: the card lives only in the UI — the message history sent to the model, "copy reply" and the stored reply text never contain it; it is saved in the reply's metadata (`Switch` in `chat_meta`; keys only as ordinal and last four),
+   restored as a card when the conversation is reopened while the context is still built from the reply text alone, and exported to Markdown as a quote. Chat panel only (the IM bridge has no failover).
 
 The only new global setting is `AutoFailoverAcrossAccounts` (global settings → Failover, off by default, applied on Save).
 
