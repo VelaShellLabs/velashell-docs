@@ -648,9 +648,18 @@ Rules from Settings → Output Rules (§14.6) whose action is "Auto-answer" send
       without a marker (left by older versions), or whose copy no longer matches a clean marker are all **drafts, never deleted
       automatically**, and each is listed in the message center ("External edit not uploaded", with the file, server and remote
       path, and where the local copy is; see [message-center-and-feed.md](message-center-and-feed.md) §4B) with the action
-      "Open folder" (command `files.remoteEditDrafts.open`: with a single draft it opens that subdirectory, otherwise the
-      `remote-edit` root); once a draft has been deleted, its message is removed at the next start. A draft cannot be
-      re-uploaded from the message center.
+      the main action "Upload again" (since 2026-10-31: connects to that server through the profile in the marker and puts the
+      copy back at its original path, asking first if the remote changed since, is gone, or that cannot be told; rules in
+      [message-center-and-feed.md](message-center-and-feed.md) §4B) and the second action "Open folder" (command
+      `files.remoteEditDrafts.open` with the draft subdirectory name: opens that draft's subdirectory; without a parameter, a
+      single draft opens its subdirectory, otherwise the `remote-edit` root). Drafts that do not know their profile (left by
+      older versions, quick connections) only get the latter. A successful upload withdraws the message on the spot; a draft
+      deleted by hand has its message removed at the next start. The marker also records the remote file's length and
+      modification time the last time local and remote agreed (`remoteLength` / `remoteModifiedUtc`: the remote is looked up
+      after the download lands, after a clean re-download and after every upload; empty when the lookup fails, and carried by
+      every later clean or dirty marker), which is what "Upload again" uses to tell whether someone changed the remote; if
+      someone changes the remote in the one round trip between an upload and that lookup, theirs is what gets recorded — not
+      guarded further.
   - **The two remote-editing settings** (Settings → File Transfer → “Remote editing” section):
     - **Double-click a file** (`Transfer.DoubleClickAction`: `system` (default) / `builtin` / `editor`; any other stored
       value reads as `system`); its description reads “The built-in editor uploads when you save; the other two upload every

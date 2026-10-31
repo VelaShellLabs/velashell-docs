@@ -62,9 +62,14 @@ A message can carry one destination, one of two kinds, **in-app first**:
 | --- | --- |
 | `commandId` | Runs through `ICommandRegistry.Execute` — the same registry the menus, command palette and shortcuts share, so the target cannot drift from the other entry points. Commands registered by plugins work too |
 | `url` | Opens in the system browser, **https only** |
+| `commandParameter` | The argument for `commandId` (since 2026-10-31). A destination with a parameter bypasses the command registry and goes to a parameterized action the host registers separately — every registry entry shows up in the command palette, which has no argument to give; if that path does not know the id, nothing runs, and it does **not** fall back to the same command without the parameter (dropping the parameter would do something else). Only messages the host builds itself carry one: neither the feed parser nor plugin messages read this field. Persisted older messages lack it and are treated as having no parameter |
 
 If the command is not registered (returns false), it falls back to the external link rather than doing
 nothing.
+
+**Second action** (`secondaryLink`, since 2026-10-31): a host message can carry one more in-app action, placed at the left end of the destination line (a secondary-colour text button that turns accent on hover).
+It is a sibling of the whole-row button rather than nested inside it (a button inside a button leaves screen readers and keyboard focus unable to tell them apart), and clicking it runs only itself. In-app commands only, no external links;
+it is hidden when the main action is an external link — the left end of that line shows the link's host name. Only external-edit drafts use it so far (§4B). Feeds and plugins cannot set it either.
 
 "Update available" uses the in-app path: `commandId = app.settings.about` opens settings and lands
 directly on the About page, so the user updates right there instead of being dropped on the settings
@@ -272,10 +277,21 @@ Each external-edit draft left by the last run (a session still open when the app
 
 - Kind "System", warning; id `remote-edit-draft:<subdirectory name>` — republished at every start and de-duplicated by that id, keeping its read state.
 - Title "External edit not uploaded"; the body says which file, which path on which machine, and where the local copy is; an old copy without a state marker cannot name the remote path and says instead that it "may contain changes that were not uploaded".
-- The action "Open folder" runs `commandId = files.remoteEditDrafts.open` (the command palette has "Open external edit drafts folder" too): with a single draft it opens that subdirectory, otherwise the `remote-edit` root,
-  with each draft's full path in its body. A message-center action is just a command without parameters, so a draft cannot be re-uploaded from here — that needs a connection to that server first, and the session went away with the last run.
+- Two actions, both carrying the draft subdirectory name as their parameter (`commandParameter`): the main action "Upload again" (`files.remoteEditDrafts.reupload`, which exists only in this parameterized form and is not in the command registry),
+  and the second action "Open folder" (`files.remoteEditDrafts.open` with a parameter opens that draft's subdirectory; without one — the command palette's "Open external edit drafts folder", messages persisted by older versions —
+  it behaves as before: with a single draft it opens that subdirectory, otherwise the `remote-edit` root). Drafts whose marker records no remote path or connection profile (left by older versions, quick connections) only get "Open folder",
+  with the "upload or save it yourself, then delete this copy" body; drafts that can be uploaded again say so in their body.
+- "Upload again" (since 2026-10-31): looks for a pane already connected through the profile id in the marker (a file tab, or a terminal tab whose file pane has been opened), and otherwise opens a file tab as usual
+  (the same path as "Resume" in the transfer queue: SSH / SFTP, FTP and plugin file protocols each use their own opening path, with the login dialog when credentials are missing and the usual fingerprint check); if that does not connect, the opening path has already said why and nothing more is shown here.
+  It first compares the remote file's current length and modification time with what the marker records as "the remote the last time local and remote agreed" (`remoteLength` / `remoteModifiedUtc`, see “Crashes and drafts” in [interaction-and-ui-specs.md](interaction-and-ui-specs.md) §6):
+  only a match uploads straight away; a mismatch (the remote changed since), no record (an older marker, or the lookup failed at the time) or a back end that cannot tell all bring up a confirmation first, never a silent overwrite; with nobody to ask, nothing is overwritten.
+  If the remote file is gone, it asks whether to recreate it at that path while the folder still exists; if the folder is gone too, nothing is uploaded and a popup names the folder; a path that has become a folder is not uploaded either.
+  The upload takes the same path as external editing's automatic write-back (it shows in the transfer popup). On success the marker is first written clean and then the subdirectory is deleted (if it cannot be deleted it is just a clean copy, cleared under the 7-day rule), and the message is withdrawn;
+  if the copy was saved again during the upload, it is kept and so is the message; if the lookup or the upload fails, both stay and a popup gives the reason; if the profile has been deleted, it does not connect and says where the copy is. A second click on the same draft while one is running does nothing.
+- Messages posted by older versions (whose only action is "Open folder" without a parameter) are replaced at start-up with this version's message, keeping their read state and the time they were first found —
+  publishing de-duplicates by id and keeps the existing one, so without the replacement a draft listed before the upgrade would never get "Upload again".
 - The publication time is when the draft was first found, not its modification time: the list is sorted by publication time and drops the oldest past 200, so a draft from months ago would sink to the bottom or be pushed out right away.
-- Once a draft has been deleted (the user dealt with it), its message is removed at the next start. Posted only at start-up (the directory scan runs on the thread pool); a draft left during a run is reported in the file panel on the spot and listed at the next start.
+- A successful "Upload again" withdraws the message on the spot; a draft the user deleted (dealt with) has its message removed at the next start. Posted only at start-up (the directory scan runs on the thread pool); a draft left during a run is reported in the file panel on the spot and listed at the next start.
 
 ## 5. Storage and limits
 
