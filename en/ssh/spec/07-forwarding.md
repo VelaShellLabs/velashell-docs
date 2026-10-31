@@ -365,6 +365,18 @@ What to let out must be stated by the caller; to allow everything, pass `RemoteO
 **Matching uses the name the remote side gave in the handshake, without resolving it first**: a rule with an IP does not match a request with a name, and vice versa —— better a wrong refusal
 than letting a name that resolves to an internal address bypass the list.
 
+Rules are classified by how their host is written, and each class matches its own kind of target:
+
+- A lone `*`: any host (IP literals included).
+- Only digits, `.`, `*`, `?` (at least one digit): an IPv4 rule, matching only a canonical dotted-quad IPv4 literal ——
+  `10.0.0.*` matches neither `10.0.0.1.attacker.example` nor shorthands such as `2130706433`, `0177.0.0.1`, `10.1`.
+- Containing `:` (written in brackets): an IPv6 rule, matching only IPv6 literals; both sides are compared in canonical form.
+- Anything else: a name rule, matching DNS names only, never IP literals. Brackets are only syntax: `[10.0.0.1]` is still an IPv4 rule.
+
+The host the remote side gives is syntax-checked first, under `Any` too: only a valid host name (letters, digits, `-`, `_`, dot-separated, at most 253 characters
+with labels of at most 63, last label not numeric) or an IP literal; anything with NUL, control characters, whitespace, `%`, `/` or wildcards, and numeric-looking
+non-addresses such as `10.0.0.256` or `1.2.3.4.5`, gets `0x02`. The string that was checked is exactly the string that is dialed.
+
 〔Decision〕**A failure reply must actually go out**: after the reply, drain stdin and send `EOF` before closing the channel; **record the event before replying** ——
 the remote side may come back with another request as soon as it sees the reply, and the event must not trail it.
 
