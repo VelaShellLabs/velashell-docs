@@ -691,6 +691,35 @@ new()
 - 完整示例(编译期 AXAML + 双语文案 + 会话/远程执行联动):
   [`plugins/VelaShell.Plugin.HelloWorld`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.HelloWorld)(DemoPanelView.axaml)。
 
+#### 往消息中心发通知(`PostNotificationAsync`,SDK 2.1.3)
+
+面板之外,插件还能往宿主的消息中心(侧边栏铃铛)发一条**要留存、可回看**的消息 —— 夜间备份失败了、
+证书 7 天后过期、后台任务跑完要你确认结果。进度、连上 / 断开这类运行时状态、「已复制」之类的操作回执与调试信息
+**不要**往这里发:前者属于你自己的面板,后者属于 `Log`。
+
+```csharp
+if (context.Ui.SupportsNotifications)   // 旧宿主为 false,这时 PostNotificationAsync 抛 NotSupportedException
+{
+    PluginNotificationOutcome outcome = await context.Ui.PostNotificationAsync(new PluginNotification
+    {
+        Id = "backup-failed:web-01",          // 本插件内稳定的去重键,别每次随机生成
+        Title = "备份失败",
+        Body = "web-01 的夜间备份没有完成。",
+        Level = PluginNotificationLevel.Warning,
+        ActionCommandId = "acme.backup.open", // 只能是本插件的命令
+        ActionLabel = "查看",
+    });
+}
+```
+
+- 先去重、后限频:同一个 `Id` 重投返回 `AlreadyPosted`(不新增、不改内容);每个插件每分钟最多 6 条**新**消息,
+  超出返回 `RateLimited`、不抛异常;用户在插件管理页按插件静音时返回 `Muted` —— 这时别换个 id 重发,也别改走别的渠道去补。
+- 动作命令最好写进清单的 `contributes.commands`:消息跨重启留存,用户点它时插件可能还没激活。
+  故意没有网址字段 —— 要打开网页就在命令里做。
+- 不需要新权限:应用内通知本来就在普通权限 `ui.contributions` 里。用到要声明 `minSdkVersion: 2.1.3`。
+- 完整规则(长度上限、留存与清理、隔离进程的 `ui/notify`、`FakeUi` 的测试成员)见
+  [SDK 参考 §3.7](../sdk/sdk-reference.md#37-往消息中心发通知sdk-213)。
+
 ### 5.10 Secrets —— 加密机密存储
 
 ```csharp
@@ -790,6 +819,16 @@ context.Protocols.Register(
 - **异常有约定**:`ProtocolAuthenticationException`(宿主重弹登录框)、
   `ProtocolCertificateTrustException`(宿主弹信任提示、记指纹后重连)、
   `ProtocolConnectionException`、`ProtocolUnsupportedException`(呈现为"功能不适用"而非失败)。
+- **可选的兼实现接口**:协议实现类可以再兼实现下面几个接口,宿主做类型检查,问得到就用、问不到就当这个协议不支持那一面,
+  其余功能不受影响:`IProtocolStreamUpload`(2.0.6,把一条顺序读的流写成远端文件,「远程 + 远程」双栏经内存中转时用)、
+  `IProtocolLastWriteTime`(2.1.3,改远端修改时间,目录同步上传后对齐时间用)、
+  `IProtocolChecksum`(2.1.3,服务器端摘要,`RemoteChecksumAlgorithm`;目录同步先比摘要、传输后核对用)。
+  后两个的纪律:**摘要只能用服务器自己给的**,不许为了凑一个值把整个文件读回来算;实现了但这条会话做不到
+  (服务器没有 MFMT / HASH、对象存储的时间戳只读)时抛 `ProtocolUnsupportedException`,**不要静默成功**;
+  单个文件算不出时那一项为 null。条目上还可以报链接:`RemoteFileEntry.IsSymbolicLink` / `LinkTarget`(2.1.3;
+  `IsDirectory` / `Size` / `LastModified` 描述链接目标);**创建**链接仍没有契约。用到哪一面,`minSdkVersion` 就声明到哪一版。
+  细节见 [SDK 参考 §3.3d](../sdk/sdk-reference.md#33d-插件协议的文件能力补口sdk-213);S3 插件实现了摘要、刻意不实现改时间,
+  理由写在下面完整示例目录的 README 里。
 - **要在装载插件之前就出现在连接页**,须在 `plugin.json` 里同时声明:
 
 ```jsonc

@@ -52,6 +52,11 @@ public interface IRemoteFs
 传输错峰(插件流量入低优先级队列)、进度回调节流(≥100ms;满格(100%)那一帧只在传输成功后补发一次,失败不发)——吸取
 大文件传输卡顿的历史教训,插件流量不允许灌爆 UI 调度器。
 
+条目上的链接字段(SDK 2.1.3,宿主已接上):`ListAsync` / `StatAsync` 返回的 `RemoteFileEntry` 带 `IsSymbolicLink`
+(按 lstat 判断)与 `LinkTarget`(readlink 原文,可以是相对路径);`IsDirectory` / `Size` / `LastModified` 描述链接**目标**,
+断链保留链接自身的属性。进程内与隔离进程(`fs/list`、`fs/stat` 的 JSON)都带上,旧宿主或旧数据缺这两个字段时读成「不是链接」。
+见 [SDK §3.3d](../sdk/sdk-reference.md#33d-插件协议的文件能力补口sdk-213)。登记之前就被明确拒绝的传输见 §2.1 的 `PluginTransferRejectedException`。
+
 ### 2.1 独立上传任务（SDK 2.1.1）
 
 `IRemoteFsApi` 增加 `SupportsTransferOperations` 和 `StartUploadAsync` / `GetTransferAsync` / `WaitTransferAsync` / `CancelTransferAsync` / `ResumeTransferAsync`，完整契约见 [SDK §3.3b](../sdk/sdk-reference.md#33b-独立上传任务sdk-211)。登记之前就被明确拒绝的（源不存在、Windows 共享/锁冲突、额度满）以 `PluginTransferRejectedException` 交回（契约随 SDK 2.1.3 发布，宿主已接上；见 [SDK §3.3e](../sdk/sdk-reference.md#33e-传输启动前被拒sdk-213)）。它与上方同步传输不同：启动返回任务快照，内容继续由宿主按流上传，单次查询/等待超时不取消传输，不把旧两小时 RPC 时限当执行死线。

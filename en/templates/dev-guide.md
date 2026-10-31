@@ -517,6 +517,39 @@ Discipline:
 - The host automatically closes all of a plugin's panels when the plugin is deactivated.
 - Complete example (compile-time AXAML + bilingual copy + session/remote execution integration): [`plugins/VelaShell.Plugin.HelloWorld`](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.HelloWorld) (DemoPanelView.axaml).
 
+#### Posting to the message center (`PostNotificationAsync`, SDK 2.1.3)
+
+Besides panels, a plugin can post a message **worth keeping and reading again** to the host's message center (the
+bell in the sidebar) — the nightly backup failed, a certificate expires in 7 days, a background job finished and
+needs you to confirm the result. Do **not** send progress, runtime state such as connected / disconnected, operation
+receipts such as "copied", or debugging information there: the first belong in your own panel, the last in `Log`.
+
+```csharp
+if (context.Ui.SupportsNotifications)   // false on older hosts, where PostNotificationAsync throws NotSupportedException
+{
+    PluginNotificationOutcome outcome = await context.Ui.PostNotificationAsync(new PluginNotification
+    {
+        Id = "backup-failed:web-01",          // a stable de-duplication key within this plugin; do not randomize it
+        Title = "Backup failed",
+        Body = "The nightly backup of web-01 did not complete.",
+        Level = PluginNotificationLevel.Warning,
+        ActionCommandId = "acme.backup.open", // must be one of this plugin's commands
+        ActionLabel = "View",
+    });
+}
+```
+
+- De-duplication comes before rate limiting: posting the same `Id` again returns `AlreadyPosted` (nothing added,
+  nothing changed); each plugin gets at most 6 **new** messages per minute, beyond which the call returns
+  `RateLimited` without throwing; when the user mutes the plugin on the plugin manager page the call returns `Muted`
+  — do not retry under another id, and do not fall back to some other channel.
+- Put the action command in the manifest's `contributes.commands`: messages survive restarts, so the plugin may not
+  be active yet when the user clicks. There is deliberately no URL field — open web pages from the command.
+- No new permission is needed: in-app notifications are already part of the normal permission `ui.contributions`.
+  Using it means declaring `minSdkVersion: 2.1.3`.
+- The full rules (length limits, retention and cleanup, `ui/notify` for isolated processes, `FakeUi`'s test members)
+  are in [SDK reference §3.7](../sdk/sdk-reference.md#37-posting-to-the-message-center-sdk-213).
+
 ### 5.10 Secrets: Encrypted Secret Storage
 
 ```csharp
@@ -614,6 +647,21 @@ context.Protocols.Register(
 - **Exceptions have conventions**: `ProtocolAuthenticationException` (the host shows the login dialog again),
   `ProtocolCertificateTrustException` (the host shows a trust prompt, records the fingerprint and reconnects), `ProtocolConnectionException`,
   `ProtocolUnsupportedException` (shown as "not applicable" rather than as a failure).
+- **Optional interfaces to implement alongside**: the protocol implementation class may also implement the interfaces
+  below. The host checks the type, uses what it finds and treats the protocol as not supporting what it does not,
+  with everything else unaffected: `IProtocolStreamUpload` (2.0.6, writes a sequentially read stream as a remote file,
+  used when a "remote + remote" dual-pane copy relays through memory), `IProtocolLastWriteTime` (2.1.3, sets the remote
+  modification time, used by directory sync to align times after an upload) and `IProtocolChecksum` (2.1.3,
+  server-side digests, `RemoteChecksumAlgorithm`; directory sync compares digests first and transfers verify with it).
+  The rules for the last two: **a digest must come from the server itself** — never read a whole file back just to
+  produce a value; if you implement it but this session cannot do it (no MFMT / HASH on the server, read-only object
+  timestamps), throw `ProtocolUnsupportedException` — **do not succeed silently**; a single file that cannot be
+  digested gets null. Entries can also report links: `RemoteFileEntry.IsSymbolicLink` / `LinkTarget` (2.1.3;
+  `IsDirectory` / `Size` / `LastModified` describe the link target); **creating** links still has no contract.
+  Declare `minSdkVersion` up to whichever surface you use. Details in
+  [SDK reference §3.3d](../sdk/sdk-reference.md#33d-file-capabilities-for-plugin-protocols-sdk-213); the S3 plugin
+  implements digests and deliberately not modification times, for reasons given in the README in the complete-example
+  directory below.
 - **To appear on the connection page before the plugin is loaded**, declare both in `plugin.json`:
 
 ```jsonc
