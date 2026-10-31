@@ -1,15 +1,18 @@
 # 插件系统进度总览
 
-> 📦 **代码仓库对照**(2026-08-30 更新):插件契约 SDK 在
-> [velashell-plugin-sdk](https://github.com/VelaShellLabs/velashell-plugin-sdk);
-> `vela-plugin` CLI 与 `VelaShell.PluginSdk.Build` 在
+> 📦 **代码仓库对照**(2026-10-31 更新):插件契约 SDK、测试替身与构建包
+> (`VelaShell.PluginSdk` / `.Testing` / `.Build`,同版本、同一次发布)在
+> [velashell-plugin-sdk](https://github.com/VelaShellLabs/velashell-plugin-sdk)
+> —— `.Build` 2026-09-11 从 cli 仓库搬来;
+> `vela-plugin` CLI 在
 > [velashell-plugin-cli](https://github.com/VelaShellLabs/velashell-plugin-cli);
 > `dotnet new` 模板在
 > [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates);
-> Redis / S3 / Telnet / Serial 插件在
+> Redis / S3 / Telnet / 串口 / MongoDB / Docker 面板 / RDP 插件在
 > [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins)。
 > 本页(以及 01–15 蓝图)里出现的 `plugin-sdk/…`、`tools/…`、`templates/…` 指前三者,
-> `tests/VelaShell.Plugin.{Redis,S3,Telnet,HelloWorld}.Tests` 与那几个插件的源码路径指后者。
+> `tests/VelaShell.Plugin.{Redis,S3,Telnet}.Tests` 与那几个插件的源码路径指后者;
+> HelloWorld 示例插件后来已从 velashell-plugins 移除,下文提到的 HelloWorld 测试是当时的验收证据。
 >
 > **例外:AI 插件(`plugins/VelaShell.Plugin.Ai`,测试在 `tests/VelaShell.Plugin.Ai.Tests`)
 > 仍在主仓库**,随主程序一起构建、一起发布 —— 它与宿主是编译期耦合(借宿主的 AvaloniaEdit、
@@ -18,7 +21,7 @@
 > 插件夹具在 `tests/fixtures/`)。
 > 结论与验收证据本身不受影响,仅路径的仓库归属变了。
 
-> 更新:2026-08-18(新增工作台能力域与 Redis 插件、SDK 产品化,均见文末各节)。本页是
+> 更新:2026-08-18(新增工作台能力域与 Redis 插件,见分项进度表;SDK 产品化见文末那一节)。本页是
 > 实现进度的**单一权威来源**:按蓝图分项列出 已完成 / 部分完成 / 未开始,并给出验收证据
 > (测试)与建议的下一步。写插件请读 [dev-guide.md](../templates/dev-guide.md)。
 
@@ -76,7 +79,7 @@ AI / Redis 面板另有 headless 装载与交互测试。
 | 插件管理页 日志查看(2026-10-24) | 02/06 | 每行「查看日志」:只读窗口显示该插件日志尾部(256 KB),可刷新、打开所在文件夹;日志按插件 id 落在 `~/.velashell/logs/plugins/<id>.log`,满 1 MB 轮转一份。来源全在宿主侧,不需要 SDK 新契约:`IPluginLogger`(进程内直调、隔离进程经 RPC 转回)、隔离进程的 stdout / stderr、宿主替插件记的激活 / 激活失败 / 崩溃;卸载时删除,宿主没运行时被删掉的插件,下次启动时清(轮转件 2026-10-31 起叫 `<id>.log.1`);导出诊断包时可按插件勾选(默认不收,2026-10-25 起) | PluginLogFilesTests(含真夹具插件 inProcess / isolated 两种模式)、PluginLogViewModelTests |
 | SDK 测试替身 | 09/13 | `TestPluginContext` + 全能力内存替身,插件无宿主可单测 | 被 HelloWorld 测试 dogfood |
 | 示例与开发内环 | 09 | HelloWorld(AXAML 面板/双语/各能力演示);F5 自动重建镜像插件。**仓库外插件(SDK 1.4)**:宿主自登记 `host.json` → `vela-plugin dev init` 生成 IDE 启动配置(`--dev-root` / `--wait-debugger` / `--data-root` 独立调试实例);开发期插件走影子副本装载 + 管理页"重新加载" + `--dev-watch` 自动重载。**协议 / 工作台模板(2026-10-24)**:`velaplugin-protocol` / `velaplugin-workspace`,各带测试工程与本机回显服务(开发指南 §2.4) | HelloWorldDemoPanelTests、DevInnerLoopTests、HostRegistryTests、VelaShellStartupArgumentsTests |
-| 能力域:protocols(自带文件协议) | 07 | 声明 → 注册 → 惰性激活 → 注销;宿主的双栏浏览器/传输栈零改动复用;仅 `inProcess`。首个使用者:S3 插件 | PluginProtocolTests |
+| 能力域:protocols(自带文件协议) | 07 | 声明 → 注册 → 惰性激活 → 注销;宿主的双栏浏览器/传输栈零改动复用;仅 `inProcess`。首个使用者:S3 插件。**文件能力补口(SDK 2.1.3,宿主已接上)**:可选兼实现 `IProtocolLastWriteTime`(改修改时间)/ `IProtocolChecksum`(只用服务器给的摘要),条目带 `IsSymbolicLink` / `LinkTarget`;S3 插件实现了摘要(只交对象存着的完整校验和)、刻意不实现改时间 | PluginProtocolTests |
 | 能力域:workspaces(自带非文件型连接) | 07 | 同一排页签、同一套声明式表单、同一条惰性激活链路;宿主向插件索取一个控件挂成停靠文档。含**声明式 SSH 隧道**与**连接提议**;仅 `inProcess`。首个使用者:Redis 插件 | PluginWorkspaceTests(25 项) |
 | 开发文档 | 09 | dev-guide.md(唯一权威)+ cli.md(命令行手册)+ publishing.md(打包发布/商店)+ sdk-reference.md(SDK 参考);中英双份;01–15 蓝图已加实现注记 | — |
 
@@ -139,6 +142,54 @@ AI / Redis 面板另有 headless 装载与交互测试。
   AWSSDK 依赖、22 项桶配置界面、149 条文案全部随插件走;`ConnectionType` 里不再有具体协议,
   只有一个 `Plugin`。详见 [S3协议插件化设计](../host/S3协议插件化设计.md)。
 - 已知边界:协议能力仅 `inProcess`(隔离进程 RPC 尚不支持宿主→插件的请求方向)。
+
+## 2026-08:SDK 产品化(NuGet 包 / 模板 / 专属包格式 / 调试内环)
+
+插件 SDK 从「仓库内工程 + ProjectReference」变成真正对外分发的 SDK。
+
+**五个 NuGet 包**(版本走 `VelaSdkVersion`,与宿主版本解耦;`AssemblyVersion` = `<主版本>.0.0.0`
+只随主版本动 —— 它是插件编译期绑定的标识,补丁版跟着变等于让每个已编译的插件白白重新绑定一次;
+`FileVersion` 与 `InformationalVersion` 照常跟着真实版本走。纪律:**SDK 主版本 == `apiLevel`**:
+主版本一变说明契约破了,`VelaPluginApi.Level` 同步提,老宿主于是在发现期干净拒载,
+而不是装载时抛程序集绑定异常):
+
+| 包 | 谁引用 | 内容 |
+| --- | --- | --- |
+| `VelaShell.PluginSdk.Build` | **插件工程(只需引这一个)** | MSBuild props/targets + 随包分发的打包器;传递引入下面两项与**精确锁死宿主版本的 Avalonia** |
+| `VelaShell.PluginSdk` | 传递引入 | 契约程序集(仅 BCL) |
+| `VelaShell.PluginSdk.Testing` | 插件测试工程 | `TestPluginContext` 与能力替身 |
+| `VelaShell.Plugin.Cli` | dotnet tool | `vela-plugin`:dev init/run/list/prune/link、hosts、doctor、validate、pack、sign、verify、info、unpack、keygen |
+| `VelaShell.Plugin.Templates` | dotnet new | `velaplugin`、`velaplugin-ui`、`velaplugin-protocol`(终端协议)、`velaplugin-workspace`(工作台连接类型);后两个自带测试工程与本机回显服务 |
+
+Build 包替插件工程处理掉四件事:`EnableDynamicLoading` 与 `plugin.json` 输出;
+共享程序集(`VelaShell.PluginSdk` 与 `Avalonia*`,口径与 `PluginAssemblyLoadContext` 一致)不落插件目录;
+Avalonia 版本一致性(NU1608 升为错误 + `VELA1001` 构建期核对);清单校验与 `dotnet build -t:PackVpx`。
+
+**`.vpx` 改为专属容器**(`VelaShell.PluginSdk/Packaging/VpxContainer.cs`,宿主与工具同一份实现):
+64 字节头部(魔数 `56 50 58 1A`、格式版本、标志位、载荷长度、SHA-256、掩码随机数、头部 CRC32)、
+掩码后的 zip 载荷与可选的 ECDSA P-256 签名块。魔数与掩码只挡「改个后缀就解压」,
+完整性与来源靠摘要与签名;坏签名一律拒装(哪怕没配签名策略),未签名的包默认放行。
+安装期另加解压炸弹上限(10 000 条目 / 512 MB,按**实际写出的字节**记账)。
+**不留裸 zip 兼容旁路**:容器格式定型前没有任何 `.vpx` 发出去过,没有存量要照顾,
+改后缀的 zip 一律拒装,错误信息里给出重新打包的命令。
+
+**调试内环**:`plugins.dev.txt` / `VELA_PLUGIN_DEV_ROOT` 把插件工程的输出目录直接挂进宿主
+(管理页打 DEV 角标;同 id 时已安装的那份胜出)。`VELA_PLUGIN_WAIT_DEBUGGER=<id>|*` 让隔离插件的
+子进程在装载程序集前等调试器,并**同步放宽激活超时、停掉心跳**(否则一停在断点上就被当成挂死、强杀进程)。
+进程内插件只要 `Debugger.IsAttached` 就自动放宽激活超时。
+
+**清单新增 `author`**(只作展示,与作为信任标识的 `publisher` 分工;≤128 字符,拒控制字符)。
+插件管理页展示它,缺省时退回 `publisher`。
+
+**CI**:`.github/workflows/nuget.yml`,打 `sdk-v<版本>` 标签即发。发布前跑打包相关测试与
+**模板端到端冒烟**(装模板 → 生成工程 → 还原 → 构建 → 出 .vpx → 读回容器 → 断言没有共享程序集
+漏进插件输出)。那一步不是形式:它先后抓到「SDK 带 `RequiresPreviewFeatures`,插件工程不开预览特性
+就满屏 CA2252」与「NuGet 默认不传递 build 资产,Avalonia 的 AXAML 编译器到不了插件工程」—— 两者在仓库内都看不见。
+
+> 后来的变化:2026-08-27 工具链拆成 sdk / cli 两个仓库,2026-09-11 `.Build` 与打包器又搬进 sdk 仓库。
+> 今天 `VelaShell.PluginSdk` / `.Testing` / `.Build` 由 velashell-plugin-sdk 同版本、同一次发出
+> (见 [SDK 发版流程](../sdk/release-process.md)),`VelaShell.Plugin.Cli` 与 `VelaShell.Plugin.Templates`
+> 各在自己的仓库发版(见 [CLI 发版流程](../cli/release-process.md)、[模板发版流程](../templates/release-process.md))。
 
 ## 2026-08-23:装载链路提速与后台活动指示器
 
