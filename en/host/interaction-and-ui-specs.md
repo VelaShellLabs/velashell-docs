@@ -485,6 +485,8 @@ Save the current split panes and tabs as a named template and reopen the same se
     A file whose format matches is read on a best-effort basis even when its version is newer, keeping unknown fields; items with an empty name or not a single usable tab are dropped, an all-zero id gets a new one, and duplicate ids within the file keep the later item.
   - Conflicts: when templates have the same id as, or share a name (case-insensitive) with, local ones, “Some templates already exist” names up to 5 of them with three buttons, “Replace / Save as new / Cancel”, asked once for all:
     Replace keeps the local template's id and creation time and takes the file's name and layout; Save as new gets a new id and “ (2)” after the name. Conflicts are judged only against templates that existed before the import; duplicate names within the file are taken as they are.
+    Each local template is replaced only once (since 2026-10-31): when one incoming template matches it by id and another by name, the id match replaces it and the other is saved as new with its own id, getting “ (2)” only if its name is still taken;
+    among several name matches the first in the file replaces, the rest are saved as new. The count and the notice reflect what was actually stored.
   - Imported templates get “now” as their modification time (so they win over the tombstone left when one was deleted locally and over the cloud copy). Afterwards it says “Imported N layout template(s).”, or, as a warning when some refer to connections this device does not have,
     “Imported N layout template(s). M of them refer to connections that do not exist on this device; those tabs will be skipped when the template is opened.”
 - **Storage**: the local SonnetDB collection `layout_templates`, one document per template; a deleted template leaves a tombstone in `layout_template_tombstones` (id plus deletion time, kept 180 days, after which it is removed together with the template it covers).
@@ -493,6 +495,8 @@ Save the current split panes and tabs as a named template and reopen the same se
   `cipherText` with an end-to-end passphrase, encrypted the same way as the main payload). A push writes both files in one commit, and a read fetches both at once.
   - Merging is per template id: live templates compare their modification time and deletions their tombstone's deletion time, the later wins; at the same instant the tombstone wins; equal times count as the same copy, without comparing content. Different ids with the same name are neither merged nor renamed; both stay.
   - It merges before pushing, after pulling, and when the main payloads turn out identical on both sides (the result does not depend on order or repetition); when the cloud lacks local changes it pushes once more, while “Pull only” never pushes.
+  - Saving, changing or deleting a template locally only queues an auto-sync; it does not mark the main payload as locally changed and takes no part in the main payload's newer-wins decision — templates are merged and pushed on the sync's up-to-date / pull paths,
+    and “Push only” still carries the template file (fixed 2026-10-31: before, saving a template made this device push its older settings and connections over changes another device had just pushed).
   - Older versions read and write only the main file and never touch this one — which is why templates are not in the main payload (an old client pushing the whole payload back would wipe a new section, tombstones included).
   - A file written by a newer version, or encrypted while this device has no passphrase or a different one, is skipped (neither read nor written) with a note after the sync result; a broken file (not JSON, wrong format marker, truncated ciphertext) counts as absent and is rewritten with the merged result on the next push (the old content stays in the Gist history).
   - Restoring a past version writes back all of that version's templates with the time set to now, leaving extra local ones alone. The “layout on exit” (next item) is not synced.
@@ -1846,8 +1850,13 @@ and the user is asked what to fill in before it is sent. Commands that differ by
   - Each input is pre-filled with the value last entered for that quick command (since 2026-10-24; remembered per quick
     command + placeholder name, falling back to the default when nothing was remembered). It lives only in the current
     run: never written to disk, never in cloud sync or import / export; placeholders whose names look like credentials
-    (containing pass / pwd / secret / token / otp / credential / apikey, or 密码 / 口令 / 密钥 / 令牌 / 验证码 and the like) are not
-    remembered even for the run; an input left empty is not remembered, so next time it is back to the default.
+    (containing pass / pwd / pw / secret / token / otp / credential / apikey / private_key / access_key / authorization / mfa / 2fa / jwt / bearer / cookie,
+    or 密码 / 口令 / 密钥 / 令牌 / 验证码 / 凭据 / 凭证 / 秘钥 / 私钥 / 暗証番号 / パスコード / 암호 and the like; pin / key / auth are too short and match only as
+    whole words: sim_pin, sshKey, OAuth count, ping_host, keyspace, author do not) are not remembered even for the run; an input left empty is not
+    remembered, so next time it is back to the default.
+  - Values entered into such placeholders are kept out of the command history (since 2026-10-31): the terminal tab blocks them by value, so a line
+    containing one is not recorded on Enter, nor after a few other characters are edited, nor when recalled later with the shell's Up arrow; kept per tab,
+    for this run only, at most 16, cleared when the tab closes. Applies to both completion and the quick-command panel.
 - **Line breaks in a value become spaces**: a quick command sends its text without Enter, so a line break inside a
   value would press Enter for the user.
 - Target tabs may disconnect while the dialog is open: targets are picked again from the current tabs when sending,
