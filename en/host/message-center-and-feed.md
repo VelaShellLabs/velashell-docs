@@ -282,8 +282,10 @@ Each external-edit draft left by the last run (a session still open when the app
 - Location: SonnetDB document collection `notifications`, a single `inbox` document (through `IAppDataStore`)
 - **Kept across restarts**: an announcement still makes sense the next day; this is the opposite of the
   file-transfer panel, where a transfer's progress is meaningless by tomorrow
-- A **200-item** cap, dropping the oldest by publication time; expired items are pruned both on publish
-  and on load
+- A **200-item** cap; beyond it plugin messages are dropped first (oldest by publication time first), and the
+  host's own items go only once no plugin item is left. Each plugin additionally keeps at most 20, beyond which its
+  own oldest is dropped (since 2026-10-31, so one chatty plugin cannot push out the host's one-shot notices);
+  expired items are pruned both on publish and on load
 - Neither a corrupted store nor a failed write affects the running session: an unreadable store counts
   as no history, and a failed write is retried on the next change
 
