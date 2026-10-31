@@ -141,6 +141,13 @@ socket paths must be usable on this machine — a leading `~` is expanded, the p
 103 on macOS), and server paths must start with `/`; anything else is skipped. Lines are parsed one by one, so one bad line does not take
 others down with it.
 
+**Quotes and backslashes are read the way ssh reads them** (since 2026-10-31; tokenized by the SSH library, see [`ssh/spec/09-dialing.md`](../ssh/spec/09-dialing.md) §7.4): both `"…"` and `'…'` are recognized,
+`\\`, `\"` and `\'` (plus `\` followed by a space outside quotes) are escapes, and every other backslash stays. So an ordinary hand-written Windows path such as `IdentityFile C:\Users\me\.ssh\id_ed25519` imports unchanged;
+**UNC paths and named pipes written with a single leading `\\` are read by ssh as starting with one `\`, and VelaShell reads them the same way** —— `IdentityFile \\fileserver\keys\id` reads as `\fileserver\keys\id`,
+and the preview says so ("reads as a path that starts with a single backslash; for a UNC path or a named pipe, write `\\\\server\share` or `\\\\.\pipe\name`"); the key path is carried into the connection as read,
+and an agent endpoint read this way is unusable, with a note of its own. 〔Decision〕VelaShell does not "repair" it back to two backslashes: then the same config would work in VelaShell and not in ssh, which is exactly the failure nobody notices.
+Named pipes exported by VelaShell before 2026-10-31 were written this way (as-is at the time), so re-importing them shows this note; exporting again fixes it.
+
 **Every other keyword is ignored**: `ServerAliveInterval` and so on. They either live somewhere else in VelaShell or the host does not support
 them yet. What the table above marks as skipped or not imported is not dropped silently: it goes into the row's **import notes** (section 4),
 so the user sees what did not come across and why.
@@ -402,7 +409,11 @@ blocks that can be pasted straight into `~/.ssh/config`, so the command-line ssh
 - **Scope**: SSH / SFTP only, one `Host` block per connection; FTP and plugin protocols are skipped and counted. Jump hosts come along by the
   rule in 7.1, and `ProxyJump` refers to them by alias.
 - **Aliases**: the connection name (the host when there is none), with whitespace and characters that mean something else in ssh_config
-  replaced by `-`, and a number appended to duplicates.
+  (including quotes and backslashes —— `Host it's` is an unbalanced quote in ssh and the whole config is rejected) replaced by `-`, and a number appended to duplicates.
+- **How values are written** (since 2026-10-31): paths, user names, agent endpoints and both sides of forwards all go through the SSH library's `SshConfigFile.TryFormatArgument`, so ssh and VelaShell both read back the original value
+  ([`ssh/spec/09-dialing.md`](../ssh/spec/09-dialing.md) §7.4): a named pipe `\\.\pipe\name` is written `\\\\.\pipe\name`, a UNC path `\\server\share\…` is written `\\\\server\share\…`,
+  ordinary Windows paths are written as-is, values with whitespace or `#` are double-quoted, and quotes get a `\` in front. 〔History〕Values used to be quoted only for whitespace or `#`, with backslashes as-is: ssh read `\\.\pipe\x` as `\.\pipe\x`
+  and could not use that agent. A value containing a line break (one ssh_config line cannot hold it, and forcing it in would turn the next line into another setting) is not written; it becomes `# <keyword>  (VelaShell: the value contains a line break; ssh_config cannot hold it)`.
 - **What is written**: `HostName` / `Port` / `User` / `IdentityFile` / `CertificateFile` / `ProxyJump` / `Compression` / `IdentityAgent` (agent authentication: the endpoint when one is set, the literal `SSH_AUTH_SOCK` for the system default, so it imports back as agent authentication; since 2026-10-31 — before, the system default wrote nothing and came back as password authentication) /
   `ForwardAgent` (with an endpoint set, the endpoint itself rather than yes) / `ForwardX11` and `ForwardX11Trusted` (with X11 on, the trust level is always written, since the defaults differ) /
   `ObscureKeystrokeTiming yes` (**only when on**; off is not written as `no`: the keyword arrived in OpenSSH 9.5 and older versions reject a whole config with an unknown keyword, at the cost that a newer ssh then applies its own default, on) /

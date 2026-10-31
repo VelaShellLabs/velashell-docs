@@ -682,6 +682,10 @@ Console.WriteLine(cfg.IdentityFiles);  // 可能有多条
 **库只解析，不替你决定。** 解出来的结果交给调用方 —— 库自作主张去读
 `~/.ssh/config` 会让「为什么连的不是我写的那台机器」变成一个很难查的问题。
 
+值的分词照 OpenSSH 的读法（引号、反斜杠转义、注释，见 [`spec/09-dialing.md`](spec/09-dialing.md) §7.4）：`cfg.First("IdentityAgent")` 交出的
+就是 `ssh -G` 读出来的那个值。反过来要把一个值写进配置（导出、生成配置文件），用 `SshConfigFile.TryFormatArgument` ——
+本库与 `ssh` 读回来都是原值（`\\.\pipe\x` 写成 `\\\\.\pipe\x`）；值里有换行写不出来时它交回 `false`。
+
 决定用它的话，一步变成可以直接拿去连的参数：
 
 ```csharp

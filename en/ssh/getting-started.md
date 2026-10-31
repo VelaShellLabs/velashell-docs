@@ -687,6 +687,10 @@ Console.WriteLine(cfg.IdentityFiles);  // there may be several
 **The library only parses; it does not decide for you.** The parsed result is handed to the caller — if the library took it upon itself to read
 `~/.ssh/config`, "why didn't it connect to the machine I wrote" would become a very hard problem to track down.
 
+Values are tokenized the way OpenSSH reads them (quotes, backslash escapes, comments; see [`spec/09-dialing.md`](spec/09-dialing.md) §7.4): `cfg.First("IdentityAgent")` returns
+the same value `ssh -G` reads. The other way round, to write a value into a config (an export, a generated config file), use `SshConfigFile.TryFormatArgument` ——
+both this library and `ssh` read back the original value (`\\.\pipe\x` is written `\\\\.\pipe\x`); it returns `false` for a value with a line break, which cannot be written.
+
 If you decide to use it, it turns into ready-to-connect parameters in one step:
 
 ```csharp

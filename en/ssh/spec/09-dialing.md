@@ -372,7 +372,7 @@ When treating an SSH channel as a bidirectional byte stream:
 
 ## 7. From `ssh_config` to connection parameters
 
-The result of parsing `ssh_config` must be able to **turn directly into** connection parameters; otherwise parsing is just decoration. Mapping rules:
+The result of parsing `ssh_config` must be able to **turn directly into** connection parameters; otherwise parsing is just decoration. The "values" in the table below are after tokenizing per §7.4, with quotes and escapes removed; mapping rules:
 
 | `ssh_config` item | Connection parameter |
 | --- | --- |
@@ -385,7 +385,7 @@ The result of parsing `ssh_config` must be able to **turn directly into** connec
 | `UserKnownHostsFile` | The host key policy uses that file instead (only the first path if several are given; `~` and `%d` `%u` `%h` `%r` `%%` are expanded for this host and user — 〔History〕`%h` / `%r` used to become empty strings, putting every host into one file); `none` / `/dev/null` → **no** `known_hosts` is read or written (`KnownHostsPolicy.WithoutFile`: every host counts as unseen, and accepting it records nothing). When `StrictHostKeyChecking` is `ask` / absent and the caller supplied a policy, this item has no effect (see the next row) |
 | `StrictHostKeyChecking` | `yes` → reject unseen hosts; `accept-new` / `no` / `off` → accept and record (a **changed** key is still rejected); `ask` / absent → if the caller supplied `SshConfigConnectOptions.HostKeyPolicy`, use the caller's, even if the configuration sets `UserKnownHostsFile`; otherwise, with `UserKnownHostsFile` set, use that file and ask `AskUnknownHost` about unseen hosts (reject if no ask callback is given), and with neither set, use the default `known_hosts` and reject unseen hosts. `AskUnknownHost` is handed to the policy only when it asks: under `yes` / `accept-new` it is not called (`spec/03` §5) |
 | `ProxyJump` | Comma-separated jump chain; each jump host is **resolved against the same configuration** (with its own `User`, `Port`, `IdentityFile`); `none` means not used. The first hop is reached through its own `ProxyJump` / `ProxyCommand`; **every later hop is reached through the previous one, and its own `ProxyJump` / `ProxyCommand` is not resolved** (〔History〕it used to be resolved and then discarded: a `ProxyCommand` was approved for nothing, and a cycle in a chain that was never used was still reported); 〔Decision〕a `ProxyJump` consisting only of the host itself (inherited from `Host *.corp` when the bastion forgot `ProxyJump none`) is treated as a direct connection rather than reported as a cycle. Which of the caller's credentials a jump host gets: see below |
-| `ProxyCommand` | Proxy command dialer, **executed only with the caller's approval** (see below); `none` means not used |
+| `ProxyCommand` | Proxy command dialer, **executed only with the caller's approval** (see below); `none` means not used. The value is the raw rest of the line, not tokenized (§7.4) |
 | `CertificateFile` | Certificates, paired with the loaded private keys by the public key inside the certificate; the `key-cert.pub` next to each key is paired automatically too (ssh's default behavior). **The certificate goes before its key**: the certificate is presented first, falling back to the bare key when the server does not trust the CA. A certificate whose key is not among the loaded `IdentityFile`s, or that cannot be read, goes to `IdentityFileSkipped` |
 | `ConnectionAttempts` | How many times to try dialing on failure (one second apart, at most 100): the dialer is wrapped, retrying only the dial itself (TCP, DNS, proxy, jump-host layer), with the jump chain and proxy command redone together; failures after the connection is established are not retried |
 | `SetEnv` / `SendEnv` / `RemoteCommand` | Session parameters (`SshHostConfig.ApplyToShell`): `SetEnv name=value` (several per line and across lines, first one wins) plus the local environment variables selected by `SendEnv` wildcards (`-pattern` is not handled); `RemoteCommand` becomes the command run in the pseudo-terminal (`none` does not count). Values set explicitly in the template are left alone |
@@ -435,11 +435,12 @@ on Windows that meant reading and writing a file named `none` in the current dir
 
 ### 7.1 Evaluating `Include` and `Match`
 
-〔Decision〕**A `#` starts a comment only at the start of a line, or when preceded by whitespace and outside quotes**: a `#` inside a word is part of the value (`IdentityFile ~/.ssh/id_#work`),
-while a trailing comment such as `Port 22 # note` is still removed. 〔History〕Early versions treated a `#` anywhere on the line as a comment, cutting `id_#work` down to `id_`.
+〔Decision〕**A `#` starts a comment only when it begins a word and is outside quotes** (the full tokenizing rules are in §7.4): a `#` inside a word is part of the value (`IdentityFile ~/.ssh/id_#work`),
+while a trailing comment such as `Port 22 # note` is still removed. 〔History〕Early versions treated a `#` anywhere on the line as a comment, cutting `id_#work` down to `id_`; the rule then became "preceded by whitespace",
+but it did not check whether that whitespace was escaped (`a\ #b`) and did not recognize single quotes; corrected on 2026-10-31 together with §7.4.
 
 `Include` is expanded only in `SshConfigFile.LoadAsync` (`Parse` is pure text parsing and does not touch the file system).
-One line may list several paths (whitespace inside quotes does not separate them: write a path with spaces as `"~/my dir/x"`; 〔History〕the quotes used to be removed before splitting on whitespace, cutting it in two); `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
+One line may list several paths (tokenized per §7.4, so whitespace inside quotes does not separate them: write a path with spaces as `"~/my dir/x"`; 〔History〕the quotes used to be removed before splitting on whitespace, cutting it in two); `~` is expanded; relative paths are resolved against the directory of **the file containing the `Include`**; the last component may contain `*` / `?` wildcards,
 and wildcard matches are sorted ordinally — directory enumeration order differs between file systems, and under "first value wins" an undetermined order means an undetermined result.
 
 - 〔Decision〕**Expanded in place, as a conditional include.** The included file's contents land at the position of the `Include` line:
@@ -506,7 +507,8 @@ a misspelled `-chacha20-poly1305` (missing `@openssh.com`) removes nothing while
 ### 7.3 Forwarding keys (`StartForwardsAsync`)
 
 `SshHostConfig.GetForwards()` parses the three keys into structured endpoints (`SshConfigForward`); unlike other keys these three **accumulate**: every line is a forward.
-With `ClearAllForwardings yes` the list is empty.
+With `ClearAllForwardings yes` the list is empty. The two sides are tokenized per §7.4 (a socket path with spaces is written in quotes and is one side).
+Given `onInvalid`, a malformed line is handed to it and the rest are still parsed (what an import wants: one bad line does not spoil the others); without it, the first malformed line throws.
 
 | Form | Meaning |
 | --- | --- |
@@ -529,3 +531,91 @@ Mistakes (a missing side, a port out of range, a target without a port, a socket
   scripts and automation need exactly "don't run if a required forward is not up". Without it the failure goes to `onFailure` and the rest start as usual.
 - Each side of a remote forward may be a port or a socket (`07-forwarding.md` §4.4): a listen side containing `/` goes into `RemotePortForwardOptions.ListenSocketPath`, a target side containing `/` uses `StartToUnixSocketAsync`.
   Only a target-less `RemoteForward /path` that listens on a socket (remote dynamic forwarding has just the port form) is handled as "this one failed to start" (`Unsupported`). 〔History〕"The server listening on a socket with a local TCP target" and the reverse used to be handled that way too — the library had no entry point for them then.
+
+### 7.4 Tokenizing: quotes, backslashes and comments
+
+> Basis: `ssh_config(5)` says only two things about the syntax —— "Values may optionally be enclosed in double quotes (") in order to represent arguments containing spaces."
+> and "‘#’ outside of a quoted string may be used to add a comment to the end of a line."; it mentions neither single quotes nor backslashes.
+> The rules below come from **black-box observation** of Win32-OpenSSH (2026-10-31, `ssh -V`: `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`):
+> each form was written into a temporary config of its own (`Host t` plus one setting line), and the value printed by `ssh -G -F <temporary config> t`, or the error it reported, was recorded.
+> The key observed was mainly `HostKeyAlias` (takes one argument; `ssh -G` prints it lowercased, so the observed forms are all lowercase); paths were also checked with `IdentityFile`, `IdentityAgent`, `UserKnownHostsFile` and `Include` (these print as-is), with the same results.
+
+〔Decision〕**Tokenize the way OpenSSH reads it** (decided by the maintainer on 2026-10-31). The same config read by `ssh` and by this library must yield the same values ——
+Windows named pipes and UNC paths are exactly where this went wrong (〔History〕at the end of this section).
+
+**How a line is split**
+
+1. Trailing whitespace (space, tab, carriage return) is removed first: a CRLF file reads the same as an LF one. A trailing `\` does **not** continue the line; the next line is a new line as usual.
+2. A line that is empty, or starts with `#`, after removing leading whitespace does not count.
+3. The keyword runs up to the first whitespace or `=`; then whitespace is skipped, **at most one** `=`, whitespace again, and the rest is the value.
+   `HostKeyAlias=a` and `HostKeyAlias = a` both read as `a`; `HostKeyAlias==a` reads as `=a`; `HostKeyAlias = = a` is two arguments (`=` and `a`).
+4. The value is split into words: spaces and tabs outside quotes and not escaped separate words. Two words for a single-argument key make OpenSSH report `extra arguments at end of line`.
+5. **Quotes**: both `"…"` and `'…'` are recognized, with the same rules (unlike a shell: backslashes still escape inside single quotes, see the table). The quotes themselves are removed;
+   whitespace and `#` inside quotes are ordinary characters; one kind of quote inside the other is ordinary (`'a"b'` reads as `a"b`);
+   quotes may appear in the middle of a word and join with what is around them (`a"b c"d` reads as `ab cd`, `"a"'b'` reads as `ab`).
+6. **Comments**: a `#` outside quotes that falls at **the start of a word** begins a comment to the end of the line (`a #b` reads as `a`). One inside a word (`a#b`, `"a"#b` read as `a#b`),
+   inside quotes, after a `\` (`\#a` reads as `\#a`), or after an escaped space (`a\ #b` reads as `a #b`) is part of the value.
+7. **Unbalanced quotes** (including `"C:\dir\"` —— the final `\"` is an escaped quote, so the quote is never closed): OpenSSH reports `invalid quotes`
+   and **does not read the config at all** (`terminating, 1 bad configuration options`).
+8. **Empty arguments** (`""`, `''`): OpenSSH reports `Missing argument`.
+
+**Backslashes**: only the first three rows of the table (plus the fourth outside quotes) are escapes; every other `\` is kept as-is (`⇥` in the table is a tab).
+
+| Written | Outside quotes | Inside double quotes | Inside single quotes |
+| --- | --- | --- | --- |
+| `\\` | `\` | `\` | `\` |
+| `\"` | `"` | `"` | `"` |
+| `\'` | `'` | `'` | `'` |
+| `\` followed by a space | one space, not a separator (`a\ b` is one word `a b`) | `\ ` as-is | `\ ` as-is |
+| `\` followed by a tab | the `\` stays and the tab still separates (`a\⇥b` is two words, `a\` and `b`) | `\⇥` as-is | `\⇥` as-is |
+| `\` followed by anything else (`\x`, `\t`, `\n`, `\#`, `\=`, `\,`, `\%`, `\$`, `\中`) | as-is, the `\` stays (`\t` is not a tab, `\n` is not a newline) | as-is | as-is |
+| `\` at the end of the value | the `\` stays (`a\` reads as `a\`) | unbalanced quotes (item 7) | unbalanced quotes |
+
+A run of backslashes pairs up from left to right: `\\\b` reads as `\\b` (`\\` becomes one `\`, `\b` stays), `\\\\b` also reads as `\\b`, and `'\\\\'` reads as `\\`.
+
+**Windows paths therefore read like this** (measured with `ssh -G` of the same version):
+
+| Written in the config | Reads as |
+| --- | --- |
+| `IdentityFile C:\Users\me\.ssh\id_ed25519` | unchanged —— `\U`, `\m`, `\.`, `\i` are not escapes |
+| `IdentityFile "C:\Program Files\k"`, `IdentityFile C:\Program\ Files\k` | `C:\Program Files\k` |
+| `IdentityFile \\server\share\k` | `\server\share\k` —— the leading `\\` became one `\` |
+| `IdentityFile \\\\server\share\k`, `"\\\\server\share\k"`, `\\\\server\\share\\k` | `\\server\share\k` |
+| `IdentityAgent \\.\pipe\openssh-ssh-agent` | `\.\pipe\openssh-ssh-agent` |
+| `IdentityAgent \\\\.\pipe\openssh-ssh-agent` | `\\.\pipe\openssh-ssh-agent` |
+| `IdentityFile C:\dir\` | `C:\dir\` |
+| `IdentityFile "C:\dir\"` | unbalanced quotes; the whole config is rejected |
+| `IdentityFile "C:\dir\\"` | `C:\dir\` |
+
+In other words, ordinary hand-written Windows paths (a single backslash followed by a letter, digit or `.`) read unchanged in `ssh`;
+**UNC paths and named pipes written with a single leading `\\` are read wrongly by `ssh`** —— they have to be written `\\\\server\share`, `\\\\.\pipe\name` (doubled like this with or without quotes).
+
+**Exception: the raw rest of the line**. The value of `ProxyCommand`, `RemoteCommand`, `LocalCommand` and `KnownHostsCommand` is the raw text after the keyword and separator, to the end of the line:
+quotes and backslashes stay as they are, and `#` is not a comment either (`ProxyCommand nc "a b" \\x %h #c` reads as `nc "a b" \\x %h #c`, left to the shell to interpret).
+`ssh_config(5)` says "The command string extends to the end of the line" for the first three; for `KnownHostsCommand` it was observed.
+Also, 9.5 does not recognize quotes or backslashes in `ProxyJump` and takes only the first word (`ProxyJump "a b"` reads as `"a`, `ProxyJump a\ b` as `a\`).
+
+**What this library does**
+
+- 〔Decision〕**Parsing follows the rules above**: the patterns of `Host`, the conditions and arguments of `Match`, the paths of `Include` and the value of every setting all go through the same tokenizer.
+  `SshHostConfig.First` / `All` return the tokenized value with quotes and escapes removed (several arguments joined by one space; the four command keys above are raw text);
+  `SshConfigBlock.Settings` stores the raw text after the keyword (comment removed). Places that use several arguments —— `UserKnownHostsFile`, `GlobalKnownHostsFile`,
+  `SetEnv` (`SetEnv A="x y"` sets `A=x y`), `SendEnv`, `PermitRemoteOpen` and the three forwarding keys (§7.3) —— take them word by word, so a quoted path with spaces is one word.
+- 〔Decision〕**A line with unbalanced quotes does not count**, instead of the whole config being rejected as OpenSSH does: this library's parser has never let one bad line make the whole config unusable
+  (the same as when an `Include` cannot be read), but it does not guess at a half-read value either. If that line is a `Host` / `Match`, it opens a block that matches no host ——
+  skipping just that line would drop the settings below it into the previous block (often `Host *`), applying them to every host; if it is an `Include`, it is not expanded.
+- 〔Decision〕**`ProxyJump` uses the general tokenizer**, not 9.5's "first raw word": valid jump specs (`[user@]host[:port]`, comma separated) contain no quotes, backslashes or whitespace,
+  so the two readings differ only on values that are invalid anyway; it is not worth a rule of its own.
+- 〔Decision〕**Writing one argument** (`SshConfigFile.TryFormatArgument`, used by the host's ssh_config export): write it so that both this library and `ssh` read back the original value,
+  changing nothing that need not change ——
+  - **in a run of two or more backslashes, each is written twice** (`\\.\pipe\x` becomes `\\\\.\pipe\x`, `\\server\share\k` becomes `\\\\server\share\k`);
+    a single backslash immediately followed by `"` or `'`, or at the end of a value that gets quoted, is also written twice; **any other single backslash is written as-is** ——
+    `C:\Users\me\.ssh\id_ed25519` comes out unchanged, and older readers with different rules read it correctly too.
+  - `"` and `'` get a `\` in front.
+  - A value with a space, a tab or `#`, one starting with `=`, or an empty one is enclosed in double quotes as a whole (inside double quotes `\ ` stays as-is, so backslashes in a path with spaces need nothing extra).
+  - A value containing a line break (`\r`, `\n`) or NUL cannot be written —— one ssh_config line cannot hold it, and forcing it in would turn the next line into another setting —— so `false` is returned and the caller decides what to do.
+  - Values written by these rules (named pipes, UNC, ordinary Windows paths, paths with spaces and with a trailing backslash, values with quotes) were each read back with `ssh -G` of the version above and matched the original.
+
+〔History〕Before 2026-10-31 this library recognized only double quotes, removed them only when they enclosed the whole value, and recognized neither single quotes nor backslashes:
+`IdentityAgent \\.\pipe\x` read as `\\.\pipe\x` while `ssh` read `\.\pipe\x` —— the host exported named pipes as-is, `ssh` could not use them, and this library read them back "fine", so nothing looked wrong;
+`UserKnownHostsFile "C:\a b\kh"` had its quotes removed and was then split on the space, leaving only `C:\a`; the second pattern of `Host x "t"` kept its quotes; the `#` in `'a #b'` was taken for a comment.

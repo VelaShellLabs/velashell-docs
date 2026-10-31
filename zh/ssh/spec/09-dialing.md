@@ -370,7 +370,7 @@ sequenceDiagram
 
 ## 七 从 `ssh_config` 到连接参数
 
-`ssh_config` 的解析结果要能**直接变成**连接参数，否则解析只是摆设。映射规则：
+`ssh_config` 的解析结果要能**直接变成**连接参数，否则解析只是摆设。下表的「值」都是照 §7.4 分好词、去掉引号与转义之后的；映射规则：
 
 | `ssh_config` 项 | 连接参数 |
 | --- | --- |
@@ -383,7 +383,7 @@ sequenceDiagram
 | `UserKnownHostsFile` | 主机密钥策略改用该文件（写了多个路径时只用第一个；`~` 与 `%d` `%u` `%h` `%r` `%%` 照这台主机与用户展开，〔历史〕曾经 `%h` / `%r` 代入空串、所有主机挤进同一个文件）；`none` / `/dev/null` → **不读也不写**任何 `known_hosts`（`KnownHostsPolicy.WithoutFile`：每台主机都当成没见过，接受了也不记）。`StrictHostKeyChecking` 为 `ask` / 缺省且调用方给了策略时，这一项不起作用（见下一行） |
 | `StrictHostKeyChecking` | `yes` → 没见过就拒绝；`accept-new` / `no` / `off` → 接受并记下（密钥**变了**照样拒绝）；`ask` / 缺省 → 调用方给了 `SshConfigConnectOptions.HostKeyPolicy` 就用调用方的，即使配置里写了 `UserKnownHostsFile`；没给时，写了 `UserKnownHostsFile` 就按它、没见过的主机交给 `AskUnknownHost` 问（没给询问回调就拒绝），两项都没写就按默认 `known_hosts`、没见过就拒绝。`AskUnknownHost` 只在「问」时交给策略：`yes` / `accept-new` 下不调用它（`spec/03` §5） |
 | `ProxyJump` | 逗号分隔的跳板链；每个跳板**按同一份配置解析**（有自己的 `User`、`Port`、`IdentityFile`）；`none` 表示不用。第一跳照它自己的 `ProxyJump` / `ProxyCommand` 到达，**之后的每一跳经前一跳到达，它们自己的 `ProxyJump` / `ProxyCommand` 不解析**（〔历史〕曾经先解析一遍再丢掉：白批准一次 `ProxyCommand`，用不上的链里有环也报错）；〔决策〕`ProxyJump` 只有它自己一跳（`Host *.corp` 带出来、跳板忘了写 `ProxyJump none`）当成直连，不报「链有环」。跳板拿到哪些调用方凭据见下 |
-| `ProxyCommand` | 代理命令拨号器，**要调用方批准才执行**（见下）；`none` 表示不用 |
+| `ProxyCommand` | 代理命令拨号器，**要调用方批准才执行**（见下）；`none` 表示不用。值是到行尾的原文，不分词（§7.4） |
 | `CertificateFile` | 证书，与读出来的私钥按证书里的公钥配对；每把钥旁边的「钥-cert.pub」也自动配（ssh 的默认行为）。**证书排在那把钥前面**：先出示证书，服务端不认 CA 时再退到裸钥。证的钥不在读出来的 `IdentityFile` 里、或者读不出来的，报给 `IdentityFileSkipped` |
 | `ConnectionAttempts` | 拨号失败时一共试几次（每次隔一秒，上限 100）：拨号器包一层，只重试拨号本身（TCP、DNS、代理、跳板这一层），跳板链与代理命令一起重来；拨通之后的失败不重试 |
 | `SetEnv` / `SendEnv` / `RemoteCommand` | 会话参数（`SshHostConfig.ApplyToShell`）：`SetEnv 名=值`（多个、多行，先出现的赢）加上 `SendEnv` 通配选中的本机环境变量（`-模式` 不处理）；`RemoteCommand` 成了伪终端里跑的命令（`none` 不算）。模板里显式给了的不动 |
@@ -434,11 +434,12 @@ Windows 上会去读写当前目录里一个叫 `none` 的文件。
 
 ### 7.1 `Include` 与 `Match` 的求值
 
-〔决策〕**`#` 在行首、或者前面是空白且不在引号里，才开始一段注释**：词中间的 `#` 是值的一部分（`IdentityFile ~/.ssh/id_#work`），
-`Port 22 # 说明` 这样的行尾注释照旧去掉。〔历史〕早期一行里任何位置的 `#` 都当注释，`id_#work` 被截成 `id_`。
+〔决策〕**`#` 落在一个词的开头、且不在引号里，才开始一段注释**（分词的完整规则见 §7.4）：词中间的 `#` 是值的一部分（`IdentityFile ~/.ssh/id_#work`），
+`Port 22 # 说明` 这样的行尾注释照旧去掉。〔历史〕早期一行里任何位置的 `#` 都当注释，`id_#work` 被截成 `id_`；后来改成「前面是空白」，
+却不看那个空白是不是转义的（`a\ #b`）、也不认单引号，2026-10-31 随 §7.4 改准。
 
 `Include` 只在 `SshConfigFile.LoadAsync` 里展开（`Parse` 是纯文本解析，不碰文件系统）。
-一行可以写多个路径（引号里的空格不算分隔：带空格的路径写成 `"~/my dir/x"`；〔历史〕曾经先去掉引号再按空格切，被切成两个）；`~` 展开；相对路径按**包含它的那个文件**所在的目录解析；最后一段可以带 `*` / `?` 通配，
+一行可以写多个路径（照 §7.4 分词，引号里的空格不算分隔：带空格的路径写成 `"~/my dir/x"`；〔历史〕曾经先去掉引号再按空格切，被切成两个）；`~` 展开；相对路径按**包含它的那个文件**所在的目录解析；最后一段可以带 `*` / `?` 通配，
 通配的结果按序数排序 —— 目录枚举的顺序因文件系统而异，而「先出现的值赢」之下顺序不定就是结果不定。
 
 - 〔决策〕**就地展开，并且是带条件的包含。**被包含文件的内容排在 `Include` 那一行的位置上：
@@ -505,7 +506,8 @@ CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不�
 ### 7.3 转发项（`StartForwardsAsync`）
 
 `SshHostConfig.GetForwards()` 把三个键解析成结构化的两头（`SshConfigForward`）；与别的键不同，这三个键**累加**：每一行都是一条转发。
-`ClearAllForwardings yes` 时为空。
+`ClearAllForwardings yes` 时为空。两头照 §7.4 分词（带空格的套接字路径加引号写，是一头）。
+给了 `onInvalid` 时，写错的那一行交给它、其余照解（导入要的就是「一行写错不连累别的行」）；没给时写错一条就抛。
 
 | 写法 | 含义 |
 | --- | --- |
@@ -528,3 +530,91 @@ CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不�
   脚本与自动化场景要的就是「必需的转发起不来就别跑」。没开时这一条报给 `onFailure`，其余照起。
 - 远程转发两头各自可以是端口或套接字（`07-forwarding.md` §4.4）：含 `/` 的监听一头落到 `RemotePortForwardOptions.ListenSocketPath`，含 `/` 的目标一头走 `StartToUnixSocketAsync`。
   只有不给目标、却在套接字上监听的 `RemoteForward /路径`（远程动态转发只有端口一种写法）照「这一条没起来」处理（`Unsupported`）。〔历史〕曾经「服务端在套接字上监听、本机目标是 TCP」与反过来那种也照「这一条没起来」处理 —— 库当时没有这两种的入口。
+
+### 7.4 分词：引号、反斜杠与注释
+
+> 依据：`ssh_config(5)` 对写法只说了两句 ——「Values may optionally be enclosed in double quotes (") in order to represent arguments containing spaces.」
+> 与「‘#’ outside of a quoted string may be used to add a comment to the end of a line.」，单引号与反斜杠都没有提。
+> 下面的规则来自对 Win32-OpenSSH 的**黑盒观察**（2026-10-31，`ssh -V`：`OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`）：
+> 每个写法单独写一份临时配置（`Host t` 加一行设置），看 `ssh -G -F <临时配置> t` 打印出来的值、或者它报的错。
+> 观察用的键主要是 `HostKeyAlias`（只收一个参数；`ssh -G` 把它转成小写再打印，所以观察用的写法都是小写）；路径另用 `IdentityFile`、`IdentityAgent`、`UserKnownHostsFile`、`Include` 核对过（这几个原样打印），读法相同。
+
+〔决策〕**分词照 OpenSSH 的读法**（维护者 2026-10-31 定）。同一份配置给 `ssh` 和本库读，读出来的值要一样 ——
+Windows 上的命名管道与 UNC 路径正是在这里出过错（〔历史〕见本节末）。
+
+**一行怎么切**
+
+1. 先去掉行尾的空白（空格、制表符、回车）：CRLF 的文件与 LF 的读法相同。行尾的 `\` **不续行**，下一行照常是新的一行。
+2. 去掉行首空白之后是空行、或者以 `#` 开头的，整行不算。
+3. 关键字到第一个空白或 `=` 为止；之后跳过空白、**至多一个** `=`、再跳过空白，剩下的是值。
+   `HostKeyAlias=a`、`HostKeyAlias = a` 都读成 `a`；`HostKeyAlias==a` 读成 `=a`；`HostKeyAlias = = a` 是两个参数（`=` 与 `a`）。
+4. 值按词切：不在引号里、没被转义的空格与制表符分隔词。只收一个参数的键写了两个词，OpenSSH 报 `extra arguments at end of line`。
+5. **引号**：`"…"` 与 `'…'` 都认，两种的规则相同（与 shell 不同：单引号里反斜杠照样转义，见下表）。引号本身去掉；
+   引号里的空白与 `#` 是普通字符；一种引号里的另一种引号是普通字符（`'a"b'` 读成 `a"b`）；
+   引号可以出现在词中间，与前后连成一个词（`a"b c"d` 读成 `ab cd`，`"a"'b'` 读成 `ab`）。
+6. **注释**：不在引号里的 `#` 落在**一个词的开头**时，从它到行尾是注释（`a #b` 读成 `a`）。词中间的（`a#b`、`"a"#b` 读成 `a#b`）、
+   引号里的、跟在 `\` 后面的（`\#a` 读成 `\#a`）、跟在转义空格后面的（`a\ #b` 读成 `a #b`）都是值的一部分。
+7. **引号没配对**（包括 `"C:\dir\"` 这种 —— 末尾的 `\"` 是一个转义的引号，引号于是没关上）：OpenSSH 报 `invalid quotes`，
+   **整份配置不读**（`terminating, 1 bad configuration options`）。
+8. **空参数**（`""`、`''`）：OpenSSH 报 `Missing argument`。
+
+**反斜杠**：只有下表前三行（引号外再加第四行）是转义，其余的 `\` 原样留着（表里的 `⇥` 是制表符）。
+
+| 写法 | 引号外 | 双引号里 | 单引号里 |
+| --- | --- | --- | --- |
+| `\\` | `\` | `\` | `\` |
+| `\"` | `"` | `"` | `"` |
+| `\'` | `'` | `'` | `'` |
+| `\` 后跟空格 | 一个空格，不分词（`a\ b` 是一个词 `a b`） | `\ ` 原样 | `\ ` 原样 |
+| `\` 后跟制表符 | `\` 留着，制表符照样分词（`a\⇥b` 是 `a\` 与 `b` 两个词） | `\⇥` 原样 | `\⇥` 原样 |
+| `\` 后跟别的字符（`\x`、`\t`、`\n`、`\#`、`\=`、`\,`、`\%`、`\$`、`\中`） | 原样，`\` 留着（`\t` 不是制表符，`\n` 不是换行） | 原样 | 原样 |
+| 值末尾的 `\` | `\` 留着（`a\` 读成 `a\`） | 引号没配对（第 7 条） | 引号没配对 |
+
+几个连着的反斜杠从左往右两两成对：`\\\b` 读成 `\\b`（`\\` 成一个 `\`，`\b` 原样），`\\\\b` 也读成 `\\b`，`'\\\\'` 读成 `\\`。
+
+**Windows 路径因此这样读**（同一版本的 `ssh -G` 实测）：
+
+| 配置里写的 | 读成 |
+| --- | --- |
+| `IdentityFile C:\Users\me\.ssh\id_ed25519` | 原样 —— `\U`、`\m`、`\.`、`\i` 都不是转义 |
+| `IdentityFile "C:\Program Files\k"`、`IdentityFile C:\Program\ Files\k` | `C:\Program Files\k` |
+| `IdentityFile \\server\share\k` | `\server\share\k` —— 开头的 `\\` 成了一个 `\` |
+| `IdentityFile \\\\server\share\k`、`"\\\\server\share\k"`、`\\\\server\\share\\k` | `\\server\share\k` |
+| `IdentityAgent \\.\pipe\openssh-ssh-agent` | `\.\pipe\openssh-ssh-agent` |
+| `IdentityAgent \\\\.\pipe\openssh-ssh-agent` | `\\.\pipe\openssh-ssh-agent` |
+| `IdentityFile C:\dir\` | `C:\dir\` |
+| `IdentityFile "C:\dir\"` | 引号没配对，整份配置报错 |
+| `IdentityFile "C:\dir\\"` | `C:\dir\` |
+
+也就是说，用户手写的普通 Windows 路径（单个反斜杠、后面跟的是字母、数字或 `.`）在 `ssh` 里照原样读；
+**写成单个 `\\` 开头的 UNC 路径与命名管道，`ssh` 读坏了** —— 要写成 `\\\\server\share`、`\\\\.\pipe\名字`（加不加引号都要这样双写）。
+
+**例外：到行尾的原文**。`ProxyCommand`、`RemoteCommand`、`LocalCommand`、`KnownHostsCommand` 的值是关键字与分隔之后、到行尾的原文：
+引号、反斜杠原样留着，`#` 也不当注释（`ProxyCommand nc "a b" \\x %h #c` 读成 `nc "a b" \\x %h #c`，由 shell 去解释）。
+`ssh_config(5)` 对前三个写着「The command string extends to the end of the line」，`KnownHostsCommand` 是观察到的。
+另外，9.5 对 `ProxyJump` 不认引号与反斜杠，只取第一个词（`ProxyJump "a b"` 读成 `"a`，`ProxyJump a\ b` 读成 `a\`）。
+
+**本库怎么做**
+
+- 〔决策〕**解析照上面的规则**：`Host` 的模式、`Match` 的条件与参数、`Include` 的路径、每个设置的值都经同一套分词。
+  `SshHostConfig.First` / `All` 交出分好词、去掉引号与转义的值（几个参数之间以一个空格连接；上面四个命令键是原文）；
+  `SshConfigBlock.Settings` 存的是关键字之后的原文（注释已去掉）。要用到多个参数的地方 —— `UserKnownHostsFile`、`GlobalKnownHostsFile`、
+  `SetEnv`（`SetEnv A="x y"` 设的是 `A=x y`）、`SendEnv`、`PermitRemoteOpen`、三种转发（§7.3）—— 按词取，带空格的路径加了引号就是一个词。
+- 〔决策〕**引号没配对的那一行不算**，不像 OpenSSH 那样整份配置不读：本库的解析向来不因为一行写错就让整份配置不可用
+  （`Include` 读不到时也是这样），但也不去猜半截的值。那一行若是 `Host` / `Match`，开一个哪台主机都配不上的块 ——
+  只跳过这一行的话，它下面的设置会落进上一个块（常常是 `Host *`），对所有主机生效；若是 `Include`，不展开。
+- 〔决策〕**`ProxyJump` 照通用规则分词**，不照 9.5 只取第一个原文词：合法的跳板写法（`[user@]host[:port]`，逗号分隔）里没有引号、反斜杠与空白，
+  两种读法只在本来就无效的值上不同，不值得为它另开一条规则。
+- 〔决策〕**写出一个参数**（`SshConfigFile.TryFormatArgument`，宿主导出 ssh_config 用它）：写成本库与 `ssh` 读回都是原值的样子，
+  能不改的地方不改 ——
+  - **两个及以上连着的反斜杠，每个写成两个**（`\\.\pipe\x` 写成 `\\\\.\pipe\x`，`\\server\share\k` 写成 `\\\\server\share\k`）；
+    单个反斜杠后面紧跟 `"` 或 `'`、或者落在要加引号的值的末尾时，同样写成两个；**别的单个反斜杠原样** ——
+    `C:\Users\me\.ssh\id_ed25519` 写出来不变，读法不同的老版本也读得对。
+  - `"` 与 `'` 前面加 `\`。
+  - 有空格、制表符或 `#`、以 `=` 开头、或者是空串时，整个值用双引号括起来（双引号里 `\ ` 原样，带空格的路径里的反斜杠不必多写）。
+  - 值里有换行（`\r`、`\n`）或 NUL 时写不出来 —— ssh_config 的一行装不下，硬写进去下一行就成了另一条设置 —— 交回 `false`，由调用方决定怎么办。
+  - 照这套规则写出的值（命名管道、UNC、普通 Windows 路径、带空格与末尾反斜杠的路径、带引号的值）都用上面那个版本的 `ssh -G` 逐个读回核对过，与原值一致。
+
+〔历史〕2026-10-31 之前，本库只认双引号、而且只在整个值被双引号括住时才去掉引号，不认单引号与反斜杠：
+`IdentityAgent \\.\pipe\x` 读成 `\\.\pipe\x`，`ssh` 却读成 `\.\pipe\x` —— 宿主把命名管道原样导出，`ssh` 用不了，本库读回来又「没问题」，看不出错；
+`UserKnownHostsFile "C:\a b\kh"` 去掉引号之后又按空格切，只剩 `C:\a`；`Host x "t"` 的第二个模式带着引号；`'a #b'` 里的 `#` 被当成注释。
