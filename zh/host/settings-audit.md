@@ -550,16 +550,16 @@ TCP 端口在新的「安全」一节(原先都排在「键盘」下面)。
 - **名字=值 / 名字: 值**:名字里的关键词要成词 —— 紧跟在后面的若是同样大小写的字母就不算(`max_tokens`、`tokenizers`、`passwordless`、`SECRETARY` 不遮),驼峰的下一个词、数字、分隔符、名字结尾都算边界;
   复数 `s` 除 token 外照认(`credentials.json`、`client_secrets.json` 仍遮)。`用户@主机` 里的主机名不当成键;冒号后无空白且值以 `~` 或 `/` 起头的不算(`host:~#` 提示符、`host:/path`)。
   新增几个不带口令字样的键:以 `.key` 结尾的(`tls.key`)、含 `key-data` 的(kubeconfig `client-key-data`)、`.dockerconfigjson` / `.dockercfg`、Docker `config.json` 的 `"auth"`(只认带引号的名字与字符串值)。
-  不加引号的值:`名字=值` 照旧到空白为止;`名字: 值`(冒号后跟空白,YAML、HTTP 头、`kubectl describe`)遮到行尾,停在同一行下一个键(标识符紧跟 `=` 或「: 」)或 `#` 注释之前,紧挨的逗号、分号留给下一个键。
+  不加引号的值:`名字=值` 照旧到空白为止;`名字: 值`(冒号后跟空白,YAML、HTTP 头、`kubectl describe`)遮到行尾,停在同一行下一个键(标识符紧跟 `=` 或「: 」)或 `#` 注释之前,紧挨的逗号、分号留给下一个键。INI / conf 的 `名字 = 值`(2026-10-31 起)——名字在行首(缩进,或 `grep -n` / `grep -r` / `cat -n` 加的文件名与行号之后)、等号两边都有空白 —— 同样遮到行尾、同一个停止判据;不在行首的(命令行 `[ $password = $x ]`、`grep password = …`、SQL 的 `WHERE password = $1 AND …`、PowerShell 的 `$Password = Read-Host …`)照旧只遮第一个词,上下文截断过或在行中间重新起时看不见行首,也按不在行首算。仍漏的:口令本身含「词: 词」(`password: correct horse: battery`)会停在 `horse:` 前 —— 与「停在同一行下一个键」是同一个判据(`password: abc user: bob` 要留下 `user: bob`),只靠文本分不开,改了就会吞掉真正的下一个键,待维护者定。
   转义过的 JSON 串(`\"…\"`)被外层裸引号截断时遮到引号之前,空值 `\"\"` 不再遮出一个反斜杠。
 - **其余**:`Basic` 只认长度是 4 的倍数、解得开、解出来带冒号的 base64(`Basic configuration` 不遮);`Bearer` 不认纯字母又不足 20 个字符的英文单词(`Bearer authentication` 不遮)。
-  前缀令牌加 `github_pat_`。`.netrc` 只认小写:一行写完的 `machine … login … password 口令`,以及分行写时行首单独的 `password 口令` 行。
+  前缀令牌加 `github_pat_`;2026-10-25 第二轮又加 GitLab `glpat-`(可路由的新格式连同 `.` 后的 9 位尾巴)、Stripe `sk_live_` / `rk_live_`(可公开的 `pk_live_` 不认)、Google `AIza…`(定长)、npm `npm_…`(定长,`npm_config_…` 环境变量不中)、PyPI `pypi-AgE…`(`pypi-attestations` 一类包名不中),前缀之后的长度与字符集各自卡住。`.netrc` 只认小写:一行写完的 `machine … login … password 口令`,以及分行写时行首单独的 `password 口令` 行(那个词恰好是一个 `=` 的不算 —— 那是 INI 里空着的 `password = `,2026-10-31 起)。
 - **私钥块**:PEM 与 OpenPGP(`PGP PRIVATE KEY BLOCK`)。多行块里只把 base64 正文行换成 `***`(`cat -n`、`nl`、`grep -n` / `grep -A` 加的行号与文件名前缀、颜色序列、行尾照放);
   空行与 `Proc-Type` / `DEK-Info` / `Version` / `Comment` / `Hash` / `Charset` / `MessageID` 头部行照平常规则过、私钥块继续;来了一行私钥块里不会有的内容(`echo` 了一行 BEGIN、截断的输出、提示符)就当私钥块已结束 ——
   此前一进私钥块之后整行遮掉、控制序列一并抹掉,`echo` 一行 BEGIN 就能让后面的录像失明。
-- **扣着等的**:「最后不完整的一行只在正写到一个值的中间(或在私钥块里)时扣下」之外,`名字: 值` 的值与 netrc 口令行要等到行尾才知道结束,行没完时扣着;
+- **扣着等的**:「最后不完整的一行只在正写到一个值的中间(或在私钥块里)时扣下」之外,`名字: 值`(与行首的 `名字 = 值`)的值与 netrc 口令行要等到行尾才知道结束,行没完时扣着;
   私钥块里没写完的行只在还可能是正文 / 头部 / END 行时扣,提示符里一出现 `@ ~ $ # > %` 之类就当场放出。
-- 成词判断之后仍会误遮的:`token_type: Bearer`、`token_endpoint: https://…`、`secretName: tls-cert`、`token_count: 12`。
+- 非机密后缀(2026-10-25 第二轮):token 与 secret 后面紧跟着 type、endpoint、name、count、limit、url / uri、expires / expiry / expiration、ttl(分隔符之后或驼峰的下一个词,可带复数 `s`,要成词)的名字说的是令牌的属性,不算机密名 —— `token_type: Bearer`、`token_endpoint: https://…`、`secretName: tls-cert`、`token_count: 12`、`token_uri` 原样;`id`、`key`、`value` 一类故意不收(`secret_id`、`secret_key` 照遮),password / credential / api key 后面跟什么都照遮。
 
 ### 2026-10-24 第十五批(标签栏位置恢复展示)
 
