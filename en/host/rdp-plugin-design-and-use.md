@@ -14,11 +14,11 @@ The protocol stack lives under the plugin's `Managed/` directory and implements,
 - **PDUs** — client info, licensing, capability exchange, connection finalization.
 - **Graphics** — interleaved-RLE decode and MPPC bulk decompression, a BGRA framebuffer; fragmented fast-path updates are reassembled.
 - **Input** — fast-path keyboard/mouse/Unicode.
-- **Channels** — clipboard (cliprdr) and shared folders (rdpdr) over chunked static virtual channels.
+- **Channels** — clipboard (cliprdr) and shared folders (rdpdr) over chunked static virtual channels; the dynamic virtual channel (drdynvc, MS-RDPEDYC) opens only the Display Control channel (MS-RDPEDISP) to negotiate dynamic resolution, and declines every other dynamic channel (audio, the GFX graphics pipeline) so the server keeps to the classic bitmap path.
 
 `RdpManagedSession` implements the existing `IRdpSession` / `IRdpClipboardTransport` contracts, so the desktop view, input queue and clipboard bridge/codec are reused unchanged. The host owns connection forms, credentials, certificate approval, session tabs and optional SSH jump transport; the plugin supplies the workspace and remote desktop. Connection, event pumping and teardown run asynchronously on the session worker task, interrupted by a cancellation token. The engine runs in-process and shares the host crash boundary; this is not process isolation or a filesystem sandbox. See [the SDK reference](../sdk/sdk-reference.md), [developer guide](../templates/dev-guide.md) and [current trust boundaries](../plugins/12-security-threat-model.md).
 
-Implemented scope: fixed desktop resolution, fit/actual-size display, keyboard/mouse/Unicode input, Ctrl+Alt+Delete, reconnect through the host, text/image/file clipboard, directory transfers and explicitly mapped local directories. It does not negotiate audio, multiple monitors, dynamic resolution or drawing-order acceleration (RemoteFX/GFX); the server renders via classic RLE bitmap updates, with MPPC stream compression on weak links to cut bandwidth.
+Implemented scope: desktop resolution that follows the window (dynamic resolution), fit/actual-size display, keyboard/mouse/Unicode input, Ctrl+Alt+Delete, in-view reconnect when a session drops, text/image/file clipboard, directory transfers and explicitly mapped local directories. It does not negotiate audio, multiple monitors or drawing-order acceleration (RemoteFX/GFX); the server renders via classic RLE bitmap updates, with MPPC stream compression on weak links to cut bandwidth.
 
 ## Connect and use
 
@@ -27,15 +27,15 @@ Install the signed `velashell.rdp-<version>.vpx` from the plugin release using t
 | Setting | Default and accepted values |
 | --- | --- |
 | Domain (`domain`) | Empty; optional domain |
-| Desktop width (`width`) | 1280; 320–8192 |
-| Desktop height (`height`) | 720; 200–8192 |
+| Desktop width (`width`) | 1920; 320–8192 (initial size and fallback; follows the window once connected) |
+| Desktop height (`height`) | 1080; 200–8192 (initial size and fallback; follows the window once connected) |
 | Connect timeout (`timeout`) | 15 seconds; 1–120 |
 | Bidirectional clipboard (`clipboard`) | `false`; explicit opt-in for text, images and files |
 | Shared folders (`drives`) | Empty; explicit mappings only |
 | SSH jump host (`jumpSession`) | None; host SSH-session selector |
 | Trusted SHA-256 (`trustedThumbprint`) | Hidden setting supplied through certificate approval; exact leaf pin |
 
-**Fit desktop** scales the fixed remote framebuffer to the available area; **100%** shows actual pixels. Neither negotiates a new remote resolution. Use **Ctrl+Alt+Delete** in the toolbar to send that sequence remotely. Reopen/reconnect through the host session tab when disconnected, so credentials and certificate approval can be renewed.
+The remote desktop follows the workspace tab: on connect, and once a window resize settles (350 ms debounce), the plugin asks the server over the Display Control channel to match the desktop to the viewport in device pixels, so **Fit desktop** renders 1:1 and crisp. `width`/`height` are the size used on connect and the fallback when a server declines dynamic resize; then **Fit desktop** scales the mismatched framebuffer into the available area (high-quality interpolation) and **100%** shows actual pixels with scrollbars. Use **Ctrl+Alt+Delete** in the toolbar to send that sequence remotely. When a session drops, a **Reconnect** button appears over the desktop (the host session tab reconnects too); reconnecting renews credentials and certificate approval, and a failed attempt keeps the current view so the button stays usable.
 
 ### Clipboard and file transfer
 
@@ -88,6 +88,7 @@ Unit tests cover settings, the clipboard codec, the headless UI and the CredSSP/
 - TLS negotiation and leaf-certificate pin trust; without a pin a self-signed certificate is rejected and its SHA-256 is surfaced for the host trust flow.
 - Desktop rendering: interleaved RLE **and MPPC bulk compression** (with the server's `bulk_compression` enabled, compressed PDUs decompress pixel-exact).
 - Keyboard/mouse/Unicode input; text and image clipboard round-trips; shared-folder read and write.
-- **In-host rendering**: the real `RdpWorkspaceView` and `RdpDesktopControl` render the engine's frames through Avalonia's headless Skia pipeline — the same control tree the host loads.
+- **Dynamic resolution**: a resize over the Display Control channel, validated as a 1024×768 ⇄ 1280×1024 round-trip; the framebuffer and status bar follow the reactivation.
+- **In-host rendering**: the real `RdpWorkspaceView` and `RdpDesktopControl` render the engine's frames through Avalonia's headless Skia pipeline — the same control tree the host loads; the view is observed to resize the remote desktop to its viewport.
 
 NLA/CredSSP is covered by offline ASN.1 tests; there is currently no NLA-capable test server, so **live NLA logon against a real Windows server is still outstanding**. Interleaved-RLE / MPPC decode, MCS/GCC, capability exchange and the channel wire formats follow MS-RDPBCGR and the related published specs. These checks are not an all-platform or real-Windows-endpoint certification.

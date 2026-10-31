@@ -14,11 +14,11 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 解码与 MPPC 批量解压、BGRA 帧缓冲;分片的快速路径更新会重组。
 - **Input** —— 快速路径键盘/鼠标/Unicode。
-- **Channels** —— 剪贴板(cliprdr)与共享文件夹(rdpdr),走分块的静态虚拟通道。
+- **Channels** —— 剪贴板(cliprdr)与共享文件夹(rdpdr)走分块的静态虚拟通道;动态虚拟通道(drdynvc,MS-RDPEDYC)上只开启显示控制通道(MS-RDPEDISP)以协商动态分辨率,其余动态通道(音频、GFX 图形管线)一律拒绝,服务器保持经典位图路径。
 
 `RdpManagedSession` 实现既有的 `IRdpSession` / `IRdpClipboardTransport` 契约,桌面视图、输入队列、剪贴板桥接与编解码**沿用不改**。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
-范围包括固定桌面分辨率、适应窗口/实际尺寸、键鼠/Unicode、Ctrl+Alt+Delete、通过宿主重新连接、文本/图像/文件剪贴板、目录传输及显式本地文件夹映射。不协商音频播放/采集、多显示器、动态分辨率或绘图指令加速(RemoteFX/GFX);服务器以经典 RLE 位图更新呈现,弱网时启用 MPPC 流压缩降低带宽。
+范围包括桌面分辨率跟随窗口(动态分辨率)、适应窗口/实际尺寸、键鼠/Unicode、Ctrl+Alt+Delete、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及显式本地文件夹映射。不协商音频播放/采集、多显示器或绘图指令加速(RemoteFX/GFX);服务器以经典 RLE 位图更新呈现,弱网时启用 MPPC 流压缩降低带宽。
 
 ## 连接与操作
 
@@ -27,15 +27,15 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | 设置 | 默认值与允许范围 |
 | --- | --- |
 | 域（`domain`） | 空,可选域 |
-| 桌面宽度（`width`） | 1280;320–8192 |
-| 桌面高度（`height`） | 720;200–8192 |
+| 桌面宽度（`width`） | 1920;320–8192（初值与回退，连上后跟随窗口) |
+| 桌面高度（`height`） | 1080;200–8192（初值与回退,连上后跟随窗口) |
 | 连接超时（`timeout`） | 15 秒;1–120 |
 | 双向剪贴板（`clipboard`） | `false`;明确开启后支持文本、图像与文件 |
 | 共享文件夹（`drives`） | 空,只共享显式映射 |
 | SSH 跳板机（`jumpSession`） | 无,由宿主 SSH 会话选择器提供 |
 | 已信任 SHA-256（`trustedThumbprint`） | 隐藏设置,由证书批准流程提供,精确叶证书 pin |
 
-“适应窗口”把固定远程帧缓冲缩放到可用区域;“100%”显示实际像素,二者都不改变远程分辨率。工具栏“Ctrl+Alt+Delete”将组合键发往远程。断开后从宿主会话标签重新打开/连接,以更新凭据及证书批准。
+远程桌面默认跟随工作台标签页:连接后、以及窗口缩放稳定时(350ms 防抖),插件通过显示控制通道请求服务器把桌面调整到视口的设备像素,此时“适应窗口”即 1:1 清晰呈现。`width`/`height` 是连接时的初值,也是服务器不支持动态调整时的回退尺寸。此时“适应窗口”把不匹配的远程帧缓冲平滑缩放到可用区域(高质量插值),“100%”按实际像素显示并出现滚动条。工具栏“Ctrl+Alt+Delete”将组合键发往远程。会话断开后,桌面上出现“重新连接”浮层按钮(宿主会话标签同样可重连);重连会更新凭据及证书批准,重连失败时保留当前视图,按钮可再次点击。
 
 ### 剪贴板与文件传输
 
@@ -88,6 +88,7 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 - TLS 协商与叶证书 pin 信任;无 pin 拒绝自签证书并抛出 SHA-256 供宿主信任流程。
 - 桌面渲染:交错 RLE **与 MPPC 批量压缩**(服务器开启 `bulk_compression` 时,实测解压压缩 PDU、像素精确)。
 - 键鼠/Unicode 输入;文本与图像剪贴板往返;共享文件夹读与写。
-- **宿主内渲染**:真实 `RdpWorkspaceView` 与 `RdpDesktopControl` 经 Avalonia headless Skia 渲染托管引擎的帧,即宿主装载的同一套控件树。
+- **动态分辨率**:经显示控制通道请求调整桌面,实测 1024×768 ⇄ 1280×1024 往返生效,重激活后帧缓冲与状态栏随之更新。
+- **宿主内渲染**:真实 `RdpWorkspaceView` 与 `RdpDesktopControl` 经 Avalonia headless Skia 渲染托管引擎的帧,即宿主装载的同一套控件树;实测视图会把远程桌面调整到视口尺寸。
 
 NLA/CredSSP 以离线 ASN.1 单测覆盖;当前没有支持 NLA 的测试服务器,**真实 Windows 服务器的 NLA 登录尚未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
