@@ -118,7 +118,9 @@ read nothing back.
   for them. The listen address / port on the server reuse the remote forward's `RemoteHost` / `RemotePort`, and `LocalPort` is stored as 0.
 - The allow list `TunnelConfig.PermitRemoteOpen` is written like ssh_config's `PermitRemoteOpen` / the library's `RemoteOpenPolicy`:
   `host:port`, with `*` `?` wildcards in the host, `*` allowed as the port, IPv6 in brackets, separated by whitespace or commas; a lone `any`
-  allows everything, and `any` mixed with other entries is an error. Names are compared as the remote side gives them, never resolved.
+  allows everything, and `any` mixed with other entries is an error. Names are compared as the remote side gives them, never resolved;
+  a rule written as an IP matches only IP literals and a rule written as a name only DNS names (details in the SSH library's
+  [spec/07 §4.6](../ssh/spec/07-forwarding.md)).
 - **No default, never empty**: this turns the local machine into a SOCKS proxy for the remote side, so what may go out must be stated by the
   user. The form's "Create" stays disabled while it is empty and names a bad entry in red; the service layer (`Core/Tunnels/RemoteOpenRules`)
   likewise refuses an empty list or bad rules from hand-edited or synced profiles, instead of treating them as allow-all or deny-all.

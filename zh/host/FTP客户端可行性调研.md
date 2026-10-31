@@ -132,6 +132,11 @@ ISftpService（对外唯一契约，UI 侧零改动）
 `DownloadStream(Stream outStream, string remotePath, long restartPosition = 0, IProgress<FtpProgress> progress = null, CancellationToken token = default, long stopPosition = 0)`
 带 `restartPosition` + `stopPosition`，等于**区间读**——尾部校验用它读远端最后 N 字节即可，不需要 Seek。上传侧用 `FtpRemoteExists.Resume` 或带偏移的写入。
 
+> **已实现（2026-10-31）**：区间读的尾部核实已落地，与 SFTP 同一口径（比对已有部分末尾 64 KiB，对不上抛 `VelaSftpResumeMismatchException` 交回同名冲突策略），
+> 但走的是 REST + RETR（FluentFTP 的 `OpenRead(path, Binary, restart, fileLen)`），不是 `DownloadStream(stopPosition)`。
+> 上传：SIZE 取远端此刻的长度，读回远端末尾那一段与源同一段比对，正好读到远端末尾、连接照常复用；
+> 下载：以本地半截此刻的长度为准读回远端同一段，读到文件中间就放手，那条连接作废，续传时多一次重新登录。没有可续的半截就整份传。
+
 ### 3.6 能力位：不能再假设"什么都能做"
 
 | 能力 | SFTP | FTP |

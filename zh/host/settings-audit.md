@@ -175,7 +175,7 @@
 | 连接 | 认证偏好 | 记住密码、默认认证密钥 | 提供进入密钥管理的链接 |
 | 文件传输 | 路径与编辑器 | 本地下载目录、默认编辑器 | 保留 |
 | 文件传输 | 远程编辑 | 双击文件时(`Transfer.DoubleClickAction`,系统默认程序 / 内置编辑器 / 配置的编辑器,默认系统默认程序)、编辑后自动上传(`Transfer.AutoUploadOnEdit`,默认开) | 已展示。关掉自动上传 = 不监视外部程序打开的本地副本、收尾也不补传;内置编辑器的「保存」照常上传。三个入口与回传规则见交互与界面规格 §6。设置页两条说明 2026-10-25 改准:双击说明不再说三种都自动回传、自动上传说明点明只管外部程序 |
-| 文件传输 | 传输行为 | 最大并发数、保留时间戳(SFTP 上传在关闭之前按同一个句柄设修改时间,一次往返)、上传后落盘(`Transfer.FsyncAfterUpload`,默认关:SFTP 上传关闭之前 `fsync@openssh.com`,服务端不支持时跳过,落盘失败算上传失败)、冲突处理、显示隐藏文件、完成通知、用 rm -rf 删除远端目录(`Transfer.UseRecursiveDeleteCommand`,默认开) | 隐藏文件状态必须统一;`rm -rf` 项必须写明三句口径:**只对有 exec 通道的 SSH 会话生效**(独立 SFTP / FTP / 插件协议一律走 SFTP 递归)、**命令不可用或退非零码时自动回退**到 SFTP 递归、**这条路上没有逐条进度**(进度条转不确定态,取消只能关通道)。删除前的二次确认不受影响 |
+| 文件传输 | 传输行为 | 最大并发数、保留时间戳(SFTP 上传在关闭之前按同一个句柄设修改时间,一次往返)、上传后落盘(`Transfer.FsyncAfterUpload`,默认关:SFTP 上传关闭之前 `fsync@openssh.com`,服务端不支持时跳过,落盘失败算上传失败)、冲突处理、显示隐藏文件、完成通知、用 rm -rf 删除远端目录(`Transfer.UseRecursiveDeleteCommand`,默认开) | 隐藏文件状态必须统一;`rm -rf` 项必须写明三句口径:**只对有 exec 通道的 SSH 会话生效**(独立 SFTP / FTP / 插件协议一律走 SFTP 递归)、**命令不可用或退非零码时自动回退**到 SFTP 递归、**这条路上没有逐条进度**(进度条转不确定态,取消只能关通道)。另有第四句(2026-10-31 起):会话字符集不是 UTF-8 时,含非 ASCII 字符的路径不走命令(exec 命令行是 UTF-8,与 SFTP 用的字节不是同一串),UTF-8 会话里有解不开字节的名字同理;命令退 0 后再 stat 一次,目录还在就接着 SFTP 递归。删除前的二次确认不受影响 |
 | 文件传输 | 带宽限制 | 总开关、上传限制、下载限制 | 关闭时隐藏两个速率输入框 |
 | 文件传输 | 传输日志 | 记录日志、保留天数、存储路径 | 关闭日志时隐藏从属设置 |
 | 文件传输 | 恢复与重试 | 断点续传、传输重试、清理临时文件 | 三项都已实现并展示,放在「冲突处理」一组:恢复中断的传输(M-02)、清理半截文件(续传关着时才出现,R-10)、失败自动重试(R-09,第十八批) |
@@ -278,7 +278,7 @@
 | `src/VelaShell/ViewModels/FileBrowserViewModel.cs` | 隐藏文件(切换回写设置)、完成通知和传输日志 |
 | `src/VelaShell.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs` | SSH 超时、心跳和主机指纹策略 |
 | `src/VelaShell.Core/Models/OutputRule.cs`、`src/VelaShell.Core/OutputRules/` | 输出规则的模型、编译(线性时间引擎)与口令守卫(第二十三批) |
-| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | 自动应答的判定(只看光标行、本地敲字不答、冷却与每分钟上限) |
+| `src/VelaShell.Terminal/Semantics/OutputTriggerScanner.cs` | 自动应答的判定(只看光标行、带 shell 提示符标记的行不答、本地敲字不答、冷却与每分钟上限) |
 | `src/VelaShell/ViewModels/OutputRulesViewModel.cs`、`src/VelaShell/Views/Settings/OutputRulesPage.axaml` | 「输出规则」设置页 |
 
 ## 14. 整改记录
@@ -686,7 +686,7 @@ SSH 库早已实现主机证书与 `@cert-authority`([03-key-exchange.md](../ssh
 
 | 设置 / 操作 | 默认 | 取值 | 备注 |
 | --- | --- | --- | --- |
-| OpenSSH known_hosts | — | 「导入…」「导出…」两个按钮 | 导入:多主机、`[host]:port`、同行取反都认;`\|1\|` 散列行拿已保存的 SSH / SFTP 连接与已信任主机逐个对,对不上的计数;带通配的普通行跳过并计数;同一类型已有另一把钥的不覆盖(计冲突);`@cert-authority` / `@revoked` 行进下面的受信主机 CA;被吊销的普通行不导;认不出的标记整行跳过。**只加不改**。导出:OpenSSH 格式,只有指纹、没存公钥原文的老记录单独计数(下次信任连上时补) |
+| OpenSSH known_hosts | — | 「导入…」「导出…」两个按钮 | 导入:多主机、`[host]:port`、同行取反都认;`\|1\|` 散列行拿已保存的 SSH / SFTP 连接与已信任主机逐个对,对不上的计数;带通配的普通行跳过并计数;同一类型已有另一把钥、或已有类型只记了占位词(换库前的 `PublicKey`)的旧记录时不覆盖、不并排加(计冲突);`@cert-authority` / `@revoked` 行进下面的受信主机 CA;被吊销的普通行不导;认不出的标记整行跳过。**只加不改**。导出:OpenSSH 格式,只有指纹、没存公钥原文的老记录单独计数(下次信任连上时补) |
 | 导出时散列主机名 | 关 | 开 / 关 | 同 `HashKnownHosts yes`:主机密钥行写成 `\|1\|…`,`@cert-authority` / `@revoked` 行的模式原样写出。**不持久化**,每次打开设置都回到关 |
 | 受信主机 CA | 空 | CA / 吊销记录的列表(「受信 CA」「已吊销」两种标签,可删)+ 添加表单(主机名模式 + CA 的 `.pub` 行,或从 known_hosts 整行复制来的 `@cert-authority` / `@revoked` 行,可加备注) | 存在 SonnetDB 的 `known_host_markers` 集合,按主机名模式生效。对上模式的主机出示这些 CA 签的合格证书时直接放行、不记进已信任主机;归 CA 管的主机出示没担保的钥或不合格的证书时直接拒绝,不退回首次确认 —— 「首次连接需人工确认指纹」「指纹变更时阻断并告警」怎么设都一样 |
 
@@ -703,7 +703,8 @@ SSH 库早已实现主机证书与 `@cert-authority`([03-key-exchange.md](../ssh
   之后每次都「校验通过」。默认开与 OpenSSH 的 `StrictHostKeyChecking=ask` 一致。
 - **一次性迁移**:存量配置里的 `false` 分不清是旧默认值还是用户主动关的,与指纹变更阻断(第五批)同一套路 —— 统一打开一次,
   打上 `Security.FirstFingerprintDefaultMigrated`,之后完全听用户的。这个标记登记为迁移字段(`SettingsCategories.MigrationFields`),
-  审计不算设置变更,导出与同步照带(第十七批)。
+  审计不算设置变更,导出与同步照带(第十七批)。拉取时各迁移标记与本机的取「或」,哪边做过就不再做(2026-10-31 起;此前拉到
+  不认识这个标记的旧版本推的载荷,标记成了 false,迁移每同步一轮重做一次)。
 - **行为**:界面里的各种连接、测试连接与连接诊断、独立 SFTP、隧道手动启动与「程序启动时自动建立」、插件 `open_session`、传输队列「继续」、
   外部拉起(确认框之后)遇到没见过的主机都弹「主机信任」框,拿不到主窗口时按拒绝。自动重连(终端倒计时、睡眠唤醒批量、隧道自动重拨)
   遇到没见过的主机不弹框、直接拒绝并记 `hostkey-rejected` 告警 —— 以前默认关时这里是按 TOFU 悄悄记下。「仅本次信任」的在本次运行内照旧放行;
@@ -743,6 +744,6 @@ SSH 库早已实现主机证书与 `@cert-authority`([03-key-exchange.md](../ssh
   `Normalize` 钳数值、丢空条目、超过 64 条截断;校验不过的规则不删,由编译跳过、设置页标出原因。「恢复默认」会把规则表一起清空。
 - **规则随设置同步,前提是表里不许有口令**:应答规则的正则字面上提到口令一类词(password / passphrase / PIN / OTP / token / secret / 验证码 / 密码 / 口令,中日韩),或会命中 15 条常见口令提示原文之一,
   就不许设成自动应答(`OutputRuleSecretGuard`,宁可多拦:`:\s*$`、`.*` 这类不带关键词的写法也拦得住);编辑框里这种规则「完成」不可点,直接点窗口「保存」时这种草稿丢掉不写。高亮规则不受限(把日志里的 password 标红是正当用法)。
-- **触发器的口径**(`Terminal/Semantics/OutputTriggerScanner`):只对远端输出;只看主屏光标所在的逻辑行;自上次回车以来本地有过输入就不答;命中后等对端安静 300 ms;同一行只答一次;冷却推迟不丢、每分钟上限到了暂停一分钟;
+- **触发器的口径**(`Terminal/Semantics/OutputTriggerScanner`):只对远端输出;只看主屏光标所在的逻辑行,带 OSC 133 提示符标记的不答(2026-10-31 起);自上次回车以来本地有过输入就不答;命中后等对端安静 300 ms;同一行只答一次;冷却推迟不丢、每分钟上限到了暂停一分钟;
   默认不进同步输入频道。细则见交互规格 §5.2.3。
 - **不做的**:录制与日志的遮盖(第十四批)接这张表、让用户加自己的遮盖规则 —— 留在 `feature-plan.md`;多步 expect 对话、变量、按标签 / 标记划作用范围都没做。

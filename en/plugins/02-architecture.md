@@ -140,7 +140,7 @@ See [03-plugin-model.md](03-plugin-model.md) and [04-plugin-host.md](04-plugin-h
   registry-cache/                     -> plugin-source index cache (see 10)
 
 ~/.velashell/logs/plugins/
-  <pluginId>.log / <pluginId>.1.log   -> one log per plugin (rotated once at 1 MB, see §6)
+  <pluginId>.log / <pluginId>.log.1   -> one log per plugin (rotated once at 1 MB, see §6)
 ```
 
 (Note 2026-10-24: the blueprint originally drew the logs under `~/.velashell/plugins/logs/<pluginId>/`; they actually live in the host's
@@ -148,12 +148,12 @@ log directory, in a `plugins/` subdirectory of the same `logs/` that holds the h
 
 ## 6. Cross-Cutting Concerns
 
-- **Logging** (landed 2026-10-24): one file per plugin, `~/.velashell/logs/plugins/<pluginId>.log`, rotated at 1 MB into `<pluginId>.1.log`
-  with only that one old copy kept; one timestamp per line, with the continuation lines of exception stack traces kept intact. Every source is
+- **Logging** (landed 2026-10-24): one file per plugin, `~/.velashell/logs/plugins/<pluginId>.log`, rotated at 1 MB into `<pluginId>.log.1`
+  with only that one old copy kept (before 2026-10-31 it was `<pluginId>.1.log`, which collided with the current log of a plugin whose id is `<pluginId>.1`); one timestamp per line, with the continuation lines of exception stack traces kept intact. Every source is
   on the host side: what the plugin writes through `context.Log` (`IPluginLogger`; called directly in-process, relayed over RPC from isolated
   processes), the isolated process's stdout / stderr, and the activation / activation-failure / crash entries the host records for the plugin;
   the copy in the host log stays as before. A plugin's `Trace.WriteLine` does not reach this file (in an isolated process it is not collected anywhere). The file is deleted with the plugin's
-  data on uninstall; diagnostic bundles take only the host logs by default; since 2026-10-25 this plugin's log can be ticked when exporting (masked the same way). "View log" on each row of the plugin management
+  data on uninstall, and by the next start's sweep if the plugin folder was deleted while the host was not running (an old-name `<pluginId>.1.log` is renamed into place); diagnostic bundles take only the host logs by default; since 2026-10-25 this plugin's log can be ticked when exporting (masked the same way). "View log" on each row of the plugin management
   page shows the tail (256 KB by default, updated by Refresh; no live follow).
 - **i18n**: Contribution-point text uses indirect `%key%` addressing, and `plugin.nls.<locale>.json` provides translations. The host resolves the text using the current language before rendering, and language-switch events are pushed to active plugins.
 - **Telemetry**: None (consistent with the current main application); local crash-count statistics are reserved for backoff decisions.

@@ -132,6 +132,11 @@ Current resume behavior relies on two SFTP-specific capabilities:
 `DownloadStream(Stream outStream, string remotePath, long restartPosition = 0, IProgress<FtpProgress> progress = null, CancellationToken token = default, long stopPosition = 0)`
 accepts `restartPosition` + `stopPosition`, which is effectively **range reading**. Tail verification can use it to read the last N remote bytes without seeking. Uploads use `FtpRemoteExists.Resume` or writing with an offset.
 
+> **Implemented (2026-10-31)**: the ranged tail check has landed, on the same terms as SFTP (the last 64 KiB of the existing part are compared; a mismatch throws `VelaSftpResumeMismatchException` and goes back to the conflict policy),
+> but it uses REST + RETR (FluentFTP's `OpenRead(path, Binary, restart, fileLen)`), not `DownloadStream(stopPosition)`.
+> Upload: SIZE gives the remote length right now, and the tail of the remote file is read back and compared with the same range of the source; the read ends exactly at remote EOF, so the connection is reused.
+> Download: the local partial's current length decides the range read back from the remote; that read stops mid-file, so the connection is dropped and a resume costs one extra login. With no partial to resume, the whole file is transferred.
+
 ### 3.6 Capability Flags: Stop Assuming Everything Is Available
 
 | Capability | SFTP | FTP |
