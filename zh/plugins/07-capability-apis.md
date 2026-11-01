@@ -95,7 +95,7 @@ public interface IRemoteFs
 
 **权限现状与设计目标分开。** 本蓝图的 `remote.exec` Broker、通用 Demand 与不可关闭审计是设计目标，不能当作本次已实现的保证；当前 `PluginPermissionGate` 覆盖 `terminal.write` / `session.open`，并为新上传/下载 API 提供各自专用单任务租约（§2.1/§2.2），不是其它远程文件操作的通用许可。此次 sudo 新增的是**宿主逐次可信确认**，而非整套通用权限系统。来源插件从宿主清单绑定，真实目标来自连接；即使 NOPASSWD 也不能跳过确认。确认框弹出后「批准」先灰约 0.6 秒（从窗口打开起算，2026-10-25 起），取消随时可点，回车与初始焦点仍在取消上 —— 防的是用户正打字时顺手一个回车批掉 root 命令。
 
-AI 插件的提权审批与宿主确认是两层：`Ask` / `ReadOnlyAuto` 使用独立 `run_command_elevated` 类型、展示目标及整条 root 范围且不设 RepeatKey；缺少审批 Handler 即拒绝，root `cat` 也不能按只读自动放行。用户明确选择 `Bypass` 只跳过插件审批，绝不跳过宿主确认。MCP 无 Handler 时前两模式拒绝，Bypass 可以请求桌面宿主确认。
+AI 插件的提权审批与宿主确认是两层：`Ask` / `ReadOnlyAuto` 使用独立 `run_command_elevated` 类型、展示目标及整条 root 范围且不设 RepeatKey；缺少审批 Handler 即拒绝，root `cat` 也不能按只读自动放行。用户明确选择 `Bypass` 只跳过插件审批，绝不跳过宿主确认。对外 MCP 没有审批卡，提权的人工确认整个交给宿主（`AgentToolbox.ElevationConfirmedByHost`）：三种模式都不在插件层拒绝 `run_command_elevated`，直接请求桌面宿主的 root 确认与密码输入；不提权的写操作在前两模式下照旧拒绝。
 
 密码仅在宿主可信遮罩输入框内收集，不读取登录密码、不记忆、不进入 SDK/RPC/插件/模型/历史/日志；受控 PTY 确认关闭回显并匹配本次随机提示后才发送。命令启动后永久关闭密码应答，stdin 关闭。启动标记的完整原始字节不得直接出现于 sudo 可能回显的 argv，只有真正获准执行的 root 包装进程才能生成；sudoers 拒绝诊断不得被误判为 Running/Exited，也不得作为命令输出泄漏认证尾部。复杂 PAM/OTP、无 UI、PTY 被拒及受限 sudoers 拒绝 root shell 包装时明确失败，不绕过策略、不自动普通执行重试。用户的登录 shell 是 fish / tcsh 也照常可用：交给登录 shell 的只是一条 `/bin/sh` 调用，受控脚本编码在 `printf %b` 载荷里，登录 shell 改写不了它（见 [安全 §1.1](12-security-threat-model.md#11-此次-sudo-与-ai-托管执行的实际边界sdk-210)）。普通命令包含 sudo 不做正则改写或自动提权重跑，避免重放前半段副作用。这不是终端自动填充，不改变旧终端凭据交互决定。
 

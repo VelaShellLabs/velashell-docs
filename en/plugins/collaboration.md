@@ -201,6 +201,14 @@ this. HTTP only asks the user to paste one address into their agent's configurat
   cannot show it an approval card. "Ask every time" therefore **refuses every write** here. To let it
   change things you must explicitly pick "read-only auto" or "bypass": a visible choice rather than a
   quiet default.
+- **Commands that need root are the exception** (since 2026-11-01): in Agent mode, a `run_command` with `elevated=true`
+  is no longer refused at the plugin layer. Under every approval option it goes to the host, which shows its own root
+  confirmation on your desktop (source plugin, real target and full command filled in by the host; NOPASSWD is confirmed too)
+  and then a sudo password prompt when needed; the password never passes through the external agent or the model. The plugin
+  can neither forge nor skip that step, so it is this route's human approval. While the prompt is open the external agent sees
+  the task as `AwaitingUser` and should ask you to switch to VelaShell. A plain `sudo` inside an ordinary command has no
+  terminal and fails as soon as sudo wants a password; the receipt's `hint` then points it at `elevated`. Non-elevated writes
+  follow the previous point.
 - **"Read-only auto" lets through only `run_command`s whose shape is known not to change anything** (tightened on 2026-10-25): `sudo` always asks and
   `env` is not on the list; `curl` / `wget` are allowed only for fetching an explicit http(s) URL to standard output (writing files, uploads,
   non-GET requests such as POST, custom headers, reading config files and non-http(s) protocols all ask); `ip` / `route` / `ifconfig` / `mount` /
