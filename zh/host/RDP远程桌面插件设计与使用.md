@@ -14,7 +14,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。
 - **Input** —— 快速路径键盘/鼠标/Unicode。
-- **Channels** —— 剪贴板(cliprdr)与磁盘映射(rdpdr)走分块的静态虚拟通道;动态虚拟通道(drdynvc,MS-RDPEDYC)上只开启显示控制通道(MS-RDPEDISP)以协商动态分辨率,其余动态通道(音频、GFX 图形管线)一律拒绝,服务器保持经典位图路径。
+- **Channels** —— 剪贴板(cliprdr)与显式选择的磁盘、端口、legacy 打印机(rdpdr)走分块静态虚拟通道。动态虚拟通道(drdynvc,MS-RDPEDYC)支持显示控制(MS-RDPEDISP)、所选摄像头(MS-RDPECAM)和所选 Windows 便携设备(MS-RDPEPNP)。未注册通道（含 GFX 图形管线）被拒绝，桌面仍走经典位图路径。
 
 库里的 `RdpManagedSession` 以 SDK 无关的 `ConnectAsync(RdpClientOptions, …)` 实现 `IRdpSession` / `IRdpClipboardTransport` 契约;插件引用该库,提供桌面视图、输入队列、剪贴板桥接与编解码,并负责把宿主的连接请求映射成库的 `RdpClientOptions`、把库抛出的异常翻译成宿主协议异常。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
@@ -94,6 +94,32 @@ FORMAT_DATA_RESPONSE 没有线上 request-id；本地附带的格式号不能作
 
 在插件仓库调试时使用 [CLI 开发内环](../cli/cli.md):将 `VelaShell.Plugin.Rdp` 设为启动项目,选择 `VelaShell` 配置后按 F5。`--dev-root` 扫描构建目录的父目录(例如 `bin/Debug`),开发插件从影子副本加载。宿主目录或用户插件目录中的同 id 插件优先于开发根;联调前应移走冲突副本,并取消继续向宿主复制该插件的本机构建配置。
 
+### COM / LPT 端口（Windows）
+
+在「磁盘映射」页的「COM / LPT 端口」明确填写名称，例如 `COM3;LPT1`，默认留空。最多选择 32 个唯一名称，允许 `COM1`–`COM9999` 或 `LPT1`–`LPT9999`，拒绝路径、冒号、前导零别名。库调用方使用 `RdpClientOptions.Ports` 和 `PortMapping`。只有远程请求打开时才独占打开所选本地端口；其他程序占用时可能返回共享冲突。远程会话能读写和配置这些端口，服务器必须允许端口重定向；远程应用访问重定向的 COM/LPT 设备，而非文件共享。
+
+串口和并口均遵循 [MS-RDPESP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpesp/04ae8f6b-a2fe-4989-9314-09bff11fa086)，使用 `rdpdr` 及兼容性配套 `rdpsnd`。端口公告不含设备专属数据。内部可复用 `IRdpdrDevice` 契约将非磁盘设备分发与文件系统处理分开。读写要求零偏移，单次最多 256 KiB，同时最多 64 个非磁盘请求。串口控制通过精确长度和值校验的允许清单：波特率、队列、线路格式、超时、字符、流控、break、DTR/RTS、XON/XOFF、即时字符、purge、事件掩码及等待、modem/通信状态与属性。并口支持打开、读写、关闭、查询信息及 INIT。未知、厂商专属和其余控制明确失败，不伪造成功。原生串口结构按定义的线上布局传输，包括去除 SERIAL_STATUS 对齐填充。
+
+Windows 使用重叠 I/O，在关闭或断开时调用 `CancelIoEx`。读、写和 `WAIT_ON_MASK`（`WaitCommEvent`）与本机端口一样等待，只受远程应用自己设置的 COMMTIMEOUTS 约束，线路空闲时不会凭空报错；清空队列、更改事件掩码、关闭或断开会结束它们。不等待数据的配置类控制请求超过 30 秒即取消。挂起读取不会把控制和关闭请求串行堵在后面，读写返回实际字节数。即使取消，句柄和固定缓冲区也保留到内核真正完成；故障驱动若不完成取消，资源释放可能超过期限，不会提前释放内核仍使用的内存。原生打开和提交操作也依赖驱动响应。暂不支持热插拔重连、驱动专属透传或 Linux/macOS 端口后端。假后端测试覆盖选择、公告、畸形请求、短读写、控制拒绝、超时及关闭取消；真实硬件与 Windows 服务器互通仍需单独验收，测试不打开真实 COM/LPT 硬件。
+
+### Legacy 打印机（Windows）
+
+「磁盘映射」页为每个本地已安装打印队列提供独立勾选项，全部默认关闭。激活时及每分钟在后台只读查询队列元数据；队列变化后重新打开连接表单。最多选择 16 个队列。所选队列缺失时连接设置明确失败，不会改选其他打印机。排除 FILE:/PORTPROMPT: 输出端口及嵌套 TS 重定向队列。库调用方可在 UI 线程外调用 `WindowsPrinterCatalog.GetPrinters()`，把明示选择的 `PrinterMapping` 传入 `RdpClientOptions.Printers`。
+
+实现 [MS-RDPEPC legacy 打印重定向](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpepc/993fd26f-b31b-4524-90ec-3efb59445f2a)。远端服务器必须允许打印机重定向，并安装匹配驱动。**不支持 Easy Print、XPS、驱动安装或驱动配置缓存。** 公告使用 PRINT=4、PRN数字 DOS 名及 UTF-16 零终止字符串，仅声明真实的默认/网络属性。远端 CREATE 打开明示选择的已安装队列并创建固定文档名的 RAW 任务；WRITE 补齐 spooler 短写；CLOSE 完成并释放任务。不向 Winspool 透传远端路径、文档名、驱动安装或任意 IOCTL。
+
+每队列最多 4 个任务、单次写入 1 MiB、单任务 64 MiB；请求按到达顺序处理，畸形写入、异常及断线会中止未完成任务。Winspool 可能阻塞在驱动内部：reset/断线立即使旧请求失效并后台清理，但无法强制打断卡住的原生调用，须待其返回才能释放任务。测试使用假任务验证协议字节、限制、顺序及清理；本机仅实际执行过只读队列枚举，没有提交真实打印任务，也未验证真实服务器到打印机的端到端互通。
+
+### 便携设备 / WPD（Windows）
+
+「磁盘映射」页逐项列出 Windows Portable Device 接口，默认均不勾选。选择后允许远程会话通过 WPD 读取和修改该设备。此能力**不是通用 USB 重定向**：不接收任意 USB 设备、原生控制码或服务器指定的文件系统路径。激活时及每五秒在后台通过 SetupAPI 只枚举元数据，不打开设备。库调用方把 `RdpWpdDevices.Enumerate()` 返回的元数据 ID 填入 `RdpClientOptions.WpdDevices`，默认空集合。即使桌面分辨率固定，选择 WPD 仍会启用所需动态通道。连接时所选设备缺失会明确报错，不会替换成其他设备。
+
+[MS-RDPEPNP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpepnp/39e5a1ae-bd17-4dd2-8ea5-63c150c337cf) 使用一个 `PNPDR` 控制通道及多个 `FileRedirectorChannel` 实例，每个文件实例独占一个句柄。交换 1.5 版本后，等待服务器认证消息才公告设备。文件通道版本 4 支持 CreateFile、读、写、WPD IOControl 和按请求 ID 取消，不声明 custom events。Windows 后端使用重叠 I/O，通过 `CancelIoEx` 精确取消原请求。只允许 SDK 定义的 [WPD read/read-write 消息 IOCTL](https://learn.microsoft.com/en-us/windows-hardware/drivers/portable/access-control)：`0x00404108` 和 `0x0040C108`。上限为选择 32 个接口、16 个文件通道、每句柄 4 个挂起请求、每次输入/输出 1 MiB。错误按 HRESULT 回复，畸形请求关闭对应文件通道。
+
+Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/windows/win32/api/cfgmgr32/nf-cfgmgr32-cm_register_notification) 无窗口监听接口到达与移除；先注册再取得初始快照，原生回调只排队。串行 worker 在空闲或活动设备拔出时撤销设备，取消 I/O 并关闭句柄。重插只对连接开始时已授权、系统唯一 PnP 实例身份（`CM_DEVCAP_UNIQUEID`）相同、硬件 ID 一致且当前恰有一个匹配接口的设备自动恢复。恢复时更新本地路径并公告全新的协议 DeviceId，旧句柄与旧响应不会指向新实例。友好名称不作为身份证据。缺少稳定身份、匹配歧义或未选择的新设备均不会自动共享；身份不明确的设备需重新选择建立新连接。修改已保存设置不会改变现有会话的授权集合。
+
+通知注册失败会明确记录降级诊断，此时只保留 I/O 错误检测到的撤销，不具备空闲拔出检测或自动重插恢复。关闭会话时注销通知、收尾 worker 并释放句柄；有界事件队列溢出时保守撤销活动设备。fake 后端及 fake 通知测试覆盖认证、真实报文、选择白名单、句柄隔离、读写/IOCTL、取消、空闲拔出与重插、重复及未选设备事件、初始化竞态与关闭。没有实际打开、拔插或修改 WPD 设备；真实设备与 Windows 服务器互通仍未验收，受远端策略及驱动支持影响。
+
 ## 认证与证书策略
 
 安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
@@ -151,3 +177,11 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 加固与画质相关行为另有离线测试:`RdpHardeningTests`(含真实目录联接,以及发送超大 TSRequest、CredSSP v3 的假服务器)、`RdpRenderingTests`(1:1 绘制、DPI、Suppress Output、颜色深度设置)、`PlanarTests`(FreeRDP 测试向量与模糊测试)、`RdpPointerAndInputTests`(指针掩码规则、缓存、批量键入)。
 
 NLA/CredSSP 除离线 ASN.1 单测外,对 FreeRDP shadow 服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
+
+### 摄像头（Windows）
+
+「磁盘映射」页提供摄像头单选项，默认「关闭」。激活时及每分钟在后台通过 Media Foundation 只枚举元数据；设备变化后重新打开表单。已保存选择只匹配该设备，缺失时不会回退到默认摄像头。库调用方可使用 `RdpCameraDevices.Enumerate()` 并设置 `RdpClientOptions.Camera`，null 表示关闭。固定桌面分辨率不影响摄像头通道。
+
+实现 [MS-RDPECAM v1](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpecam/6c9dd9fc-0a9a-45c4-84b0-72cd3986dd39)，支持一个彩色视频流和设备原生 MJPEG 格式；不支持 H.264、YUY2、音频、多摄像头或 v2 属性。远端服务器与应用须支持摄像头重定向，策略须允许。枚举不会激活采集源；远端 Activate 请求才创建 Media Foundation 源和异步 source reader。每个样本请求返回一个完整帧或协议错误，同时最多等待一个请求。Stop/Deactivate 取消待完成采集，通道关闭或断线释放资源。激活/采集检测到设备移除时通知远端；现有会话空闲期间的热插拔通知尚未实现。
+
+动态通道支持独立重组、同名多实例和双向分片。重组总量限制 32 MiB，摄像头消息限制 16 MiB，会话队列限制 64 条/32 MiB。队列溢出明确断开会话，不会静默丢分片。假后端测试覆盖协议布局、明示选择、生命周期、请求节奏、取消和分片。没有实际打开摄像头采样，真实服务器与摄像头的端到端互通仍未验证。
