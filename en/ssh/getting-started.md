@@ -690,6 +690,7 @@ Console.WriteLine(cfg.IdentityFiles);  // there may be several
 Values are tokenized the way OpenSSH reads them (quotes, backslash escapes, comments; see [`spec/09-dialing.md`](spec/09-dialing.md) §7.4): `cfg.First("IdentityAgent")` returns
 the same value `ssh -G` reads. The other way round, to write a value into a config (an export, a generated config file), use `SshConfigFile.TryFormatArgument` ——
 both this library and `ssh` read back the original value (`\\.\pipe\x` is written `\\\\.\pipe\x`); it returns `false` for a value with a line break, which cannot be written.
+For a line with unbalanced quotes this library skips just that line (while `ssh` rejects the whole config): to tell the user, pass `onSkippedLine` to `LoadAsync` and get the file, line number and text.
 
 If you decide to use it, it turns into ready-to-connect parameters in one step:
 

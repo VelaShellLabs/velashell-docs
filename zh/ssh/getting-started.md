@@ -685,6 +685,7 @@ Console.WriteLine(cfg.IdentityFiles);  // 可能有多条
 值的分词照 OpenSSH 的读法（引号、反斜杠转义、注释，见 [`spec/09-dialing.md`](spec/09-dialing.md) §7.4）：`cfg.First("IdentityAgent")` 交出的
 就是 `ssh -G` 读出来的那个值。反过来要把一个值写进配置（导出、生成配置文件），用 `SshConfigFile.TryFormatArgument` ——
 本库与 `ssh` 读回来都是原值（`\\.\pipe\x` 写成 `\\\\.\pipe\x`）；值里有换行写不出来时它交回 `false`。
+引号没配对的行本库只跳过那一行（`ssh` 却整份配置不读）：要告诉使用者的，给 `LoadAsync` 传 `onSkippedLine`，拿到文件、行号与原文。
 
 决定用它的话，一步变成可以直接拿去连的参数：
 

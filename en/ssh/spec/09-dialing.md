@@ -515,6 +515,7 @@ Given `onInvalid`, a malformed line is handed to it and the rest are still parse
 | `8080` / `127.0.0.1:8080` / `[::1]:8080` | Listening port (optionally with an address; IPv6 in brackets) |
 | `*:8080` / `:8080` | Listen on all interfaces |
 | A side containing `/` | A Unix socket path (the same test ssh uses) |
+| `[C:/x.sock]`, `[/run/a:b.sock]` (enclosed in brackets as a whole, with a `/` inside) | The path inside the brackets, as-is (§7.4: when the path has a `:`, this is the only form ssh accepts) |
 | `RemoteForward port` (no target) | Remote dynamic forwarding (`07-forwarding.md` §4.6) |
 | Port `0` | Assigned by the system (local) or the server (remote); the forwarder reports the actual port |
 
@@ -595,6 +596,24 @@ quotes and backslashes stay as they are, and `#` is not a comment either (`Proxy
 `ssh_config(5)` says "The command string extends to the end of the line" for the first three; for `KnownHostsCommand` it was observed.
 Also, 9.5 does not recognize quotes or backslashes in `ProxyJump` and takes only the first word (`ProxyJump "a b"` reads as `"a`, `ProxyJump a\ b` as `a\`).
 
+**Socket paths in forwards** (after tokenizing, a side of `LocalForward` / `RemoteForward` has one more layer of reading; measured with `ssh -G` of the same version, "reads as" is the side it prints):
+
+| Written (the side after tokenizing) | Reads as |
+| --- | --- |
+| `/tmp/x.sock` | `/tmp/x.sock` —— a side containing `/` is a socket |
+| `C:/x.sock`, `"C:/x.sock"`, `C:/Users/me/x.sock`, `/C:/x.sock`, `//?/C:/x.sock` | `Bad forwarding specification`, **the whole config is rejected** —— the `:` is taken as the host / port separator |
+| `C:\x.sock`, `"C:\Users\x.sock"`, `[C:\Users\x.sock]`, `\\?\C:\x.sock` | the same (none of these has a `/`) |
+| `/tmp/a:b.sock`, `/run/a:b.sock` (the server side alike) | the same |
+| `[C:/x.sock]`, `[c:/x.sock]`, `[C:/Users/me/x.sock]`, `"[C:/my dir/x.sock]"`, `[/tmp/a:b.sock]` | the path inside the brackets, as-is |
+| `[/tmp/a\b.sock]`, `"[C:/a\b.sock]"` | `/tmp/a\b.sock`, `C:/a\b.sock` —— backslashes inside brackets stay |
+| `/tmp/a\b.sock`, `C\:/x.sock`, `/tmp/a\:b.sock` | `/tmp/ab.sock`, `C:/x.sock`, `/tmp/a:b.sock` —— outside brackets a `\` escapes the next character |
+| `[C:/a]b.sock]`, `[C:/a\]b.sock]` | error —— no further `]` inside the brackets |
+| `[x.sock]` | error (no `/` inside the brackets) |
+| `[C:/x.sock]:80` | read as the TCP `[host]:port` form and printed as `[C:/x.sock]:80` —— not a socket |
+| `~/x.sock`, `./x.sock`, `/c/Users/x.sock` | as-is (contains `/`, no `:`) |
+
+The local target side of `RemoteForward` reads the same way (`RemoteForward /var/run/r.sock [C:/x.sock]` reads as `/var/run/r.sock C:/x.sock`; without the brackets the whole config is rejected too).
+
 **What this library does**
 
 - 〔Decision〕**Parsing follows the rules above**: the patterns of `Host`, the conditions and arguments of `Match`, the paths of `Include` and the value of every setting all go through the same tokenizer.
@@ -604,6 +623,11 @@ Also, 9.5 does not recognize quotes or backslashes in `ProxyJump` and takes only
 - 〔Decision〕**A line with unbalanced quotes does not count**, instead of the whole config being rejected as OpenSSH does: this library's parser has never let one bad line make the whole config unusable
   (the same as when an `Include` cannot be read), but it does not guess at a half-read value either. If that line is a `Host` / `Match`, it opens a block that matches no host ——
   skipping just that line would drop the settings below it into the previous block (often `Host *`), applying them to every host; if it is an `Include`, it is not expanded.
+  **Skipped lines are reported to the caller**: `SshConfigFile.LoadAsync`'s `onSkippedLine` receives an `SshConfigSkippedLine` (the file's full path, the line number and the text, including lines in `Include`d files) ——
+  the same config is unusable in `ssh` altogether, so the caller must be able to tell the user (the host's import preview says so on every row). The plain-text `Parse` does not report.
+- 〔Decision〕**A socket side of a forward may use the bracket form** (`SshConfigForward`): enclosed in brackets as a whole with a `/` inside, the content is the path as-is, matching the observation above;
+  something like `[::1]:8080`, followed by a port, is still IPv6. 〔Limitation〕The backslash escape outside brackets (`C\:/x.sock`) is not followed: it is very rare in hand-written configs,
+  and it is read as-is as `C\:/x.sock` (on import the host finds it is not a full path and skips it as "a path unusable on this machine", with a note).
 - 〔Decision〕**`ProxyJump` uses the general tokenizer**, not 9.5's "first raw word": valid jump specs (`[user@]host[:port]`, comma separated) contain no quotes, backslashes or whitespace,
   so the two readings differ only on values that are invalid anyway; it is not worth a rule of its own.
 - 〔Decision〕**Writing one argument** (`SshConfigFile.TryFormatArgument`, used by the host's ssh_config export): write it so that both this library and `ssh` read back the original value,
@@ -615,6 +639,10 @@ Also, 9.5 does not recognize quotes or backslashes in `ProxyJump` and takes only
   - A value with a space, a tab or `#`, one starting with `=`, or an empty one is enclosed in double quotes as a whole (inside double quotes `\ ` stays as-is, so backslashes in a path with spaces need nothing extra).
   - A value containing a line break (`\r`, `\n`) or NUL cannot be written —— one ssh_config line cannot hold it, and forcing it in would turn the next line into another setting —— so `false` is returned and the caller decides what to do.
   - Values written by these rules (named pipes, UNC, ordinary Windows paths, paths with spaces and with a trailing backslash, values with quotes) were each read back with `ssh -G` of the version above and matched the original.
+- 〔Decision〕**When the host exports forwards, socket sides follow the observation above**: if the local side is a Windows drive path, its `\` become `/` first (`C:\Users\me\a.sock` and `C:/Users/me/a.sock`
+  are the same file on Windows, and ssh treats only a side containing `/` as a socket); a path containing `:` or `\` (local or server side) is enclosed in brackets as a whole; anything else is written as-is.
+  A path that would also contain `]` inside the brackets cannot be written, and that forward becomes an explanatory comment. 〔History〕Before 2026-10-31 `C:/x.sock` was written as-is: Win32-OpenSSH reported `Bad forwarding specification`,
+  and once the exported file was `Include`d into `~/.ssh/config` as the manual suggests, `ssh` could not start for any host.
 
 〔History〕Before 2026-10-31 this library recognized only double quotes, removed them only when they enclosed the whole value, and recognized neither single quotes nor backslashes:
 `IdentityAgent \\.\pipe\x` read as `\\.\pipe\x` while `ssh` read `\.\pipe\x` —— the host exported named pipes as-is, `ssh` could not use them, and this library read them back "fine", so nothing looked wrong;

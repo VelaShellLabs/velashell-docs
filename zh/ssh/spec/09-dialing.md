@@ -514,6 +514,7 @@ CBC、3des、group1 这些写进去也谈不成）、`NothingLeft`（删完不�
 | `8080` / `127.0.0.1:8080` / `[::1]:8080` | 监听端口（可带地址；IPv6 在方括号里） |
 | `*:8080` / `:8080` | 监听全部网卡 |
 | 含 `/` 的一头 | Unix 套接字路径（与 ssh 的判断一致） |
+| `[C:/x.sock]`、`[/run/a:b.sock]`（整个放进方括号、里面有 `/`） | 方括号里的那个路径，原样（§7.4：路径里有 `:` 时 ssh 只认这种写法） |
 | `RemoteForward 端口`（不给目标） | 远程动态转发（`07-forwarding.md` §4.6） |
 | 端口 `0` | 由系统（本地）或服务端（远程）分配，实际端口看转发器 |
 
@@ -594,6 +595,24 @@ Windows 上的命名管道与 UNC 路径正是在这里出过错（〔历史〕�
 `ssh_config(5)` 对前三个写着「The command string extends to the end of the line」，`KnownHostsCommand` 是观察到的。
 另外，9.5 对 `ProxyJump` 不认引号与反斜杠，只取第一个词（`ProxyJump "a b"` 读成 `"a`，`ProxyJump a\ b` 读成 `a\`）。
 
+**转发里的套接字路径**（分完词之后，`LocalForward` / `RemoteForward` 的那一头另有一层读法；同一版本的 `ssh -G` 实测，「读成」是它打印的那一头）：
+
+| 写法（分完词之后的那一头） | 读成 |
+| --- | --- |
+| `/tmp/x.sock` | `/tmp/x.sock` —— 含 `/` 的一头是套接字 |
+| `C:/x.sock`、`"C:/x.sock"`、`C:/Users/me/x.sock`、`/C:/x.sock`、`//?/C:/x.sock` | `Bad forwarding specification`，**整份配置不读** —— `:` 被当成主机与端口的分隔 |
+| `C:\x.sock`、`"C:\Users\x.sock"`、`[C:\Users\x.sock]`、`\\?\C:\x.sock` | 同上（这几种都没有 `/`） |
+| `/tmp/a:b.sock`、`/run/a:b.sock`（服务器那头同样） | 同上 |
+| `[C:/x.sock]`、`[c:/x.sock]`、`[C:/Users/me/x.sock]`、`"[C:/my dir/x.sock]"`、`[/tmp/a:b.sock]` | 方括号里的那个路径，原样 |
+| `[/tmp/a\b.sock]`、`"[C:/a\b.sock]"` | `/tmp/a\b.sock`、`C:/a\b.sock` —— 方括号里的反斜杠留着 |
+| `/tmp/a\b.sock`、`C\:/x.sock`、`/tmp/a\:b.sock` | `/tmp/ab.sock`、`C:/x.sock`、`/tmp/a:b.sock` —— 不在方括号里时 `\` 转义下一个字符 |
+| `[C:/a]b.sock]`、`[C:/a\]b.sock]` | 报错 —— 方括号里不能再有 `]` |
+| `[x.sock]` | 报错（方括号里没有 `/`） |
+| `[C:/x.sock]:80` | 按 TCP 的 `[主机]:端口` 读，打印成 `[C:/x.sock]:80` —— 不是套接字 |
+| `~/x.sock`、`./x.sock`、`/c/Users/x.sock` | 原样（含 `/`、没有 `:`） |
+
+`RemoteForward` 的本机目标那一头读法相同（`RemoteForward /var/run/r.sock [C:/x.sock]` 读成 `/var/run/r.sock C:/x.sock`，不加方括号同样整份配置不读）。
+
 **本库怎么做**
 
 - 〔决策〕**解析照上面的规则**：`Host` 的模式、`Match` 的条件与参数、`Include` 的路径、每个设置的值都经同一套分词。
@@ -603,6 +622,11 @@ Windows 上的命名管道与 UNC 路径正是在这里出过错（〔历史〕�
 - 〔决策〕**引号没配对的那一行不算**，不像 OpenSSH 那样整份配置不读：本库的解析向来不因为一行写错就让整份配置不可用
   （`Include` 读不到时也是这样），但也不去猜半截的值。那一行若是 `Host` / `Match`，开一个哪台主机都配不上的块 ——
   只跳过这一行的话，它下面的设置会落进上一个块（常常是 `Host *`），对所有主机生效；若是 `Include`，不展开。
+  **跳过的行报给调用方**：`SshConfigFile.LoadAsync` 的 `onSkippedLine` 收到 `SshConfigSkippedLine`（文件的完整路径、行号、原文，`Include` 进来的文件里的也报）——
+  同一份配置在 `ssh` 里根本用不了，调用方要能告诉使用者（宿主的导入预览每条都说一句）。纯文本的 `Parse` 不报。
+- 〔决策〕**转发里套接字那一头认方括号写法**（`SshConfigForward`）：整个放进方括号、里面有 `/` 的，方括号里的原样是路径，与上面观察到的一致；
+  `[::1]:8080` 这类后面还跟着端口的照旧是 IPv6。〔限制〕不在方括号里的 `\` 转义（`C\:/x.sock`）不跟：手写的配置里极少见，
+  按原样读成 `C\:/x.sock`（宿主导入时不是完整路径，照「本机用不了的路径」跳过并说明）。
 - 〔决策〕**`ProxyJump` 照通用规则分词**，不照 9.5 只取第一个原文词：合法的跳板写法（`[user@]host[:port]`，逗号分隔）里没有引号、反斜杠与空白，
   两种读法只在本来就无效的值上不同，不值得为它另开一条规则。
 - 〔决策〕**写出一个参数**（`SshConfigFile.TryFormatArgument`，宿主导出 ssh_config 用它）：写成本库与 `ssh` 读回都是原值的样子，
@@ -614,6 +638,10 @@ Windows 上的命名管道与 UNC 路径正是在这里出过错（〔历史〕�
   - 有空格、制表符或 `#`、以 `=` 开头、或者是空串时，整个值用双引号括起来（双引号里 `\ ` 原样，带空格的路径里的反斜杠不必多写）。
   - 值里有换行（`\r`、`\n`）或 NUL 时写不出来 —— ssh_config 的一行装不下，硬写进去下一行就成了另一条设置 —— 交回 `false`，由调用方决定怎么办。
   - 照这套规则写出的值（命名管道、UNC、普通 Windows 路径、带空格与末尾反斜杠的路径、带引号的值）都用上面那个版本的 `ssh -G` 逐个读回核对过，与原值一致。
+- 〔决策〕**宿主导出转发时，套接字那一头照上面的观察写**：本机这一头是 Windows 盘符路径时先把 `\` 换成 `/`（`C:\Users\me\a.sock` 与 `C:/Users/me/a.sock`
+  在 Windows 上是同一个文件，而 ssh 只把含 `/` 的一头当套接字）；含 `:` 或 `\` 的路径（本机或服务器那头）整个放进方括号；别的原样。
+  方括号里还有 `]` 的写不出来，那一条改写成说明注释。〔历史〕2026-10-31 之前原样写 `C:/x.sock`：Win32-OpenSSH 报 `Bad forwarding specification`，
+  按手册把导出的文件 `Include` 进 `~/.ssh/config` 之后，连哪台主机的 `ssh` 都起不来。
 
 〔历史〕2026-10-31 之前，本库只认双引号、而且只在整个值被双引号括住时才去掉引号，不认单引号与反斜杠：
 `IdentityAgent \\.\pipe\x` 读成 `\\.\pipe\x`，`ssh` 却读成 `\.\pipe\x` —— 宿主把命名管道原样导出，`ssh` 用不了，本库读回来又「没问题」，看不出错；
