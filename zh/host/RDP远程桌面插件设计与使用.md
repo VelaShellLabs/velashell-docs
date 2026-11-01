@@ -2,7 +2,7 @@
 
 English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md)。
 
-`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖 FreeRDP,不含原生代码,随包只有一份托管程序集,全 RID 通用。
+`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖 FreeRDP,不捆绑原生二进制,随包只有一份托管程序集,全 RID 通用。
 
 ## 架构与范围
 
@@ -41,22 +41,27 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 ### 剪贴板与文件传输
 
-剪贴板**默认关闭**。开启后远程桌面可以读取及替换本地剪贴板,包括文件。
+剪贴板默认关闭；授权开启后使用普通 Ctrl+C / Ctrl+V，保留文本和图像的自动同步，不提供手动发送/接收按钮。
 
-- 远程文本和图像自动接收。“接收剪贴板”显式接收远程文件/目录:先下载,再把本地文件引用放进系统剪贴板,供文件管理器粘贴。
-- “发送剪贴板”、桌面取得焦点及 Ctrl+V 发布本地内容。本地内容未变化时不因取得焦点而重复发布,避免覆盖刚复制的远程内容。文件和目录通过 RDP 剪贴板文件内容请求传输,与磁盘映射独立。
-- 下载保留在 `<插件 DataDirectory>/rdp-clipboard`。文件管理器粘贴仍引用它们时必须保留。累计缓存上限为 4 GiB,满后需手动清理;只删除已不再供剪贴板/粘贴使用的文件。接收操作不意味着文件已经放入用户的“下载”目录。
+- **Windows 远端→本机**：远端 Ctrl+C 只读取文件/目录描述并发布 OLE 虚拟文件。用户在本机 Explorer 的目标目录按 Ctrl+V，Explorer 请求对应 IStream 时才通过 RDP FILECONTENTS 读取内容；目标目录与落盘完全由 Explorer 管理。插件不监听全局快捷键、不猜目标路径、不预下载缓存。
+- **本机→远端**：焦点、窗口激活和远端 Ctrl+V 发布格式与名称/大小描述；目录枚举及安全源句柄准备不读文件内容。远端 Explorer 粘贴时发出 FILECONTENTS 请求才读取并发送字节，远端自行选择目标目录。Ctrl+V 仍等待格式列表 ACK；仅准备描述显示“等待粘贴”，字节数为零。
+- 下载/上传状态、字节数、当前文件及取消按钮全部放在现有**固定 24px 分辨率状态栏**内。无传输、单向或双向活动都不改变桌面可用高度；长文件名截断并提供提示。仅发布来源显示“可粘贴”；全部唯一区间交付后显示“文件内容已交付／已发送”，这是无需继续等待的终态，提示说明目标尚未报告复制结果，不代表目标磁盘持久化。远端上传协议没有最终复制确认；零内容来源在描述成功发送后即可进入“已发送”。本机 Shell 的成功 EndOperation（复制/移动效果）或非零 Paste Succeeded 才显示“复制完成（Shell 已确认）”；普通 DropEffect/TargetCLSID 不算完成确认。零字节、目录及 EOF 不要求额外内容块，未收到反馈仍可停留在“内容已交付”；失败/取消独立显示，新操作重置进度，迟到进度不会把终态改回“传输中”。状态结束不释放消费方持有的 IStream。
+- 新 Ctrl+C 或剪贴板换主只撤换后续粘贴的来源；已取得的流持有独立租约。协商 CAN_LOCK_CLIPDATA 后，通过 LOCK/UNLOCK 和 FILECONTENTS 的 clipDataId 保留远端源版本；对端锁定的本机源句柄也跨新复制保留。撤换的版本等流及数据对象消费完成/释放后解锁；当前仍发布的版本保留用于再次粘贴。显式取消、断开或释放视图会取消活动流。对端不支持锁时，不能保证跨远端源更换继续传输；源程序退出或提供者失效即使有锁也可能失败，关闭源文件夹的真实行为仍需现场验证。
+- 已发送的文件块请求单次响应等待 30 秒；只有响应超时才最多额外重试 2 次，分别可取消地退避 500/1000ms。重试保持同一源版本、文件索引、offset 与 length，每次使用新 streamId，迟到响应直接忽略；底栏显示“重试中”，只有成功交付的唯一区间计入进度。明确的 CB_RESPONSE_FAIL 没有瞬态分类，不重试；发送错误、显式取消、断开连接或无锁源版本变化也不重试。TCP 已提供可靠传输，服务器拒绝不是丢包证据；不承诺跨重连续传，不重传整文件、不重复写目标。
+- 仅未锁定的本机上传源句柄闲置 30 秒后释放，下次远端 Ctrl+V 重新准备。双向生产文件路径均不创建磁盘缓存、中转或临时文件，也不累积整文件内存；原生 IStream 用最多 256 KiB 块直接填入目标应用提供的缓冲区。进度是插件取得/提供的字节，不是目标落盘确认。目标文件未显示不能证明用了缓存，也不能断言 Explorer 会读完整个流后才创建文件；创建、刷新、半成品清理及目标应用自己的临时文件均由目标应用控制。旧版本 DataDirectory 下的 rdp-clipboard 缓存不会主动删除，以免破坏仍被引用的文件。
+- **Linux/macOS**：当前 Avalonia 集成没有可用的远端虚拟文件 provider，状态栏明确显示“远端文件粘贴仅支持 Windows”；不自动下载、不改成手动接收。文本、图像以及本机→远端按需文件传输不受影响。
 
-| 资源 | 上限 |
-| --- | --- |
-| 单次剪贴板载荷 | 16 MiB |
-| 图像尺寸 | 任一方向最多 8192 |
-| 解码图像像素 | 额外限制为 16 MiB,不能只满足编码后载荷上限 |
-| 文件描述符（含目录） | 4096 |
-| 单次文件传输 | 合计 1 GiB |
-| 保留的剪贴板缓存 | 4 GiB |
+Avalonia 12.1.4 的 `DataTransferItem.Set(format, Func<T>)` 支持延迟取值，但公开文件类型是 `IStorageItem`；应用自定义格式标识会转换，无法表达 Windows 原生 `FileContents` 的 `FORMATETC.lindex` 与 `TYMED_ISTREAM`。因此 Windows 使用独立 `WindowsVirtualFileClipboard`：OLE `IDataObject` 提供 `FileGroupDescriptorW`、带索引的内容流及复制效果。专用 STA 线程泵消息，流读取不阻塞 Avalonia UI 或 RDP 接收泵；关闭时不调用会强制物化内容的 OleFlushClipboard。所有权通过 OLE 身份和剪贴板所有者窗口检查；序列号用于避免发布时覆盖新的本地复制，不能把延迟渲染导致的序列号变化误判为换主。
 
-拒绝不安全文件名、路径穿越和符号链接。在这些限制内保留目录结构。剪贴板传输由插件管理 RDP 通道,不是宿主 SFTP 传输队列,也不代表授予全部宿主文件 API 权限。
+OLE 支持 Performed DropEffect、Logical Performed DropEffect、Paste Succeeded 的 DWORD 回调及 16 字节 TargetCLSID。SetData 成功复制反馈后遵守 STGMEDIUM 所有权：fRelease=true 才释放媒介，拒绝时仍由调用方持有。反馈不等同 EndOperation，也不关闭消费方流；成功 EndOperation 释放操作租约，流继续持有独立租约，失败则取消提取。这修复了此前任何已接受反馈都会过早结束操作并释放流的问题。普通 DV_E_FORMATETC / DV_E_DVASPECT 探测通过 PreserveSig 直接返回 HRESULT，避免每次抛出托管 COMException；必需格式失败仍是错误，不能与服务器明确 FILECONTENTS 拒绝混为一谈。CLIPBRD_E_CANT_OPEN 使用最多 8 次有界异步退避重试，重试期间仍检查发布序列号，避免覆盖新复制；不读回自己的虚拟剪贴板来触发循环竞争。
+
+版本 LOCK 在描述请求之前发送；clipDataId=0 是有效 ID，与不携带字段不同，LOCK 没有协议 ACK。按 [MS-RDPECLIP 文件内容请求处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeclip/d19de33e-4027-43de-b150-668ee21bced8)，携带 clipDataId 的请求必须读取对应锁定版本，无法满足则返回 CB_RESPONSE_FAIL，响应不提供内部原因分类。低敏日志按适用事件记录 operation、streamId、lindex、offset、requestLength、attempt、responseFlags、lockCapability、clipDataId、超时/重试以及 LOCK/UNLOCK、迟到响应，不记录文件内容或凭据。现场可按 streamId 对齐请求与失败，再按 operation/clipDataId 检查版本生命周期；现有日志尚不足以确定真实服务器拒绝的内部原因，不能把已复现的本机反馈生命周期缺陷认定为现场失败的唯一根因。
+
+FORMAT_DATA_RESPONSE 没有线上 request-id；本地附带的格式号不能作为独立响应身份。取消、超时或发送结果不明后保留原请求槽，后续接收在发新 LOCK/描述请求之前可取消地等待旧回复排空，不把迟到回复交给新请求。排空等待超过 30 秒会明确停止该连接的剪贴板共享，需重连恢复。格式列表通知按版本跳过过期队列项，迟到回复不再补投接收通知，同一已发布文件版本的重复接收不重新抓描述或读取内容。关闭先原子设置停止状态，再取消等待与流；不再启动 LOCK、描述请求或剪贴板发布，收尾等待工作队列及已登记的版本释放，每个 LOCK 至多一次 UNLOCK，重复释放调用等待同一收尾任务。新 Ctrl+C 仍仅撤换来源，既有流租约继续保留；明确关闭会取消所有流。正常取消不记运行失败警告，真实响应拒绝、超时和失步仍保留诊断。调试器的 first-chance OperationCanceledException 可以来自正常取消；没有调用栈的宿主 Infrastructure 日志不足以判定额外缺陷。
+
+继续保持 16 MiB 单次载荷、8192 图像边长、16 MiB 解码图像像素、4096 文件/目录描述符、合计 1 GiB 文件大小上限。拒绝路径穿越、不安全名称、大小写冲突、文件作为父目录和符号链接，保持目录层级。剪贴板与磁盘映射、宿主 SFTP 队列相互独立。文件块最大 256 KiB，通道按 1600 字节逐帧发送并释放发送锁；接收泵只做有界入队，队列溢出明确停止剪贴板共享。
+
+本机聚焦回归验证“复制零内容读取、请求才传输”、有界大 Read、多文件/目录、挂起流跨换主继续、版本锁/解锁、显式取消/断开/释放、OLE 完成回调、busy 重试及固定底栏几何。Windows 测试通过真实 COM vtable 调用 IDataObject 的 HGLOBAL 和 IStream 的读取、定位、释放，不更改用户系统剪贴板、不粘贴到用户目录。未连接公网服务器；真实 Explorer 与 RDP 服务器端到端粘贴仍需现场验收。
 
 ### 磁盘映射
 
@@ -89,11 +94,15 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release
 dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 ```
 
-唯一的平台相关处是 `UnixClipboardFile`:它在 Unix 上 P/Invoke 系统 `libc` 的 `open`/`fstat`,以 `O_NONBLOCK|O_NOFOLLOW` 安全打开用于本地→远程传输的剪贴板文件(避免 FIFO 阻塞、拒绝符号链接),Windows 用 .NET 文件 API。系统 libc 随操作系统提供,不是捆绑的原生库。
+Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 OLE/user32/kernel32。另一平台相关处是 `UnixClipboardFile`:它在 Unix 上 P/Invoke 系统 `libc` 的 `open`/`fstat`,以 `O_NONBLOCK|O_NOFOLLOW` 安全打开用于本地→远程传输的剪贴板文件(避免 FIFO 阻塞、拒绝符号链接),Windows 用 .NET 文件 API。系统 libc 随操作系统提供,不是捆绑的原生库。
 
 不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。CI 与发布只跑托管测试与打包。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
 
 ## 验证情况与剩余边界
+
+大文件阻塞的本地根因是下载长期持有发布操作锁、焦点发布等待占据键鼠队列，以及完整虚拟通道消息长期占据发送锁；原 cliprdr 队列丢写和 worker 吞异常也会造成请求无响应。聚焦回归覆盖挂起大文件响应时本地发布仍可完成、取消挂起内容请求且不创建本地缓存、进度字节和乱序重传、工作台状态/取消/画面刷新、焦点发布与键鼠队列分离、分片间输入与同通道消息顺序、队列溢出显式失败。磁盘 DriveCapability v2 的 DeviceData 已按 UTF-16LE 编码，8 字节 PreferredDosName 仍为 ASCII，并以三个名称长度的精确报文字节测试覆盖；尚未验收真实 Windows 对该磁盘声明的接受情况。上述大文件修复未连接公网服务器，真实 Windows 双向大文件和慢网体验仍需现场复验。
+
+剪贴板通道发送分片遵循协商的 `SHOW_PROTOCOL` 选项;接收分片先按 `CHANNEL_PACKET_*` 标志使用连接共享的 MPPC 历史解压,再重组交给剪贴板解析器。未协商长格式名时,ASCII 注册名使用 32 字节短名称字段,避免截断 `FileGroupDescriptorW`。本地回归覆盖压缩的空载荷格式列表 ACK、分片压缩的文件描述符、长/短格式名和双向文件请求。旧实现会把压缩 ACK 当作原始 PDU,解析失败后发布等待超时;这条故障路径已在本地复现。真实 Windows 服务器的双向文件 Ctrl+C/V 仍需复验,没有服务器通道抓包时不能断言其超时一定由压缩 ACK 引起。
 
 单元测试覆盖设置、剪贴板编解码、headless 界面与 CredSSP/NLA 的 ASN.1 编码。活连接互操作测试门控于 `VELA_RDP_TEST_TARGET`(CI 跳过),对真实服务器验证整条链路:
 
