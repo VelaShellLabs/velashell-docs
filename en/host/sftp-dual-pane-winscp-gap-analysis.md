@@ -13,7 +13,7 @@
 
 `feat/sftp-r2b` adds local/remote directory back and forward history (50 steps per pane instance), current-directory name filtering, F5/F2/Delete, filter Esc/Enter, local empty-file creation and system-default opening on double-click, persistent remote column widths and dual-pane ratios, and “Open terminal here” for SSH file panes. These items in the older gap descriptions below are no longer pending; double-click still does not mean transfer. See [keyboard shortcuts](keyboard-shortcuts.md) for focus conditions. Plugin protocol link fields, modification times and server digests are wired as well; creating symbolic links still has no contract.
 
-The terminal entry is limited to SSH profiles. Its directory command is still built for POSIX shells; non-POSIX shells and control characters in directory names remain gaps, so this is not complete cross-shell support.
+The terminal entry is limited to SSH profiles. The directory command follows the login shell: an ASCII-only folder name is single-quoted by the login shell's rules (fish by fish's); a name with control characters is not `cd`-ed into and a notice is shown; a name whose bytes in the session encoding include non-ASCII bytes is sent as printable ASCII only, `cd "$(printf '\ooo…')"` (fish: `cd (printf '…')`; tcsh / csh do not understand `$(…)` and only report a syntax error). Windows servers (cmd.exe / PowerShell) still get the single-quoted form, so the `cd` can fail.
 
 ## I. Conclusion First
 

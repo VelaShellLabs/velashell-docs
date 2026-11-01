@@ -46,8 +46,7 @@ address and proxy port, so without the label a row of tabs is impossible to tell
 - the name is tidied first: surrounding whitespace and quotes are trimmed, control characters and runs of whitespace
   collapse to one space, and anything past 128 characters is cut (never in the middle of a surrogate pair); an empty
   result counts as no label;
-- **only the tab changes**: when a saved profile is reused it is not renamed (a rename would be saved along with the
-  last-connected time), the status bar still shows the profile name / the real target, and the audit records are
+- **only the tab changes**: when a saved profile is reused it is not renamed, the status bar still shows the profile name / the real target, and the audit records are
   unchanged;
 - single-instance forwarding carries it along, and both ends tidy it.
 
