@@ -61,7 +61,7 @@
 
 命令必须以前台进程留在托管通道。不会解析/改写任意 shell 的 `&`、nohup、daemonize，自行脱离的进程不受监控，父进程退出不能证明它完成。显式 `monitoring=true` 的无限日志流仅本地等退出或 Stop，不自动唤醒/轮询模型。
 
-**提权是两层明确意图。** `elevated=true` 传不含 sudo 包装的实际命令，整条 root 范围包含管道和重定向；插件 Ask/ReadOnlyAuto 独立审批、不记首词批准，Bypass 只跳插件卡片，不能跳过宿主逐次可信确认（NOPASSWD 同样确认）。MCP 无 Handler 时 Ask/ReadOnlyAuto 拒绝，Bypass 可请求桌面确认。密码不经过插件或模型；不是用户终端自动填充。详见 [能力 API §3](07-capability-apis.md#3-velaremoteexec--远程执行s5s6)。
+**提权是两层明确意图。** `elevated=true` 传不含 sudo 包装的实际命令，整条 root 范围包含管道和重定向；插件 Ask/ReadOnlyAuto 独立审批、不记首词批准，Bypass 只跳插件卡片，不能跳过宿主逐次可信确认（NOPASSWD 同样确认）。对外 MCP 没有审批卡：提权不在插件层拒绝，三种模式都直接请求宿主的桌面确认与密码输入（宿主那一关伪造不了、跳不过），其余写操作在 Ask/ReadOnlyAuto 下仍拒绝；initialize 的说明会告诉外部 agent 用 `elevated=true`、弹窗期间任务为 `AwaitingUser`。普通命令里直接写 `sudo` 时独立通道没有终端，sudo 一要密码就失败，回执的 `hint` 字段指回 `elevated`（不自动改写：整条换成 root 会改变 `make && sudo make install` 这类命令的语义）。密码不经过插件或模型；不是用户终端自动填充。详见 [能力 API §3](07-capability-apis.md#3-velaremoteexec--远程执行s5s6)。
 
 **拒绝是运行级停止边界。** 插件审批返回 false/缺少 Handler，或宿主返回 AuthenticationCancelled（含拒绝 root 确认/取消密码），都会标记当前 run 已拒绝；模型请求前、工具调用前及后台终态续接检查后以 `ExecutionDenied` 强制暂停，桌面/Bridge 显示本地化暂停原因，不依赖模型遵守“不要重试”字符串。桌面/Bridge 新用户轮次会创建新 run，不能在已拒绝的原 run 内继续副作用。对外 MCP 是例外：每客户端 McpToolHost 仍只有一个固定 scope（后台任务才查得到），但拒绝只是那一次调用的结果，不封住这条连接；后续工具照常可用（例如只读放行挡下一条写命令后仍能 `list_sessions`），停不停由 MCP 客户端决定。
 
