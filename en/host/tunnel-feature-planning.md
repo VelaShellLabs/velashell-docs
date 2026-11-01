@@ -132,11 +132,14 @@ read nothing back.
 ### Unix domain socket forwarding (2026-10-24)
 
 - Following the combinations the library supports: in a **local forward** each side may be a socket (local TCP / local socket → server TCP /
-  server socket, all four work); a **remote forward** only "sockets on both sides"; dynamic and remote dynamic have no socket form.
+  server socket, all four work); in a **remote forward** each side may be one as well (server TCP / server socket → local TCP / local socket,
+  all four work; since 2026-10-31 — before that the library only exposed "sockets on both sides", see
+  [SSH spec 07 §4.4](../ssh/spec/07-forwarding.md)); dynamic and remote dynamic have no socket form.
 - No new type: `TunnelConfig` gains two optional fields, `LocalSocketPath` / `RemoteSocketPath` (null = use host and port), so the shape of
-  the existing types does not change. A remote forward with only one side given is not built rather than quietly falling back to a port.
-- The form: local / remote forwards gain a "Use Unix domain sockets" checkbox that shows two path fields (both required for a remote
-  forward); the side with a path greys out its port, host and "lock to 127.0.0.1". Local paths must be absolute and at most 107 bytes in
+  the existing types does not change. 〔History〕From 2026-10-24 to 10-31 a remote forward with only one side given was not built
+  ("either ports on both ends or Unix sockets on both ends").
+- The form: local / remote forwards gain a "Use Unix domain sockets" checkbox that shows two path fields (each may be left blank, and a blank
+  side keeps using its port); the side with a path greys out its port, host and "lock to 127.0.0.1". Local paths must be absolute and at most 107 bytes in
   UTF-8 (103 on macOS); server paths must start with `/`.
 - Before listening locally the path is prechecked: if a file is already there the tunnel is not built and **the file is not deleted for the
   user** (most likely a leftover from last time, but it may be another program's socket), matching the library's default

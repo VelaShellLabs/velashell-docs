@@ -136,6 +136,7 @@ ISftpService（对外唯一契约，UI 侧零改动）
 > 但走的是 REST + RETR（FluentFTP 的 `OpenRead(path, Binary, restart, fileLen)`），不是 `DownloadStream(stopPosition)`。
 > 上传：SIZE 取远端此刻的长度，读回远端末尾那一段与源同一段比对，正好读到远端末尾、连接照常复用；
 > 下载：以本地半截此刻的长度为准读回远端同一段，读到文件中间就放手，那条连接作废，续传时多一次重新登录。没有可续的半截就整份传。
+> 服务器不认 REST / APPE（回 500 / 502 / 504）时抛它的派生类 `VelaSftpResumeUnsupportedException`（2026-11-01 起），目标未被碰过：规划时探到的半截照旧交回同名冲突策略；传输失败重试续的是这次传输自己写下的半截时，从头整份重传。
 
 ### 3.6 能力位：不能再假设"什么都能做"
 

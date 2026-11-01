@@ -16,7 +16,7 @@
 - **形态**:与 Docker 面板同一个路数 —— 清单只贡献一条命令(`contributes.commands` + `onCommand:velashell.mongo.open`),
   用户在命令面板(Ctrl+P)里点「MongoDB: 打开 MongoDB 工作台」才装载本程序集与驱动,开一个文档面板;进程内装载。
   **连接由插件自己管**:已保存的连接列在对象树的根上,新建 / 编辑是设计稿 10 的对话框,MongoDB 不出现在宿主的
-  新建连接窗口与会话树里。只用 SDK 2.0.6 已有的能力面(`minSdkVersion: "2.0.4"`:`ISessionsApi` 要 2.0.2,工作台页签图标 `PanelOptions.Icon` / `PluginIcon` 要 2.0.4)。
+  新建连接窗口与会话树里。只用 SDK 2.0.6 已有的能力面(`minSdkVersion: "2.0.4"`:`ISessionsApi` 的「打开已保存的会话」要 2.0.1,工作台页签图标 `PanelOptions.Icon` / `PluginIcon` 要 2.0.4)。
 - **引擎**:官方驱动 MongoDB.Driver 3.x(Apache-2.0),随插件目录分发;驱动异常在出口翻成一句人话并分好类
   (连不上 / 认证失败 / 证书不受信任 / 配置写错 / 跳板没建起来),失败卡片按类给按钮。
 - **界面骨架**:Navicat 的对象树 + 大图标工具栏 + 对象标签页(对象 / 集合 / 查询 / 管道 / GridFS / 设计 / 监控 / 慢查询 / 用户),

@@ -514,23 +514,36 @@ local.ConnectionClosed += (_, e) => log.Info($"{e.Target} 传了 {e.BytesSent + 
 默认听的是**两个环回**（`127.0.0.1` 与 `::1`，同一个端口）：把 `localhost` 先解析成 `::1` 的客户端也连得上，
 `[::1]` 那个端口也不会被同机别的进程抢去（见 [spec/07 §2.3](spec/07-forwarding.md)）。
 
-### 反方向的 Unix 套接字（`ssh -R /远端:/本机`）
+### 反方向的 Unix 套接字（`ssh -R`）
+
+远程转发的两头各自可以是端口或套接字（[spec/07 §4.4](spec/07-forwarding.md)）：服务端那头在参数里设 `ListenSocketPath`，
+本机那头用 `StartToUnixSocketAsync`。
 
 ```csharp
-await using RemotePortForwarder sock = await RemotePortForwarder.StartUnixSocketAsync(
+// -R /tmp/docker.sock:/var/run/docker.sock —— 两头都是套接字
+await using RemotePortForwarder sock = await RemotePortForwarder.StartToUnixSocketAsync(
     conn,
-    targetSocketPath: "/var/run/docker.sock",   // 本机的
-    remoteSocketPath: "/tmp/docker.sock",       // 服务端要建的
-    cancellationToken: ct);
+    "/var/run/docker.sock",                                              // 本机的
+    new RemotePortForwardOptions { ListenSocketPath = "/tmp/docker.sock" },   // 服务端要建的
+    ct);
 
-Console.WriteLine(sock.RemoteEndpointName);   // 两种形态统一的说法
+// -R 2375:/var/run/docker.sock —— 服务端的端口回连到本机的套接字
+await using RemotePortForwarder port = await RemotePortForwarder.StartToUnixSocketAsync(
+    conn, "/var/run/docker.sock", new RemotePortForwardOptions { BindPort = 2375 }, ct);
+
+// -R /run/user/1000/pg.sock:127.0.0.1:5432 —— 服务端的套接字回连到本机的端口
+await using RemotePortForwarder pg = await RemotePortForwarder.StartAsync(
+    conn, "127.0.0.1", 5432, new RemotePortForwardOptions { ListenSocketPath = "/run/user/1000/pg.sock" }, ct);
+
+Console.WriteLine(sock.RemoteEndpointName);   // 端口与套接字统一的说法：bind:port 或路径
 ```
 
 **走套接字而不是端口，远端机器上的其它用户就看不到也连不上** —— 谁能连由文件权限说了算，
 而一个 `-R 2375:...` 的端口是同机所有人都能连的。
 
 > 服务端会在它自己的文件系统上创建那个套接字文件。路径已存在时 OpenSSH 会拒绝，
-> 所以这里的失败多半是「上一次没清干净」。
+> 所以这里的失败多半是「上一次没清干净」。本机那头的路径在起转发时就查（空的、太长的当场报），
+> 有没有人在听要等回连来了才知道。
 
 ### X11 转发（`ssh -X` / `-Y`）
 
@@ -668,6 +681,11 @@ Console.WriteLine(cfg.IdentityFiles);  // 可能有多条
 
 **库只解析，不替你决定。** 解出来的结果交给调用方 —— 库自作主张去读
 `~/.ssh/config` 会让「为什么连的不是我写的那台机器」变成一个很难查的问题。
+
+值的分词照 OpenSSH 的读法（引号、反斜杠转义、注释，见 [`spec/09-dialing.md`](spec/09-dialing.md) §7.4）：`cfg.First("IdentityAgent")` 交出的
+就是 `ssh -G` 读出来的那个值。反过来要把一个值写进配置（导出、生成配置文件），用 `SshConfigFile.TryFormatArgument` ——
+本库与 `ssh` 读回来都是原值（`\\.\pipe\x` 写成 `\\\\.\pipe\x`）；值里有换行写不出来时它交回 `false`。
+引号没配对的行本库只跳过那一行（`ssh` 却整份配置不读）：要告诉使用者的，给 `LoadAsync` 传 `onSkippedLine`，拿到文件、行号与原文。
 
 决定用它的话，一步变成可以直接拿去连的参数：
 

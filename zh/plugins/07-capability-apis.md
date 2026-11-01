@@ -52,6 +52,11 @@ public interface IRemoteFs
 传输错峰(插件流量入低优先级队列)、进度回调节流(≥100ms;满格(100%)那一帧只在传输成功后补发一次,失败不发)——吸取
 大文件传输卡顿的历史教训,插件流量不允许灌爆 UI 调度器。
 
+条目上的链接字段(SDK 2.1.3,宿主已接上):`ListAsync` / `StatAsync` 返回的 `RemoteFileEntry` 带 `IsSymbolicLink`
+(按 lstat 判断)与 `LinkTarget`(readlink 原文,可以是相对路径);`IsDirectory` / `Size` / `LastModified` 描述链接**目标**,
+断链保留链接自身的属性。进程内与隔离进程(`fs/list`、`fs/stat` 的 JSON)都带上,旧宿主或旧数据缺这两个字段时读成「不是链接」。
+见 [SDK §3.3d](../sdk/sdk-reference.md#33d-插件协议的文件能力补口sdk-213)。登记之前就被明确拒绝的传输见 §2.1 的 `PluginTransferRejectedException`。
+
 ### 2.1 独立上传任务（SDK 2.1.1）
 
 `IRemoteFsApi` 增加 `SupportsTransferOperations` 和 `StartUploadAsync` / `GetTransferAsync` / `WaitTransferAsync` / `CancelTransferAsync` / `ResumeTransferAsync`，完整契约见 [SDK §3.3b](../sdk/sdk-reference.md#33b-独立上传任务sdk-211)。登记之前就被明确拒绝的（源不存在、Windows 共享/锁冲突、额度满）以 `PluginTransferRejectedException` 交回（契约随 SDK 2.1.3 发布，宿主已接上；见 [SDK §3.3e](../sdk/sdk-reference.md#33e-传输启动前被拒sdk-213)）。它与上方同步传输不同：启动返回任务快照，内容继续由宿主按流上传，单次查询/等待超时不取消传输，不把旧两小时 RPC 时限当执行死线。
@@ -63,6 +68,8 @@ public interface IRemoteFs
 新上传 API 使用独立的宿主可信确认与单任务授权租约：展示插件、真实会话、本地源、**文件大小**、远端目标及覆盖策略，只有批准当前任务或拒绝，不沿用终端/开会话授权。缺少授权闸/提示器/桌面窗口时拒绝；等待确认不阻塞启动 RPC。撤销插件权限会取消待批准及活动上传、阻止后续提交并隐藏新的任务元数据，已进入提交的不确定结果仍按 `Unknown` 处理，不承诺回滚。AI 的 `Bypass` 只跳插件审批，不能绕过该宿主确认。
 
 进度采用 64 位字节计数、单调快照序号、执行代次和明确终态。已写满仍可能正在远端收尾；只有 `Succeeded` 是成功。远端临时文件是目标同目录下的 `.vela-up-<16 位十六进制>`；开始写之前先做提交预检，要覆盖而服务端没有 `posix-rename`、不覆盖而目标已存在时直接失败（`ErrorCode` 分别为 `not-supported` / `commit-rejected`），不传完一整份才被拒，提交仍是唯一权威。覆盖上传的临时文件一建出来就按被替换普通文件的 0777 权限位新建（服务端照常减 umask；目标是个条目却读不出模式时按 0600；读不到目标就按服务端默认，提交时照旧把关），写入期间不比原文件宽；setuid / setgid / 粘滞位与属主仍由提交补上。覆盖提交把被替换普通文件的权限位带到新文件上，属主尽力而为，setuid / setgid 只在属主属组对上之后才带；带不过去又会放宽权限时拒绝提交、目标不动。取消必须指定执行代次，恢复必须重新审批、核对连接身份/源对象/检查点及最终提交结果；不能自动重传不确定副作用。新方法默认明确不支持，能力位 false 时不退回同步大文件上传。`ErrorCode` `insufficient-space`：Linux / macOS 的源快照所在卷空间不够（详见 [自动化与 AI §1.6](11-automation-and-ai.md)）。停止宽限期 30 秒；断线记 `Failed` / `session-disconnected`，表示确认停写、目标没写入。这里的契约不等于通用权限 Broker 已实现，实际可用权限与生命周期边界必须按宿主实现说明解读。
+
+只撤「还没批准」的传输用条件撤回（SDK 2.1.4）：`SupportsTransferWithdraw`（默认 false，与上传、下载能力各自独立）与 `WithdrawPendingTransferAsync(transferId, expectedGeneration, ct)`。判定与撤下由宿主同一步完成，与批准生效先到者赢，结论为 `PastApproval`（批准已生效，什么都不改）/ `Withdrawn`（撤下了，以 `Cancelled` 收尾、什么都没写）/ `AlreadyEnded`（批准之前已因别的原因收尾）；不支持的宿主明确抛 `NotSupportedException`，不退化成 `CancelTransferAsync`。当前宿主上传与下载都已支持，完整契约见 [SDK §3.3f](../sdk/sdk-reference.md#33f-条件撤回sdk-214)。
 
 ### 2.2 独立下载任务（SDK 2.1.2）
 

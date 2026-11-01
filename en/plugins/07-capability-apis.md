@@ -44,6 +44,8 @@ public interface IRemoteFs
 
 Host-side protections: a per-plugin limit on concurrent SFTP operations (4 by default), staggering of bandwidth use against the user's foreground transfers (plugin traffic enters a low-priority queue), and throttled progress callbacks (≥100 ms; the full 100% frame is sent once, only after the transfer succeeds, and never on failure). This incorporates the historical lesson of large-transfer stalls: plugin traffic must not flood the UI scheduler.
 
+Link fields on entries (SDK 2.1.3, now wired in the host): the `RemoteFileEntry` values returned by `ListAsync` / `StatAsync` carry `IsSymbolicLink` (decided by lstat) and `LinkTarget` (the readlink text verbatim, possibly relative); `IsDirectory` / `Size` / `LastModified` describe the link **target**, and a dangling link keeps the link's own attributes. Both in-process and isolated modes carry them (in the JSON of `fs/list` and `fs/stat`), and an older host or older data without the two fields reads as "not a link". See [SDK §3.3d](../sdk/sdk-reference.md#33d-file-capabilities-for-plugin-protocols-sdk-213). Transfers explicitly refused before registration are covered by `PluginTransferRejectedException` in §2.1.
+
 ### 2.1 Independent upload jobs (SDK 2.1.1)
 
 `IRemoteFsApi` adds `SupportsTransferOperations` and `StartUploadAsync` / `GetTransferAsync` / `WaitTransferAsync` / `CancelTransferAsync` / `ResumeTransferAsync`; see [SDK §3.3b](../sdk/sdk-reference.md#33b-independent-upload-jobs-sdk-211) for the complete contract. Unlike synchronous transfers above, start returns a snapshot while the host continues streaming content. A query/wait deadline does not cancel the transfer, and the legacy two-hour RPC limit is not an execution deadline. Refusals made before a job is registered (source missing, Windows sharing/lock conflicts, quota full) come back as `PluginTransferRejectedException` (SDK 2.1.3, implemented by the host; see [SDK §3.3e](../sdk/sdk-reference.md#33e-transfers-refused-before-they-start-sdk-213)). Insufficient snapshot space remains a registered job's `Failed / insufficient-space` snapshot. Plugin protocols get the optional `IProtocolLastWriteTime` (setting modification times) and `IProtocolChecksum` (server-provided digests only, `RemoteChecksumAlgorithm`) and `RemoteFileEntry.IsSymbolicLink` / `LinkTarget` in SDK 2.1.3, now wired in the host ([SDK §3.3d](../sdk/sdk-reference.md#33d-file-capabilities-for-plugin-protocols-sdk-213)).
@@ -55,6 +57,8 @@ Local source parent-directory aliases are resolved component by component. Appro
 The new upload API uses dedicated trusted host confirmation and a per-job authorization lease. It displays the plugin, actual session, local source, **file size**, remote destination and overwrite policy, with only Allow This Job or Deny; terminal/session-opening grants never carry over. Missing gate, prompt or desktop window means rejection, and waiting for confirmation does not block the start RPC. Plugin permission revocation cancels pending/active uploads, prevents subsequent commit and withholds new job metadata. An uncertain result after commit has begun still means `Unknown`, not a rollback promise. AI `Bypass` skips only plugin approval, never this host confirmation.
 
 Progress uses 64-bit byte counters, monotonic snapshot sequence, execution generations and explicit terminal states. Full bytes can still mean remote finalization; only `Succeeded` means success. The remote temporary file is `.vela-up-<16 hex digits>` in the destination's directory. Before writing, a commit preflight fails a commit that is bound to be refused (overwrite without server `posix-rename`, or no-overwrite with an existing destination; `ErrorCode` `not-supported` / `commit-rejected` respectively) instead of transferring the whole file first; the commit itself remains the only authority. The temporary file of an overwriting upload is created with the replaced regular file's 0777 permission bits from the start (the server applies its umask as usual; 0600 when the destination exists but reports no mode; the server default when the destination cannot be read, with the commit still checking), so it is never wider than the original while being written; setuid / setgid / sticky bits and the owner are still applied by the commit. An overwrite commit carries the replaced regular file's permission bits over to the new file, the owner on a best-effort basis, and setuid / setgid only once owner and group match; if that cannot be done without widening the permissions, the commit is refused and the destination left untouched. Cancellation targets a generation; resume requires fresh approval and validation of connection identity, source object, checkpoint and final commit outcome. Never automatically replay an uncertain side effect. New methods explicitly default to unsupported: capability false must not fall back to synchronous large-file upload. `ErrorCode` `insufficient-space`: the volume holding the Linux / macOS source snapshot has too little space (see [Automation and AI §1.6](11-automation-and-ai.md)). The stop grace period is 30 seconds; a disconnect ends as `Failed` / `session-disconnected`, meaning the write is confirmed stopped and the destination unwritten. This contract does not implement the universal permission Broker; interpret actual authorization and lifecycle boundaries according to the host implementation.
+
+To withdraw only transfers whose approval has not taken effect, use conditional withdrawal (SDK 2.1.4): `SupportsTransferWithdraw` (default false, independent of the upload and download capabilities) and `WithdrawPendingTransferAsync(transferId, expectedGeneration, ct)`. The host decides and withdraws in one step, first come first served against the approval taking effect; the outcomes are `PastApproval` (approval already in effect, nothing changed) / `Withdrawn` (withdrawn, ends `Cancelled` with nothing written) / `AlreadyEnded` (ended for another reason before approval). Unsupported hosts throw `NotSupportedException` rather than degrading into `CancelTransferAsync`. The current host supports it for uploads and downloads; see [SDK §3.3f](../sdk/sdk-reference.md#33f-conditional-withdrawal-sdk-214).
 
 ### 2.2 Independent download jobs (SDK 2.1.2)
 
@@ -142,6 +146,32 @@ public interface IPluginSettings   // Permission: settings.own (normal)
 }
 ```
 
+## 6b. vela.timeSeries, Private Time-Series Store (Implemented)
+
+```csharp
+public interface ITimeSeriesApi          // Permission: comes with storage.private, no separate escalation
+{
+    Task<ITimeSeries> OpenAsync(TimeSeriesDefinition definition, CancellationToken ct);  // Create the measurement (idempotent)
+    Task<IReadOnlyList<string>> ListAsync(CancellationToken ct);
+    Task<bool> DropAsync(string name, CancellationToken ct);
+}
+public interface ITimeSeries
+{
+    Task WriteAsync(TimeSeriesPoint point, CancellationToken ct);
+    Task WriteManyAsync(IEnumerable<TimeSeriesPoint> points, CancellationToken ct);
+    Task<IReadOnlyList<TimeSeriesPoint>> QueryAsync(TimeSeriesQuery query, CancellationToken ct);
+    Task<long> CountAsync(string field, TimeSeriesQuery query, CancellationToken ct);
+    Task<IReadOnlyList<string>> DistinctTagValuesAsync(string tag, CancellationToken ct);
+    Task<int> DeleteAsync(IReadOnlyDictionary<string, string>? tags, CancellationToken ct);
+}
+```
+
+It lives in the host's single SonnetDB; the physical measurement name is `pts_<plugin namespace>_<short name>`, the
+namespace is derived from the plugin id (the plugin cannot choose it), and uninstalling drops everything under the prefix.
+Semantics and quotas are in [dev-guide §5.2b](../templates/dev-guide.md#52b-timeseries-private-time-series-store); isolated processes are routed to the same
+implementation through the `ts/*` methods (see 05). **Plugins never connect to the database directly and get no SQL entry
+point** — external input such as tag values is always parameterized, and column names are limited to `[a-z0-9_]`.
+
 ## 7. vela.ui, UI (See 08)
 
 Permission: `ui.contributions` (normal). Includes commands/menu items/status-bar dynamic updates, VelaUI surfaces (panels and document pages), dialogs (Message/Confirm/Input/QuickPick), in-app notifications (rate limit: ≤6 per plugin per minute), and progress indicators (in the status bar or notifications).
@@ -207,3 +237,52 @@ Batch divisions correspond to the milestones in 14:
 | C-8 | Contract test suite: for every domain, “permission matrix × normal/boundary/cancellation/disconnection” cases (connects to 13) | Each batch | Ongoing |
 
 Acceptance: the domains required by S1 (C-2/C-3) support the image-viewer sample end to end. Once C-5 is complete, all domains for S3/S4/S5 are available.
+
+---
+
+## protocols — plugin-provided remote file protocols (apiLevel 1, landed 2026-08)
+
+Once a plugin registers a protocol, it is a first-class citizen on the connection page alongside the built-in ones; the host
+routes that protocol's sessions to the plugin's `IProtocolFileSystem`, and the dual-pane browser, transfer queue, rate limiting,
+drag and drop and conflict policy are all reused unchanged.
+
+| Member | Notes |
+| --- | --- |
+| `IProtocolsApi.Register(descriptor, fileSystem)` | Registers a protocol; disposing the return value unregisters it. The protocol id must equal the plugin id or start with it |
+| `IProtocolsApi.GetTransferOptionsAsync()` | Reads the host's current bandwidth cap and timestamp policy (a global user preference, not something each protocol should configure separately) |
+| `IProtocolFileSystem` | Connect/disconnect + list/stat/read/write/delete/rename/copy/permissions + protocol actions, all taking the host-assigned opaque session key as the first argument |
+| `ProtocolDescriptor` | Tab name, default port, relabelling of the three standard fields, a **declarative settings form**, **declarative context-menu actions**, feature bits, the field the certificate fingerprint is written back to |
+| `ProtocolFeatures` | `Permissions` / `ServerSideCopy` / `ResumeUpload` / `ResumeDownload` / `AnonymousAccess` / `CertificateTrust` |
+| Exception family | `ProtocolAuthenticationException` / `ProtocolCertificateTrustException` / `ProtocolConnectionException` / `ProtocolUnsupportedException` |
+| Manifest contribution | `contributes.protocols` + lazy activation via `onProtocol:<protocol id>` |
+| Optional interfaces implemented alongside (SDK 2.1.3, now wired in the host) | `IProtocolLastWriteTime` (setting modification times), `IProtocolChecksum` (server-provided digests only, `RemoteChecksumAlgorithm`); `RemoteFileEntry` gains `IsSymbolicLink` / `LinkTarget`. See [SDK §3.3d](../sdk/sdk-reference.md#33d-file-capabilities-for-plugin-protocols-sdk-213) |
+| `PluginManifestReader.IsValidProtocolId` | The authoritative protocol-id check (all-lowercase `[a-z0-9.-]`, ≤128, must start with the plugin id); shared by manifest validation and run-time registration so the two cannot drift apart |
+
+Design choices:
+
+- **The settings form is a declarative schema, not a control tree.** The connection dialog is a core host surface whose layout,
+  theming, validation and localization the host owns; the plugin only describes "which parameters it needs". This is not the
+  general declarative UI (VelaUI) that blueprint 08 explicitly rules out — that is arbitrary UI, this is a closed-shape parameter table.
+- **Context-menu actions are declarative too**: the menu has to be drawn on the frame the right button goes down, it cannot wait
+  for an asynchronous round trip.
+- **`inProcess` only**: a protocol is a high-frequency channel on which the host calls back into the plugin (streaming reads
+  included), while isolated-process RPC only carries the plugin → host direction. Opening it up needs bidirectional requests,
+  which is follow-up work for 05. In an isolated process `IProtocolsApi` is a degraded implementation that throws on register,
+  not null.
+- **Re-registering the same id = replacement**: replacing it with a **different** implementation raises one unregistration
+  (the host uses it to close the sessions under the old implementation), replacing it with the same instance (a plugin
+  re-registering to refresh localized strings) does not — otherwise switching the UI language would drop every tab the user
+  has open. Disposing the old handle after it has been replaced is a no-op.
+- **The registry never calls back into the plugin under its lock**: event subscription and unsubscription always happen outside
+  it. The UI thread holds that lock too, and a plugin doing a blocking `Dispatcher.Invoke` in an event accessor would deadlock.
+
+---
+
+## ui addendum: `IPluginPanel.ActivateAsync` (apiLevel 1, added 2026-08)
+
+Brings the panel to the front: in window form it restores from minimized and calls `Activate()`, in document form it switches
+to that tab. Idempotent, callable from any thread, and a no-op once the panel is closed.
+
+Why it was added: a plugin's convention for "the same target triggered again" is to focus the one already open rather than open
+another, but the SDK only had `CloseAsync`, which cannot express "focus" — so plugins could only `return`, and a same-sized
+`CenterOwner` window happens to cover the previous one exactly, so what the user saw was "I clicked and nothing happened".

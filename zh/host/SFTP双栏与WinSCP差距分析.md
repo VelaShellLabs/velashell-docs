@@ -13,7 +13,7 @@
 
 `feat/sftp-r2b` 已补齐：本地/远端目录后退与前进（各 50 步、仅面板实例内）、当前目录名称过滤、F5/F2/Delete、过滤框 Esc/Enter、本地新建空文件与双击系统打开、远端列宽和双栏比例跨重启记忆，以及 SSH 文件栏右键「在此处打开终端」。下文旧差距描述中的这些项目不再是待办；双击仍不是传输快捷方式。键位与焦点条件见[快捷键参考](快捷键参考.md)。插件协议的链接字段、修改时间和服务器摘要也已接入，创建符号链接仍无契约。
 
-终端入口仅面向 SSH 配置；当前切目录命令仍按 POSIX shell 构造，非 POSIX shell 与目录控制字符处理仍需补齐，不能视为跨 shell 完整支持。
+终端入口仅面向 SSH 配置。切目录命令按登录 shell 构造：纯 ASCII 目录名按登录 shell 的单引号规则转义（fish 按 fish 的规则）；带控制字符的目录名不 `cd`、只提示一句；按会话编码含非 ASCII 字节的目录名改发只含可打印 ASCII 的 `cd "$(printf '\ooo…')"`（fish 为 `cd (printf '…')`，tcsh / csh 不认 `$(…)`、只报语法错）。Windows 服务器（cmd.exe / PowerShell）仍按单引号原样发，`cd` 可能失败。
 
 ## 一、先看结论
 
@@ -356,7 +356,7 @@ WinSCP 的 Commander 界面两栏都可以指向远端、FileZilla 可以开两�
 
 - **重试回归续修（2026-10-28）**：FTP 单文件 stat 与打开读流在持租约时先切 Binary 再取 SIZE，不把 LIST/MLST 的显示大小和另一种传输模式下的大小同时当精确真值；SIZE 不支持则使用既有未知长度语义，完成回复校验不取消。源读取失败不被目标 Flush/CLOSE 的次异常覆盖，另保留目标 durable 水位供续传记账。开启传输日志后，失败尝试在退避前写入脱敏结构化 `ATTEMPT_FAILED` 记录（错误类型链/数值，不写异常消息与服务器正文），重试后成功仍可追查。0B 进度可能只是小文件仍在 SFTP 缓存、首个 WRITE 尚未确认，不代表源未读取。正常批量回归必须检查首次成功与 RETR/OPEN 次数，不能只看最终哈希或把 mock 目标当真实 SFTP 互操作。
 
-- **CI 跨平台续修（2026-10-29）**：已知 binary SIZE 的下载若以 `426` 中断且实际长度不符，保留 `RemoteTransferLengthException` 及预期/实际字节数；FluentFTP 在关闭数据流时抛出的嵌套命令异常不能掩盖该诊断。本地目标写入异常与取消仍优先，不改变 busy retry 或未知长度语义。环回 FTP 测试端的控制连接设置 `NoDelay`，避免 Linux 的 Nagle/延迟 ACK 给每个文件叠加约 40 ms；保留 2000 文件覆盖与默认 60 秒测试超时。
+- **CI 跨平台续修（2026-10-29）**：已知 binary SIZE 的下载若以 `426` 中断且实际长度不符，保留 `RemoteTransferLengthException` 及预期/实际字节数；FluentFTP 在关闭数据流时抛出的嵌套命令异常不能掩盖该诊断。本地目标写入异常与取消仍优先，不改变 busy retry 或未知长度语义。环回 FTP 测试端的控制连接设置 `NoDelay`，避免 Linux 的 Nagle/延迟 ACK 给每个文件叠加约 40 ms；保留 2000 文件覆盖与默认 60 秒测试超时。2026-11-01 起：`426` 中断改报可重试的 `VelaFtpTransferInterruptedException`（控制连接仍应答 NOOP 时；不应答的按掉线报连接错误），带预期 / 实际字节数的 `RemoteTransferLengthException` 挂在它的内层，诊断不丢；服务器回 226 而字节不够的仍直接报 `RemoteTransferLengthException`、不重试。
 
 ### 8.2 已知限制
 

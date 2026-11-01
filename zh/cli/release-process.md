@@ -1,23 +1,24 @@
-# 发版流程(CLI + 构建支持包)
+# 发版流程(CLI)
 
-> 本篇只讲**本仓库**怎么发版。契约 SDK 见
+> 本篇只讲**本仓库**(velashell-plugin-cli)怎么发版。契约 SDK 与构建支持包 `VelaShell.PluginSdk.Build` 见
 > [velashell-plugin-sdk](../sdk/release-process.md),
 > `dotnet new` 模板见
 > [velashell-plugin-templates](../templates/release-process.md)。
 
-本仓库一次发布产出两个包,共用 Release 标签里的版本号:
+本仓库一次发布只产出一个包,版本号取自 Release 标签:
 
 | 包 | 内容 |
 | --- | --- |
 | `VelaShell.Plugin.Cli` | dotnet tool `vela-plugin` |
-| `VelaShell.PluginSdk.Build` | 插件工程引用的那一个包 |
 
-这两个**必须同版本发**:`.Build` 把 `vela-plugin` 的构建产物收进包的 `tools/`,它的
-targets 直接调那个打包器的命令面(`validate` / `pack`)。命令行参数改了而 targets 没跟上,
-现象是插件作者构建到一半 `Exec` 失败 —— 所以它俩是一个发布单元。
+`VelaShell.PluginSdk.Build` 于 2026-09-11 搬去 velashell-plugin-sdk,在那边与契约包同版本、同一次发布。
+插件工程 `dotnet build -t:PackVpx` 用的打包器也在那边(`VelaShell.PluginSdk.Packer`,随 `.Build` 包的 `tools/` 分发),
+端到端冒烟(`scripts/Invoke-Smoke.ps1` + `tests/smoke/`)与 Avalonia 版本锁的构建期核对随它一起搬走了 ——
+见 [SDK 发版流程](../sdk/release-process.md) 的 §四、§六。
 
-**上下游都不必跟着发。** 契约 SDK 有自己的版本号;模板包也有自己的。本仓库发 1.5.1
-不代表契约动了,也不要求模板跟着发。
+**本仓库没有下游。** `vela-plugin` 是面向人的工具(商店、开发内环、签名、体检),发不发版与插件作者能不能出包
+毫无关系:两边都走 `VelaShell.PluginSdk` 里的同一个 `VpxContainer`,包格式的一致由类型保证,不靠版本号约定。
+上游也不必跟着发:契约 SDK 与模板包各有各的版本号,本仓库发 1.5.1 不代表契约动了,也不要求模板跟着发。
 
 ---
 
@@ -101,79 +102,19 @@ Actions 页面 → 选 Release 工作流 → Run workflow → 填标签。推送
 
 ---
 
-## 四、两个跨仓库旋钮:`Set-Version.ps1` 刻意不碰
+## 四、唯一的跨仓库旋钮:`Set-Version.ps1` 刻意不碰
 
-它们不是「版本号」,是**依赖决定**:
+它不是「版本号」,是**依赖决定**:`src/VelaShell.Plugin.Cli` 的 csproj 里 `VelaShell.PluginSdk` 的
+`PackageReference` —— `vela-plugin` **自己**读清单与 `.vpx` 容器用哪一版契约。
 
-### `VelaShell.PluginSdk` 的 `PackageReference` —— 引用哪一版契约 SDK
+刻意写字面量而不抽成 `Directory.Build.props` 里的 MSBuild 属性:`Version="$(...)"` 会让 Dependabot 与
+`dotnet add package` 认不出这条依赖,而这个包正是要靠它们来更新的 —— 合掉 Dependabot 的 PR 就是常规抬法。
 
-落点是 `src/VelaShell.Plugin.Cli` 与 `src/VelaShell.PluginSdk.Build` 两个 csproj,
-**两处必须同版本**。刻意写字面量而不抽成 `Directory.Build.props` 里的 MSBuild 属性:
-`Version="$(...)"` 会让 Dependabot 与 `dotnet add package` 认不出这条依赖,而这个包
-正是要靠它们来更新的 —— 合掉 Dependabot 的 PR 就是常规抬法,它会把两处一起抬。
+抬它 = 让 `vela-plugin` 认得新契约(新的清单字段、容器格式)。插件作者的**编译目标**契约与本仓库无关,
+由 velashell-plugin-sdk 的 `.Build` 决定。发一个只改了 `vela-plugin` 输出格式的补丁版时,不该顺手把这个也换掉
+—— 所以它是一次独立的、需要想清楚的决定。抬完构建、测试一遍,再发一版本仓库的包,用户才吃得到;
+不抬也完全正常,老契约照样能打包、能校验。
 
-抬它 = 让插件作者的**编译目标契约**变新。发一个只改了 `vela-plugin` 输出格式的补丁版时,
-不该顺手把这个也换掉 —— 所以它是一次独立的、需要想清楚的决定。
-
-抬完记得:
-
-1. 构建一次,让 `VerifyAvaloniaVersionPin` 核对 Avalonia 版本锁是否也要跟着动;
-2. 发一版本仓库的包,插件作者才吃得到。
-
-不抬也完全正常 —— 老契约照样能打包、能校验。
-
-### `VelaAvaloniaVersion` —— 锁给插件工程的 Avalonia 版本
-
-**权威在 sdk 仓库,这里只是一份必须与之相等的副本。** 为什么要抄一份而不直接用权威值:
-权威值来自 NuGet 还原之后生成的 `obj/*.nuget.g.props`,而 Avalonia 的 `PackageReference`
-版本区间是**还原本身**要读的输入 —— 冷还原时它还是空的,区间会变成 `[]` 直接失败。
-
-所以是「写字面量 + 构建期核对」。核对覆盖三个落点:
-
-| 落点 | 是什么 |
-| --- | --- |
-| `$(VelaSdkPinnedAvaloniaVersion)` | **权威**,来自 `VelaShell.PluginSdk` 包的 `buildTransitive` props |
-| `$(VelaAvaloniaVersion)` | 本仓库根 `Directory.Build.props` 的副本,精确区间 `[x.y.z]` 用的就是它 |
-| `build/VelaShell.PluginSdk.Build.props` 里的同名默认值 | 插件工程侧那道 `VELA1001` 核对的基准 |
-
-漂了会报:
-
-| 错误码 | 含义 |
-| --- | --- |
-| `VELA1000` | 仓库内两处副本不一致 |
-| `VELA1005` | 引用的 SDK 包太老,不导出权威值 —— 整条跨仓库核对链会被悄悄关掉,所以直接红 |
-| `VELA1006` | 与权威值不一致(跨仓库漂移) |
-
----
-
-## 五、发完之后要不要动模板仓库
-
-看你想不想让 `dotnet new velaplugin` 生成的工程指向新版 `.Build`。
-
-想 → 去 [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates)
-抬 `VelaBuildPackageVersion` 再发一版模板。
-
-不想 → 什么都不用做。新建的工程只是继续引用上一版 `.Build` 包,那是完全可用的 ——
-这正是拆库之后的正常状态,不是遗漏。
-
----
-
-## 六、端到端冒烟
-
-发布前会跑 `scripts/Invoke-Smoke.ps1`:拿刚打出的包,把 `tests/smoke/` 下那个手写的
-最小插件工程复制到临时目录、从本地源还原、构建、`-t:PackVpx`、读回容器、查共享程序集
-有没有漏进插件输出目录。
-
-**这一步不是形式。** 插件工程是仓库外环境,仓库内的 `Directory.Build.props` 一条也吃不到
-(夹具里那两个空的 `Directory.Build.props`/`.targets` 就是为了切断向上查找)。
-历史上正是它先发现了两个坑:
-
-* SDK 带 `RequiresPreviewFeatures`,插件工程不开预览开关就全线 `CA2252`;
-* NuGet 默认不传递 `build` 资产,Avalonia 的 AXAML 编译器到不了插件工程 —— 现象是
-  运行时找不到控件,而不是构建报错。
-
-两个坑都只有在「什么都不继承」的前提下才会显形。
-
-> 拆库之前这一步用的是 `dotnet new velaplugin-ui`。模板搬走之后不能再那样做:
-> 那会让模板仓库出问题时本仓库的 CI 无端变红,而且发本仓库的包还得先有模板包。
-> 模板本身的端到端验证由模板仓库自己的 CI 负责。
+> 2026-09-11 之前本仓库同时发 `.Build`(两个包必须同版本 —— 当时 `.Build` 把 `vela-plugin` 收进 `tools/` 当打包器),
+> 这里还有第二个旋钮 `VelaAvaloniaVersion` 及其 `VELA1000` / `VELA1005` / `VELA1006` 核对,发完还要考虑模板仓库要不要跟。
+> 这些都随 `.Build` 去了 sdk 仓库,本仓库发版之后不需要动任何别的仓库。

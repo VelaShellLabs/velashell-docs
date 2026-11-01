@@ -517,23 +517,36 @@ the other end of a tunnel is often an internal database, and binding to `0.0.0.0
 By default it listens on **both loopbacks** (`127.0.0.1` and `::1`, same port): clients that resolve `localhost` to `::1` first can connect too,
 and no other process on the machine can grab that port on `[::1]` (see [spec/07 §2.3](spec/07-forwarding.md)).
 
-### Unix sockets in the reverse direction (`ssh -R /remote:/local`)
+### Unix sockets in the reverse direction (`ssh -R`)
+
+Each side of a remote forward may be a port or a socket ([spec/07 §4.4](spec/07-forwarding.md)): set `ListenSocketPath` in the options for the server side,
+and use `StartToUnixSocketAsync` for the local side.
 
 ```csharp
-await using RemotePortForwarder sock = await RemotePortForwarder.StartUnixSocketAsync(
+// -R /tmp/docker.sock:/var/run/docker.sock — sockets on both sides
+await using RemotePortForwarder sock = await RemotePortForwarder.StartToUnixSocketAsync(
     conn,
-    targetSocketPath: "/var/run/docker.sock",   // the local one
-    remoteSocketPath: "/tmp/docker.sock",       // the one the server should create
-    cancellationToken: ct);
+    "/var/run/docker.sock",                                              // the local one
+    new RemotePortForwardOptions { ListenSocketPath = "/tmp/docker.sock" },   // the one the server should create
+    ct);
 
-Console.WriteLine(sock.RemoteEndpointName);   // a unified way to describe both forms
+// -R 2375:/var/run/docker.sock — a port on the server leading to the local socket
+await using RemotePortForwarder port = await RemotePortForwarder.StartToUnixSocketAsync(
+    conn, "/var/run/docker.sock", new RemotePortForwardOptions { BindPort = 2375 }, ct);
+
+// -R /run/user/1000/pg.sock:127.0.0.1:5432 — a socket on the server leading to the local port
+await using RemotePortForwarder pg = await RemotePortForwarder.StartAsync(
+    conn, "127.0.0.1", 5432, new RemotePortForwardOptions { ListenSocketPath = "/run/user/1000/pg.sock" }, ct);
+
+Console.WriteLine(sock.RemoteEndpointName);   // one way to describe a port or a socket: bind:port or the path
 ```
 
 **With a socket instead of a port, other users on the remote machine can neither see nor connect to it** — who can connect is decided by file permissions,
 whereas a `-R 2375:...` port can be connected to by everyone on that machine.
 
 > The server creates that socket file on its own file system. OpenSSH refuses when the path already exists,
-> so a failure here most likely means "the last run was not cleaned up".
+> so a failure here most likely means "the last run was not cleaned up". The local path is checked when the forward starts (an empty or too long one fails right away);
+> whether anyone listens on it is only known when a forwarded connection arrives.
 
 ### X11 forwarding (`ssh -X` / `-Y`)
 
@@ -673,6 +686,11 @@ Console.WriteLine(cfg.IdentityFiles);  // there may be several
 
 **The library only parses; it does not decide for you.** The parsed result is handed to the caller — if the library took it upon itself to read
 `~/.ssh/config`, "why didn't it connect to the machine I wrote" would become a very hard problem to track down.
+
+Values are tokenized the way OpenSSH reads them (quotes, backslash escapes, comments; see [`spec/09-dialing.md`](spec/09-dialing.md) §7.4): `cfg.First("IdentityAgent")` returns
+the same value `ssh -G` reads. The other way round, to write a value into a config (an export, a generated config file), use `SshConfigFile.TryFormatArgument` ——
+both this library and `ssh` read back the original value (`\\.\pipe\x` is written `\\\\.\pipe\x`); it returns `false` for a value with a line break, which cannot be written.
+For a line with unbalanced quotes this library skips just that line (while `ssh` rejects the whole config): to tell the user, pass `onSkippedLine` to `LoadAsync` and get the file, line number and text.
 
 If you decide to use it, it turns into ready-to-connect parameters in one step:
 

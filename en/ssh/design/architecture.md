@@ -666,7 +666,7 @@ while handing timing constraints over to callers (the rules are in §4.1 of `src
 | 9 | Global requests | Server global requests, e.g. `hostkeys-00@openssh.com` (host key rotation) | ✅ Host key rotation is turned on by the host key policy (`IHostKeyRotationPolicy`, spec/05 §6.4.1); sending global requests is still an internal method of the library |
 | 10 | SFTP extensions | Vendor SFTP extensions | ✅ Wrapped in the library: `posix-rename`, `hardlink`, `fsync`, `limits`, `statvfs`, `copy-data`, `expand-path`, `lsetstat`, `users-groups-by-id` (spec/06 §7.1); vendor-private ones go through `SftpFileSystem.SendExtendedAsync` (spec/06 §7.3) |
 | 11 | Metrics / tracing / packet tap | Diagnostics, recording, APM | 🚧 Metrics go through `System.Diagnostics.Metrics`: the connection and channel set (`SshMetrics.MeterName`) and the forwarding set (`ForwardMetrics.MeterName`), see spec/08 §7; the packet tap `IPacketTap` is built (spec/08 §9); `ActivitySource` is not built yet |
-| 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`, with no separate interface |
+| 12 | Configuration sources | `~/.ssh/config`, enterprise-pushed, UI | ✅ As functions: `SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync` (`TryFormatArgument` for writing one argument back into a config), with no separate interface |
 
 > This table was originally the whole answer to "extensibility later on", and the test was:
 > **each of the nine host-side patches in §1 maps to some row of this table.**
@@ -2511,6 +2511,7 @@ and if the lower stream is stuck it waits one one-way latency plus 1 second befo
 | One unreadable `IdentityFile` failed the whole resolution; jump hosts and the target each read the same key (two KDF runs, two passphrase prompts) | Skip only that key and notify the caller; share by path within one resolution, no caching across calls (`spec/09` §7) |
 | The password the caller meant for the target was also handed to jump hosts | Password and keyboard-interactive go only to the final target; jump hosts get only public-key credentials (`spec/09` §7) |
 | With `ask` / absent, merely setting `UserKnownHostsFile` in the configuration discarded the caller's policy; `none` / `/dev/null` were treated as file paths | The caller's policy wins; `none` / `/dev/null` mean no `known_hosts` (`spec/09` §7) |
+| Tokenizing recognized only double quotes, removed them only when they enclosed the whole value, and recognized neither single quotes nor backslashes: this library read `IdentityAgent \\.\pipe\x` unchanged while `ssh` read `\.\pipe\x`, so named pipes the host exported as-is were unusable in `ssh`, and reading them back here showed nothing wrong | Tokenize the way OpenSSH reads (black-box observation of Win32-OpenSSH 9.5p2 `ssh -G`); write values back with `SshConfigFile.TryFormatArgument`, which both this library and `ssh` read back as the original value (`spec/09` §7.4) |
 
 #### Host certificates, and the private key format we do not read
 

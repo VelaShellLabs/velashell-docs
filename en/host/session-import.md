@@ -130,8 +130,8 @@ would import nothing at all.
 | `ForwardX11Trusted` | Trusted (`-Y`) | Only an explicit `yes` / `no` is taken; **unset follows VelaShell's default (trusted)**, while OpenSSH treats unset as untrusted — a host with only `ForwardX11 yes` gets a preview note "imported as trusted (-Y) per VelaShell's default; OpenSSH would use untrusted (-X) here", rather than silently translating OpenSSH's default (the rule the maintainers set on 2026-10-25) |
 | `ObscureKeystrokeTiming` | Keystroke timing obfuscation | `yes` / `interval:N` (1–1000 ms) turn it on, `no` off; **unset = off** (OpenSSH defaults to on; not copied). VelaShell's interval is fixed at 20 ms, so an `interval:N` with N other than 20 gets a note; an unrecognized value is not imported |
 | `LocalForward` | Local forward tunnel | Each side may be a port or a Unix socket (a side containing `/` is a socket and goes into `LocalSocketPath` / `RemoteSocketPath`). With no listen address it binds 127.0.0.1 (0.0.0.0 with `GatewayPorts yes`); `*` means all interfaces |
-| `RemoteForward listen target` | Remote forward tunnel | Two TCP sides, or two sockets (the server listen path goes into `RemoteSocketPath`, the local target into `LocalSocketPath`); only one side a socket is skipped (the SSH library offers just these two combinations and the tunnel service refuses the mix too). With no listen address the server decides (loopback) |
-| `RemoteForward [address:]port` (no target) | Remote dynamic SOCKS tunnel (`RemoteDynamicForward`) | The listen address defaults to 127.0.0.1; the allow list comes from the host's `PermitRemoteOpen`; there is no remote dynamic forward on a socket, so that is skipped |
+| `RemoteForward listen target` | Remote forward tunnel | Each side may be a port or a socket (the server listen path goes into `RemoteSocketPath`, the local target's path into `LocalSocketPath`; all four combinations are imported since 2026-10-31 — before that, one socket side was skipped). With no listen address the server decides (loopback) |
+| `RemoteForward [address:]port` (no target) | Remote dynamic SOCKS tunnel (`RemoteDynamicForward`) | The listen address defaults to 127.0.0.1; the allow list comes from the host's `PermitRemoteOpen`; there is no remote dynamic forward listening on a socket (only the port form exists), so that is skipped and the import notes say why |
 | `PermitRemoteOpen` | Allow list of remote dynamic forwards | One per host, shared by all of that host's remote dynamic forwards, validated by the same rules as the tunnel form. **When it is missing, those forwards are not imported**: OpenSSH then treats it as `any`, but a tunnel's allow list has no default — write `any` to allow everything; `none` and invalid values are skipped too |
 | `DynamicForward` | Dynamic forward (SOCKS) tunnel | Listen-address rules as for `LocalForward` |
 
@@ -140,6 +140,15 @@ from the tunnel panel. With `ClearAllForwardings yes` none are imported; port 0 
 socket paths must be usable on this machine — a leading `~` is expanded, the path must be absolute and within the `sun_path` limit (107 bytes,
 103 on macOS), and server paths must start with `/`; anything else is skipped. Lines are parsed one by one, so one bad line does not take
 others down with it.
+
+**Quotes and backslashes are read the way ssh reads them** (since 2026-10-31; tokenized by the SSH library, see [`ssh/spec/09-dialing.md`](../ssh/spec/09-dialing.md) §7.4): both `"…"` and `'…'` are recognized,
+`\\`, `\"` and `\'` (plus `\` followed by a space outside quotes) are escapes, and every other backslash stays. So an ordinary hand-written Windows path such as `IdentityFile C:\Users\me\.ssh\id_ed25519` imports unchanged;
+**UNC paths and named pipes written with a single leading `\\` are read by ssh as starting with one `\`, and VelaShell reads them the same way** —— `IdentityFile \\fileserver\keys\id` reads as `\fileserver\keys\id`,
+and the preview says so ("reads as a path that starts with a single backslash; for a UNC path or a named pipe, write `\\\\server\share` or `\\\\.\pipe\name`"); the key path is carried into the connection as read,
+and an agent endpoint read this way is unusable, with a note of its own. 〔Decision〕VelaShell does not "repair" it back to two backslashes: then the same config would work in VelaShell and not in ssh, which is exactly the failure nobody notices.
+Named pipes exported by VelaShell before 2026-10-31 were written this way (as-is at the time), so re-importing them shows this note; exporting again fixes it.
+**Lines with unbalanced quotes**: the SSH library skips just that line (while ssh rejects the whole config with `invalid quotes`), and **every** preview row of that config says so ("`<file>` line N: the quotes are unbalanced…", with the line's text) ——
+in ssh this config cannot reach any host, and on the VelaShell side that line's setting is missing (since 2026-10-31). A forward socket side written as `[C:/x.sock]` (the only form ssh accepts on Windows) reads as the path inside the brackets.
 
 **Every other keyword is ignored**: `ServerAliveInterval` and so on. They either live somewhere else in VelaShell or the host does not support
 them yet. What the table above marks as skipped or not imported is not dropped silently: it goes into the row's **import notes** (section 4),
@@ -180,7 +189,7 @@ configured with an `IdentityFile` is **misleading** — it is not missing a cred
 credential is of another kind.
 
 Below the name and address there may also be a grey line of **import notes**: how many tunnels the forwards became, and the settings
-that could not be mapped and were skipped (forwards on port 0 or with only one socket side, remote dynamic forwards without an allow list,
+that could not be mapped and were skipped (forwards on port 0, remote dynamic forwards listening on a socket, remote dynamic forwards without an allow list,
 agent endpoints not usable on this computer, unset environment variables, a forwarding agent different from the authentication one, the trust-level difference
 when only `ForwardX11 yes` is written, the interval difference of `ObscureKeystrokeTiming interval:N`, unrecognized yes / no values, algorithms this version does not implement, extra keys), one per line.
 
@@ -402,7 +411,14 @@ blocks that can be pasted straight into `~/.ssh/config`, so the command-line ssh
 - **Scope**: SSH / SFTP only, one `Host` block per connection; FTP and plugin protocols are skipped and counted. Jump hosts come along by the
   rule in 7.1, and `ProxyJump` refers to them by alias.
 - **Aliases**: the connection name (the host when there is none), with whitespace and characters that mean something else in ssh_config
-  replaced by `-`, and a number appended to duplicates.
+  (including quotes and backslashes —— `Host it's` is an unbalanced quote in ssh and the whole config is rejected) replaced by `-`, and a number appended to duplicates.
+- **How values are written** (since 2026-10-31): paths, user names, agent endpoints and both sides of forwards all go through the SSH library's `SshConfigFile.TryFormatArgument`, so ssh and VelaShell both read back the original value
+  ([`ssh/spec/09-dialing.md`](../ssh/spec/09-dialing.md) §7.4): a named pipe `\\.\pipe\name` is written `\\\\.\pipe\name`, a UNC path `\\server\share\…` is written `\\\\server\share\…`,
+  ordinary Windows paths are written as-is, values with whitespace or `#` are double-quoted, and quotes get a `\` in front. 〔History〕Values used to be quoted only for whitespace or `#`, with backslashes as-is: ssh read `\\.\pipe\x` as `\.\pipe\x`
+  and could not use that agent. A value containing a line break (one ssh_config line cannot hold it, and forcing it in would turn the next line into another setting) is not written; it becomes `# <keyword>  (VelaShell: the value contains a line break; ssh_config cannot hold it)`.
+- **Socket paths of forwards** (since 2026-10-31): a local side that is a Windows drive path has its `\` turned into `/`; a path containing `:` or `\` is enclosed in brackets as a whole (`LocalForward "[C:/Users/me/my app.sock]" /var/run/docker.sock`) ——
+  Win32-OpenSSH accepts only this form; written as-is, `C:/…` gives `Bad forwarding specification` and the whole config is rejected (observations in [`ssh/spec/09-dialing.md`](../ssh/spec/09-dialing.md) §7.4); Unix paths on the server side are written as before.
+  A path that would still contain `]` inside the brackets cannot be written, and that forward becomes `# LocalForward  (VelaShell: a socket path contains ']' as well as ':' or '\'; ssh_config cannot write it)`.
 - **What is written**: `HostName` / `Port` / `User` / `IdentityFile` / `CertificateFile` / `ProxyJump` / `Compression` / `IdentityAgent` (agent authentication: the endpoint when one is set, the literal `SSH_AUTH_SOCK` for the system default, so it imports back as agent authentication; since 2026-10-31 — before, the system default wrote nothing and came back as password authentication) /
   `ForwardAgent` (with an endpoint set, the endpoint itself rather than yes) / `ForwardX11` and `ForwardX11Trusted` (with X11 on, the trust level is always written, since the defaults differ) /
   `ObscureKeystrokeTiming yes` (**only when on**; off is not written as `no`: the keyword arrived in OpenSSH 9.5 and older versions reject a whole config with an unknown keyword, at the cost that a newer ssh then applies its own default, on) /
@@ -419,9 +435,10 @@ blocks that can be pasted straight into `~/.ssh/config`, so the command-line ssh
 - **Forwards**: tunnels are written back as the three forward keywords, with the socket side as a path; a remote dynamic tunnel becomes a
   target-less `RemoteForward` and **is always written together with `PermitRemoteOpen`** — without it OpenSSH allows `any`, so one missing
   line would widen a tightened list to everything. A host can carry only one `PermitRemoteOpen`: remote dynamic tunnels whose list differs from
-  the first one, remote dynamic tunnels with an empty list, and remote forwards with only one socket side are written as
+  the first one and remote dynamic tunnels with an empty list are written as
   `# <the original line>  (VelaShell: <reason in English>)` comments instead of taking the union (a union would loosen the stricter one); the
-  comments are not read back on import.
+  comments are not read back on import. Each side of a remote forward is written as a path or `host:port` (since 2026-10-31 a forward with only
+  one socket side is written as well).
 - **No passwords or passphrases** (ssh_config never holds them); UTF-8 without a BOM, `.conf` by default. The completion message says how many
   connections were exported and that no passwords are included.
 

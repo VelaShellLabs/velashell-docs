@@ -121,6 +121,8 @@ Four rules:
 | Same-site copy | Not in FTP | **Server-side copy** | S3 beats FTP on this one |
 | Directory modification time | Present | None (directories are fictional) | Returns `DateTime.MinValue` so the UI leaves it blank |
 | Owner / group | Present | Owner only | Group is left blank, **not filled with the storage class** — filling it in would only make the column header lie |
+| Setting the modification time (SDK 2.1.3 `IProtocolLastWriteTime`) | SFTP has it, FTP depends on MFMT | **None**: `LastModified` is the moment the server wrote the object; "copy the object onto itself + replace metadata" rewrites the object, changes its version id and ETag, and still records the time of the copy | The optional interface is **not implemented**; the host honestly reports "cannot set modification times" and directory sync compares by size / digest instead |
+| Server-side digests (SDK 2.1.3 `IProtocolChecksum`) | SFTP via remote commands, FTP depends on HASH | Stored only when the object was uploaded **with** an `x-amz-checksum-*`; a multipart upload stores a composite digest (a digest of the part digests) | **Implemented**: HEAD with `x-amz-checksum-mode: ENABLED` returns the stored full-object digest (SHA-256 / SHA-512 / SHA-1 / MD5); composite digests, nothing stored, directories / buckets and no permission all give null; the object is never read back and **the ETag is not passed off as an MD5**. The plugin's own uploads send no checksum (`WHEN_REQUIRED`, see §6), so objects it uploaded always give null |
 
 ### 3.2 Only empty buckets are deleted; they are never emptied on the user's behalf
 

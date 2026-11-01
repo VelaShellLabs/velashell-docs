@@ -136,6 +136,7 @@ accepts `restartPosition` + `stopPosition`, which is effectively **range reading
 > but it uses REST + RETR (FluentFTP's `OpenRead(path, Binary, restart, fileLen)`), not `DownloadStream(stopPosition)`.
 > Upload: SIZE gives the remote length right now, and the tail of the remote file is read back and compared with the same range of the source; the read ends exactly at remote EOF, so the connection is reused.
 > Download: the local partial's current length decides the range read back from the remote; that read stops mid-file, so the connection is dropped and a resume costs one extra login. With no partial to resume, the whole file is transferred.
+> When the server does not implement REST / APPE (it answers 500 / 502 / 504), the subtype `VelaSftpResumeUnsupportedException` is thrown instead (since 2026-11-01) and the target is untouched: a partial file found at planning time still goes back to the conflict policy; when the transfer-failure retry was resuming the partial this transfer itself wrote, it starts over from the beginning.
 
 ### 3.6 Capability Flags: Stop Assuming Everything Is Available
 

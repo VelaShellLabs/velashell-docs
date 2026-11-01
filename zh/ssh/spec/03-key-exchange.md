@@ -244,6 +244,7 @@ RFC 8308 §2.2 明确要求 `ext-info-c` 只出现在**第一次** KEXINIT 里�
 > **实现状态（2026-10-06）**：**已实现**（`DiffieHellmanGroupExchange`），在默认清单里排在椭圆曲线之后、DH 标准群之前 ——
 > 客户端的顺序为准，只有别的都谈不成时才会选中它。已对真 OpenSSH 10.3 核对（首次交换与重协商）；
 > OpenSSH 10 起服务端默认不开 DH 那几种，互通环境用 `scripts/ssh/interop/kex-gex.sh` 追加进服务端清单。
+> 它**不在** `SshAlgorithmSet.FipsApprovedOnly` 里：群是服务端现给的、不是命名的群（00 §6.6）。
 
 **比其它方法多两个报文**，因为群是服务端按客户端要求现给的：
 

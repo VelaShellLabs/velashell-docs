@@ -17,7 +17,7 @@
   the assembly and the driver load only when the user picks "MongoDB: Open MongoDB workbench" in the command palette (Ctrl+P), which opens a
   document panel. Loaded in process. **The plugin manages its own connections**: saved connections are listed at the root of the object tree and
   created / edited in the board-10 dialog; MongoDB does not appear in the host's New Connection window or session tree. Only SDK surface that already
-  existed in 2.0.6 is used (`minSdkVersion: "2.0.4"`: `ISessionsApi` needs 2.0.2, and the workbench tab icon `PanelOptions.Icon` / `PluginIcon` needs 2.0.4).
+  existed in 2.0.6 is used (`minSdkVersion: "2.0.4"`: the "open a saved session" part of `ISessionsApi` needs 2.0.1, and the workbench tab icon `PanelOptions.Icon` / `PluginIcon` needs 2.0.4).
 - **Engine**: the official MongoDB.Driver 3.x (Apache-2.0), shipped in the plugin folder; driver exceptions are turned into one plain sentence at the
   boundary and classified (unreachable / authentication failed / untrusted certificate / bad configuration / SSH jump not established), and the
   failure card offers buttons by class.

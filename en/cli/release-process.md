@@ -1,25 +1,28 @@
-# Release process (CLI + build-support package)
+# Release process (CLI)
 
-> This page covers how **this repository** is released. For the contract SDK see
-> [velashell-plugin-sdk](../sdk/release-process.md);
+> This page covers how **this repository** (velashell-plugin-cli) is released. For the contract SDK and the
+> build-support package `VelaShell.PluginSdk.Build` see [velashell-plugin-sdk](../sdk/release-process.md);
 > for the `dotnet new` templates see
 > [velashell-plugin-templates](../templates/release-process.md).
 
-One release of this repository produces two packages, which share the version number in the Release tag:
+One release of this repository produces a single package, versioned by the Release tag:
 
 | Package | Contents |
 | --- | --- |
 | `VelaShell.Plugin.Cli` | The dotnet tool `vela-plugin` |
-| `VelaShell.PluginSdk.Build` | The one package plugin projects reference |
 
-The two **must be released at the same version**: `.Build` bundles the build output of `vela-plugin` in the
-package's `tools/`, and its targets call that packer's command surface (`validate` / `pack`) directly. If the
-command-line arguments change and the targets do not keep up, plugin authors see an `Exec` failure halfway through
-their build — so the two are one release unit.
+`VelaShell.PluginSdk.Build` moved to velashell-plugin-sdk on 2026-09-11 and is released there at the same version
+as the contract packages, in one release. The packer plugin projects use for `dotnet build -t:PackVpx` lives there
+too (`VelaShell.PluginSdk.Packer`, shipped under the `.Build` package's `tools/`), and the end-to-end smoke test
+(`scripts/Invoke-Smoke.ps1` + `tests/smoke/`) and the build-time Avalonia pin checks went with it — see §4 and §6
+of the [SDK release process](../sdk/release-process.md).
 
-**Neither upstream nor downstream has to release along with it.** The contract SDK has its own version number,
-and so does the templates package. This repository shipping 1.5.1 does not mean the contract changed, and it does
-not require the templates to ship too.
+**This repository has no downstream.** `vela-plugin` is a tool for people (marketplace, inner development loop,
+signing, health checks); whether it ships has nothing to do with whether plugin authors can produce a package —
+both sides go through the same `VpxContainer` in `VelaShell.PluginSdk`, so the package format stays consistent by
+type, not by a version-number convention. Upstream does not have to release along with it either: the contract
+SDK and the templates package each have their own version number, so this repository shipping 1.5.1 does not mean
+the contract changed, and it does not require the templates to ship too.
 
 ---
 
@@ -109,85 +112,25 @@ Pushing goes through OIDC. So fork PRs and the main branch run exactly the same 
 
 ---
 
-## 4. Two cross-repository knobs that `Set-Version.ps1` deliberately leaves alone
+## 4. The one cross-repository knob that `Set-Version.ps1` deliberately leaves alone
 
-They are not "version numbers"; they are **dependency decisions**:
+It is not a "version number"; it is a **dependency decision**: the `PackageReference` to `VelaShell.PluginSdk` in
+the `src/VelaShell.Plugin.Cli` csproj — which contract release `vela-plugin` **itself** uses to read manifests and
+`.vpx` containers.
 
-### The `PackageReference` to `VelaShell.PluginSdk` — which contract SDK release to reference
+It is deliberately written as a literal rather than pulled out into an MSBuild property in `Directory.Build.props`:
+`Version="$(...)"` stops Dependabot and `dotnet add package` from recognising the dependency, and they are exactly
+what this package is meant to be updated with — merging Dependabot's PR is the usual way to raise it.
 
-It lives in two csproj files, `src/VelaShell.Plugin.Cli` and `src/VelaShell.PluginSdk.Build`, and **both must be
-at the same version**. It is deliberately written as a literal rather than pulled out into an MSBuild property in
-`Directory.Build.props`: `Version="$(...)"` stops Dependabot and `dotnet add package` from recognising the
-dependency, and they are exactly what this package is meant to be updated with — merging Dependabot's PR is the
-usual way to raise it, and it raises both places together.
+Raising it = teaching `vela-plugin` the newer contract (new manifest fields, container format). Plugin authors'
+**compile-target** contract has nothing to do with this repository; velashell-plugin-sdk's `.Build` decides it. A
+patch release that only changes `vela-plugin`'s output format should not swap this out on the side — so it is a
+separate decision that needs to be thought through. After raising it, build and test once, then release this
+repository's package so users get it; not raising it is perfectly normal too — the old contract still packs and
+validates fine.
 
-Raising it = making the plugin authors' **compile-target contract** newer. A patch release that only changes
-`vela-plugin`'s output format should not swap this out on the side — so it is a separate decision that needs to be
-thought through.
-
-After raising it, remember to:
-
-1. Build once, so `VerifyAvaloniaVersionPin` checks whether the Avalonia version pin has to move as well;
-2. Release this repository's packages; only then do plugin authors get it.
-
-Not raising it is perfectly normal too — the old contract still packs and validates fine.
-
-### `VelaAvaloniaVersion` — the Avalonia version pinned for plugin projects
-
-**The authority is in the sdk repository; this is only a copy that must equal it.** Why keep a copy instead of
-using the authoritative value directly: the authoritative value comes from the `obj/*.nuget.g.props` generated
-after NuGet restore, while the version range of Avalonia's `PackageReference` is an input that **restore itself**
-reads — on a cold restore the value is still empty, the range becomes `[]`, and restore fails outright.
-
-So it is "write a literal + check at build time". The check covers three places:
-
-| Location | What it is |
-| --- | --- |
-| `$(VelaSdkPinnedAvaloniaVersion)` | The **authority**, from the `buildTransitive` props of the `VelaShell.PluginSdk` package |
-| `$(VelaAvaloniaVersion)` | The copy in this repository's root `Directory.Build.props`; the exact range `[x.y.z]` is built from it |
-| The default of the same name in `build/VelaShell.PluginSdk.Build.props` | The baseline for the `VELA1001` check on the plugin-project side |
-
-Drift is reported as:
-
-| Error code | Meaning |
-| --- | --- |
-| `VELA1000` | The two copies inside the repository disagree |
-| `VELA1005` | The referenced SDK package is too old to export the authoritative value — the whole cross-repository check chain would be switched off silently, so it fails outright |
-| `VELA1006` | The copy disagrees with the authoritative value (cross-repository drift) |
-
----
-
-## 5. After a release: does the templates repository need to change?
-
-That depends on whether you want projects generated by `dotnet new velaplugin` to point at the new `.Build`.
-
-Yes → go to [velashell-plugin-templates](https://github.com/VelaShellLabs/velashell-plugin-templates),
-raise `VelaBuildPackageVersion` and release the templates again.
-
-No → nothing to do. Newly created projects simply keep referencing the previous `.Build` package, which is
-entirely usable — this is the normal state of things after the split, not an omission.
-
----
-
-## 6. End-to-end smoke test
-
-Before a release, `scripts/Invoke-Smoke.ps1` runs: with the freshly packed packages, it copies the hand-written
-minimal plugin project under `tests/smoke/` into a temporary directory, restores from the local source, builds,
-runs `-t:PackVpx`, reads the container back and checks whether any shared assembly leaked into the plugin output
-directory.
-
-**This step is not a formality.** A plugin project is an environment outside the repository and inherits none of
-the repository's `Directory.Build.props` (the two empty `Directory.Build.props`/`.targets` in the fixture are
-there to cut off the upward search). Historically it is what caught two pitfalls first:
-
-* The SDK carries `RequiresPreviewFeatures`, so a plugin project that does not turn on the preview switch gets
-  `CA2252` across the board;
-* NuGet does not flow `build` assets transitively by default, so Avalonia's AXAML compiler never reaches the
-  plugin project — the symptom is controls that cannot be found at run time, not a build error.
-
-Both pitfalls only show up when nothing at all is inherited.
-
-> Before the split this step used `dotnet new velaplugin-ui`. With the templates moved out it can no longer do
-> that: a problem in the templates repository would turn this repository's CI red for no reason, and releasing
-> this repository's packages would first require a templates package. End-to-end verification of the templates
-> themselves is the job of the templates repository's own CI.
+> Before 2026-09-11 this repository also released `.Build` (the two packages had to share a version — `.Build`
+> then bundled `vela-plugin` in `tools/` as its packer), and this section had a second knob, `VelaAvaloniaVersion`,
+> with its `VELA1000` / `VELA1005` / `VELA1006` checks, plus the question of whether the templates repository should
+> follow a release. All of that went to the sdk repository with `.Build`; releasing this repository requires no
+> change in any other repository.

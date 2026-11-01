@@ -131,8 +131,8 @@ SSH 的 wire 格式只有七种类型。全部**大端序**。
 | `ecdh-sha2-nistp256/384/521` | RFC 5656 | ✅ | |
 | `diffie-hellman-group14-sha256` | RFC 8268 | ✅ | |
 | `diffie-hellman-group16-sha512` | RFC 8268 | ✅ | |
-| `diffie-hellman-group18-sha512` | RFC 8268 | ✅ | MODP 8192 位。排在 group16 之后、group14 之前：两种都给的服务端谈成 group16（8192 位的模幂慢好几倍），共有的只剩它时才选中它；也在 `FipsApprovedOnly` 里（§6.6） |
-| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备、加固过的服务端常只给这个。排在椭圆曲线之后、DH 标准群之前；群由服务端现给，要查（03 §3.5） |
+| `diffie-hellman-group18-sha512` | RFC 8268 | ✅ | MODP 8192 位。排在 group16 之后、group14 之前：两种都给的服务端谈成 group16（8192 位的模幂慢好几倍），共有的只剩它时才选中它（进默认清单是 2026-10-25 另加的一步，维护者 2026-10-31 确认）；也在 `FipsApprovedOnly` 里（§6.6） |
+| `diffie-hellman-group-exchange-sha256` | RFC 4419 | ✅ | 〔互操作〕老设备、加固过的服务端常只给这个。排在椭圆曲线之后、DH 标准群之前；群由服务端现给，要查（03 §3.5）；**不在** `FipsApprovedOnly` 里（§6.6） |
 | `diffie-hellman-group14-sha1` | RFC 4253 | ❌ 默认关 | 〔互操作〕Cisco IOS / 老 VRP 只有它。**必须用户显式开启**（§6.6） |
 | `ext-info-c` / `kex-strict-c-v00@openssh.com` | RFC 8308 / OpenSSH | ✅ | 不是真算法，是**指示符**，见 03 |
 
@@ -225,15 +225,21 @@ CRIME 类侧信道的历史教训。需要的人（弱网、高延迟）用 `Wit
 使用者让用户自己写清单时据此当场说清「没实现」还是「不认识」。它与上面的校验、各个工厂表同一个口径，用例逐个核对。
 〔历史〕曾经没有这份目录，宿主用 `Default.WithLegacyInterop()` 推算实现了哪些，再手工维护一份「认得但没实现」的名单。
 
-〔决策〕**只含 FIPS 认可算法的清单**：`SshAlgorithmSet.FipsApprovedOnly`。密钥交换、主机密钥与 MAC 和 RHEL 10.2 的 FIPS 加密策略（crypto-policies 给 OpenSSH 的清单）是同一组，
-加密多一个 `aes192-ctr`（AES-192 同样是 FIPS 197 认可的，RHEL 没开）；顺序按本库的规则排，不照抄策略 ——
-密钥交换先是两种面向 FIPS 的后量子混合，再是 NIST 曲线的 ECDH、群交换与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
+〔决策〕**只含 FIPS 认可算法的清单**：`SshAlgorithmSet.FipsApprovedOnly`。与 RHEL 10.2 的 FIPS 加密策略（crypto-policies 给 OpenSSH 的清单）比，
+主机密钥与 MAC 是同一组；密钥交换少一个群交换（见下），加密多一个 `aes192-ctr`（AES-192 同样是 FIPS 197 认可的，RHEL 没开；维护者 2026-10-31 确认保留）；顺序按本库的规则排，不照抄策略 ——
+密钥交换先是两种面向 FIPS 的后量子混合，再是 NIST 曲线的 ECDH 与 DH 标准群，主机密钥只用 ECDSA 与 SHA-2 的 RSA（含证书），加密只用 AES-GCM / AES-CTR，
 MAC 只用 HMAC-SHA2；不含 X25519、Ed25519、ChaCha20-Poly1305，也不含带 X25519 或 sntrup761 的后量子混合。**它只限定了算法，不等于本库通过了 FIPS 140 验证**：
 AES、SHA-2、ECDH、ECDSA、RSA 走 BCL（Windows 上是经过验证的 CNG，别的平台取决于系统的 OpenSSL），ML-KEM 在平台支持时（`MLKem.IsSupported`）走 BCL、
 否则与 DH 标准群的模幂一样走 BouncyCastle。
 
 它的密钥交换清单依次是：`mlkem768nistp256-sha256`、`mlkem1024nistp384-sha384`、`ecdh-sha2-nistp256/384/521`、
-`diffie-hellman-group-exchange-sha256`、`diffie-hellman-group16-sha512`、`diffie-hellman-group18-sha512`、`diffie-hellman-group14-sha256`。
+`diffie-hellman-group16-sha512`、`diffie-hellman-group18-sha512`、`diffie-hellman-group14-sha256` —— 只有命名的曲线与群。
+
+〔决策〕**不含群交换**（`diffie-hellman-group-exchange-sha256`，03 §3.5）。它的群是服务端现给的素数，本库只核位数、`g` 的范围与素性，
+认不出它是不是某个命名的群（RFC 3526 的 MODP 群那样写死参数的）—— 严格说它不在 FIPS 认可的命名群之内。
+代价：只给群交换的服务端用这份清单连不上，当场报协商失败（异常带着双方的名单，03 §2.2）；确实要连的自己组清单把它加回去。
+默认清单不受影响（§6.1），群交换照旧在里面。维护者 2026-10-31 定。
+〔历史〕2026-10-25 曾为「与 RHEL 一致」把它补进这份清单（RHEL 10.2 的 FIPS 策略开着它），复审时指出上面那一点后拿掉。
 
 〔决策〕**两种 NIST 曲线的 ML-KEM 混合（03 §3.7）排在这份清单的最前面。**它们只用 FIPS 认可的原语（ML-KEM、P-256 / P-384 上的 ECDH、SHA-2），
 RFC 10042 附录 B 的看法是它的组合方式看起来属于 FIPS 认可的派生（NIST SP 800-227 没有点名）；RHEL 10.2 的 FIPS 策略给 sshd 的清单正是这两种在前、ECDH 在后。
@@ -243,7 +249,7 @@ RFC 10042 附录 B 的看法是它的组合方式看起来属于 FIPS 认可的�
 〔历史〕这个预设最初不含这两种混合：那时还没有能对照验证线上格式的服务端，写了也只能自己证明自己。
 2026-10-06 找到了靶机（AlmaLinux 10.2 的 OpenSSH 9.9p1，RHEL 10.2 的下游补丁，两种都有），草案也已定稿为 RFC 10042，于是补上（03 §3.7）。
 
-〔历史〕曾经少了群交换与 group18（那时 group18 还没实现），说法却是「与 RHEL 一致」；2026-10 对照 AlmaLinux 10.2 靶机上的策略文件补齐。
+〔历史〕曾经少了群交换与 group18（那时 group18 还没实现），说法却是「与 RHEL 一致」；2026-10 对照 AlmaLinux 10.2 靶机上的策略文件补齐，群交换随后又按上一条拿掉。
 
 ## 七 算法优先级的排法
 

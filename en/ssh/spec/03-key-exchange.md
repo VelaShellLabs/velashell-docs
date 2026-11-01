@@ -245,6 +245,7 @@ Both names are sent, and they share one implementation.
 > **Implementation status (2026-10-06)**: **implemented** (`DiffieHellmanGroupExchange`). In the default list it comes after the elliptic curves and before the DH standard groups ——
 > the client's order wins, so it is only chosen when nothing else can be agreed. Checked against a real OpenSSH 10.3 (initial exchange and rekey);
 > since OpenSSH 10 the server does not enable the DH methods by default, so the interop environment appends it to the server's list with `scripts/ssh/interop/kex-gex.sh`.
+> It is **not** in `SshAlgorithmSet.FipsApprovedOnly`: the group is supplied by the server, not a named group (00 §6.6).
 
 **Two more messages than the other methods**, because the group is supplied by the server on the fly according to the client's request:
 

@@ -666,7 +666,7 @@ Console.WriteLine($"{fwd.ActiveConnections} conn · {fwd.BytesSent + fwd.BytesRe
 | 9 | 全局请求 | 服务端全局请求，如 `hostkeys-00@openssh.com`（主机密钥轮换） | ✅ 主机密钥轮换由主机密钥策略开启（`IHostKeyRotationPolicy`，spec/05 §6.4.1）；发全局请求仍是库内部的方法 |
 | 10 | SFTP 扩展 | 厂商 SFTP 扩展 | ✅ 库内封装：`posix-rename`、`hardlink`、`fsync`、`limits`、`statvfs`、`copy-data`、`expand-path`、`lsetstat`、`users-groups-by-id`（spec/06 §7.1）；厂商私有的经 `SftpFileSystem.SendExtendedAsync`（spec/06 §7.3） |
 | 11 | 度量 / 追踪 / 报文旁路 | 诊断、录制、APM | 🚧 度量走 `System.Diagnostics.Metrics`：连接与通道的一组（`SshMetrics.MeterName`）、转发的一组（`ForwardMetrics.MeterName`），见 spec/08 §7；报文旁路 `IPacketTap` 已做（spec/08 §9）；`ActivitySource` 还没有做 |
-| 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`，没有另设接口 |
+| 12 | 配置来源 | `~/.ssh/config`、企业下发、UI | ✅ 以函数的形式：`SshConfigFile.Parse` / `LoadAsync` / `Resolve` / `CreateConnectionOptionsAsync`（写回配置时一个参数用 `TryFormatArgument`），没有另设接口 |
 
 > 这张表原本是「后期扩展性」的全部答案，判据是：
 > **§1 那九条宿主补丁，逐条都能对应到这张表的某一行。**
@@ -2448,6 +2448,7 @@ xauth 一定带 `-f`、裁决期间停表、SFTP 同步 API、SOCKS5（含认证
 | 一个 `IdentityFile` 读不出来，整个解析失败；跳板与目标各读一遍同一把钥（KDF 跑两遍、口令问两遍） | 只跳过那一把并通知调用方；一次解析内按路径共用，不跨调用缓存（`spec/09` §7） |
 | 调用方为目标准备的口令也交给了跳板 | 口令与键盘交互只给最终目标，跳板只拿公钥凭据（`spec/09` §7） |
 | `ask` / 缺省时只要配置写了 `UserKnownHostsFile`，调用方给的策略就被丢掉；`none` / `/dev/null` 被当成文件路径 | 调用方策略优先；`none` / `/dev/null` 即不用 `known_hosts`（`spec/09` §7） |
+| 分词只认双引号、只在整个值被括住时去掉引号，不认单引号与反斜杠：`IdentityAgent \\.\pipe\x` 本库读成原样，`ssh` 读成 `\.\pipe\x`，宿主原样导出的命名管道 `ssh` 用不了，本库读回来又看不出错 | 分词照 OpenSSH 的读法（对 Win32-OpenSSH 9.5p2 `ssh -G` 的黑盒观察）；写回配置用 `SshConfigFile.TryFormatArgument`，本库与 `ssh` 读回来都是原值（`spec/09` §7.4） |
 
 #### 主机证书，与不读的私钥格式
 
