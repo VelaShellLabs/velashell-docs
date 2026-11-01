@@ -44,6 +44,10 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 画面路径:解码与像素转换在接收线程上、帧缓冲锁外完成,帧缓冲记录变化区域的并集,界面只把这部分拷进位图(原先每帧克隆整个桌面、1080p 约 8 MB,再整帧拷贝一次);位图按目标矩形裁剪,不画行尾补齐列。标签切走(视图移出可视树)或窗口最小化时停止呈现,并在服务器支持时发送 Suppress Output 暂停显示更新(不耗带宽、不解码),回来后恢复并发 Refresh Rect 重绘。远端鼠标形状(文本 I 形、调整大小箭头、打字时隐藏等)按服务器的指针更新显示。键入的文字每个快速路径 PDU 最多 7 个字符。会话断开后,桌面上出现“重新连接”浮层按钮(宿主会话标签同样可重连);重连会更新凭据及证书批准,重连失败时保留当前视图,按钮可再次点击。
 
+**后台长时间保持连接。** 暂停显示更新的会话在链路上完全静默,而 NAT 网关、防火墙、云负载均衡与端口转发会在空闲几分钟后悄悄丢弃连接、不通知任何一端——回到标签时先看到冻结或黑屏的桌面,过一会儿才弹出断开提示。因此库对套接字开启 TCP keep-alive(空闲 30 秒后探测,每 10 秒一次、3 次无应答即判定断开),并在显示更新暂停期间每 30 秒重发一次“暂停”状态,让用户态端口转发也能看到流量;库调用方可用 `RdpClientOptions.KeepAliveInterval` 调整(`TimeSpan.Zero` 关闭)。链路仍然断掉时,约一分钟内就在后台发现,而不是等用户回来才发现。
+
+**断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
+
 ### 远程按键悬浮球
 
 插件不装全局键盘钩子,所以本机系统会先截走的组合键按了也到不了远端:Ctrl+Alt+Del 总由本机处理,Win+L 锁的是本机,Ctrl+Shift+Esc 打开本机任务管理器,Alt+Tab 切换本机窗口,Win+R / Win+D 由本机资源管理器处理,单按 Win 会让本机和远端的开始菜单一起弹出,Windows 11 的 PrintScreen 默认打开本机截图工具。这些键收在桌面边缘的**远程按键悬浮球**里:
@@ -174,7 +178,7 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 - **远端指针**:实测收到并解码服务器的 32×32 I 形光标(热点 15,16)。
 - **绘图指令**:开启与关闭绘图指令各连一次 xrdp,桌面、以及滚动 2000 行之后的终端(xterm)逐像素一致;xrdp 每次发约 70 个指令更新、300–500 次缓存 MemBlt。xrdp 的 Xorg 后端不发 ScrBlt、填充与图案画刷,这几类只由单元测试覆盖(`OrderDecoderTests`:每种指令与缓存格式、边界、增量坐标、截断与 2000 次随机变异;`RdpDrawingOrderTests`:重叠拷贝、ROP3 真值表、画刷原点、裁剪、两条更新路径)。
 
-加固与画质相关行为另有离线测试:`RdpHardeningTests`(含真实目录联接,以及发送超大 TSRequest、CredSSP v3 的假服务器)、`RdpRenderingTests`(1:1 绘制、DPI、Suppress Output、颜色深度设置)、`PlanarTests`(FreeRDP 测试向量与模糊测试)、`RdpPointerAndInputTests`(指针掩码规则、缓存、批量键入)。
+加固与画质相关行为另有离线测试:`RdpHardeningTests`(含真实目录联接,以及发送超大 TSRequest、CredSSP v3 的假服务器)、`RdpRenderingTests`(1:1 绘制、DPI、Suppress Output、颜色深度设置)、`RdpBackgroundSessionTests`(TCP keep-alive、断开原因区分、自动重连及后台重连暂停更新)、`PlanarTests`(FreeRDP 测试向量与模糊测试)、`RdpPointerAndInputTests`(指针掩码规则、缓存、批量键入)。
 
 NLA/CredSSP 除离线 ASN.1 单测外,对 FreeRDP shadow 服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
 
