@@ -356,7 +356,7 @@ WinSCP 的 Commander 界面两栏都可以指向远端、FileZilla 可以开两�
 
 - **重试回归续修（2026-10-28）**：FTP 单文件 stat 与打开读流在持租约时先切 Binary 再取 SIZE，不把 LIST/MLST 的显示大小和另一种传输模式下的大小同时当精确真值；SIZE 不支持则使用既有未知长度语义，完成回复校验不取消。源读取失败不被目标 Flush/CLOSE 的次异常覆盖，另保留目标 durable 水位供续传记账。开启传输日志后，失败尝试在退避前写入脱敏结构化 `ATTEMPT_FAILED` 记录（错误类型链/数值，不写异常消息与服务器正文），重试后成功仍可追查。0B 进度可能只是小文件仍在 SFTP 缓存、首个 WRITE 尚未确认，不代表源未读取。正常批量回归必须检查首次成功与 RETR/OPEN 次数，不能只看最终哈希或把 mock 目标当真实 SFTP 互操作。
 
-- **CI 跨平台续修（2026-10-29）**：已知 binary SIZE 的下载若以 `426` 中断且实际长度不符，保留 `RemoteTransferLengthException` 及预期/实际字节数；FluentFTP 在关闭数据流时抛出的嵌套命令异常不能掩盖该诊断。本地目标写入异常与取消仍优先，不改变 busy retry 或未知长度语义。环回 FTP 测试端的控制连接设置 `NoDelay`，避免 Linux 的 Nagle/延迟 ACK 给每个文件叠加约 40 ms；保留 2000 文件覆盖与默认 60 秒测试超时。
+- **CI 跨平台续修（2026-10-29）**：已知 binary SIZE 的下载若以 `426` 中断且实际长度不符，保留 `RemoteTransferLengthException` 及预期/实际字节数；FluentFTP 在关闭数据流时抛出的嵌套命令异常不能掩盖该诊断。本地目标写入异常与取消仍优先，不改变 busy retry 或未知长度语义。环回 FTP 测试端的控制连接设置 `NoDelay`，避免 Linux 的 Nagle/延迟 ACK 给每个文件叠加约 40 ms；保留 2000 文件覆盖与默认 60 秒测试超时。2026-11-01 起：`426` 中断改报可重试的 `VelaFtpTransferInterruptedException`（控制连接仍应答 NOOP 时；不应答的按掉线报连接错误），带预期 / 实际字节数的 `RemoteTransferLengthException` 挂在它的内层，诊断不丢；服务器回 226 而字节不够的仍直接报 `RemoteTransferLengthException`、不重试。
 
 ### 8.2 已知限制
 
