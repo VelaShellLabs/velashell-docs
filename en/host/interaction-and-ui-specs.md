@@ -775,6 +775,8 @@ Opened from the multi-select in §3 (exactly two connections): one file tab with
 - **Right**: `xterm-256color` ｜ `120×36` (terminal size) ｜ `cpu 23%` ｜ `memory 1.2G` ｜ `net 4.2 MB/s` ｜ `UTF-8`.
 - CPU, memory, and network are lightweight real-time metrics for the current session. They share a source with the resource panel in §11; here they are a compact persistent version.
 - Each field is clickable. For example, clicking the size triggers one resize synchronization, and clicking the encoding opens the encoding menu.
+- **Master password lock entry** (since 2026-10-31, shown only when a master password is on): a 21px-high icon button in the left group, before the connection info. While locked it is a closed lock (`Icon.lock`, `VelaWarning`)
+  with the tooltip “Saved passwords are locked — click to unlock”, and clicking it opens the unlock dialog; while unlocked it is an open lock (`Icon.lock-open`, `text-muted`) with “Master password unlocked — click to lock now”, and clicking it locks right away with a short toast. See §14.7.
 
 ### Disconnected State (`ZufZw`)
 
@@ -1762,7 +1764,7 @@ The left side contains navigation sections and the right side shows the correspo
 
 | Page | Frame | Implementation status (2026-07-12) |
 |---|---|---|
-| General | `2BIRD` | Startup/tray/language/connection defaults/session logs/settings import / export (by category, see below the table)/behavior and automatic reconnect; under “Restore sessions” in the “Startup & Window” section sits the sub-option “Restore split layout” (off by default, disabled while restore sessions is off, see §4C); below “Check for updates on startup” sits “Download updates automatically” (since 2026-10-24, off by default, with existing configurations migrated to off once; disabled while the startup check is off; shown only on installs that can update themselves in place — Linux, the Store build and read-only install folders don't have it): when the startup check finds a new version it downloads and verifies it in the background and then offers a restart, never restarting on its own; the update channel is on the About page, and the unimplemented “Master Password” group is hidden |
+| General | `2BIRD` | Startup/tray/language/connection defaults/session logs/settings import / export (by category, see below the table)/behavior and automatic reconnect; under “Restore sessions” in the “Startup & Window” section sits the sub-option “Restore split layout” (off by default, disabled while restore sessions is off, see §4C); below “Check for updates on startup” sits “Download updates automatically” (since 2026-10-24, off by default, with existing configurations migrated to off once; disabled while the startup check is off; shown only on installs that can update themselves in place — Linux, the Store build and read-only install folders don't have it): when the startup check finds a new version it downloads and verifies it in the background and then offers a restart, never restarting on its own; the update channel is on the About page; the master password rows of the “Privacy & Security” section are in §14.7 |
 | Appearance | `ZAbb9` | Theme (twelve named themes + follow system, live preview), accent color (follows the theme out of the box: “Follow theme” in front of the swatches = no override, use the current theme's own accent — since 2026-09-29; the previous factory pink `#E91E63` covered every theme's accent, and saved configurations are not migrated; any other color comes from the color picker, see 14.3), UI font/size, opacity, terminal colors (color picker, offering the scheme's 16 ANSI colors as swatches) and color schemes (defaults to the active theme's paired scheme, see below); the “Window” section has the tab bar position (top / bottom, every pane changes together, previewed immediately, see §4B) and Show Tabs in Multiple Rows (§4B.3) |
 | Terminal | `08FpM` | Font/line height/TERM/encoding/cursor/three-state bell/scrolling/copy and paste/IME/commands run after connection; scrollback lines (default 10000, 100–200000) apply to open tabs on save, **lowering the value trims the excess history at once and it cannot be recovered**, and it applies to the main screen only — the alternate screen of full-screen programs never has scrollback (details in [Settings Audit](settings-audit.md), “Terminal · Font and Display”) |
 | Output Rules | — (new, 2026-10-25) | The user's highlights and auto-answers, sharing one table (list + editor + test), see §14.6 |
@@ -2061,6 +2063,26 @@ changes are written with the window's "Save settings" and apply to open tabs rig
 
 ---
 
+### 14.7 Master Password (2026-10-31)
+
+Design and semantics are in [master-password-design](master-password-design.md); this section covers only the UI.
+
+- **Settings → General → Privacy & Security** (before “Remember passwords”):
+  - The “Master password” row: label + description (“One more lock on saved passwords… Off by default; there is no way back if you forget it (unless you keep a recovery code)”) + a status line (Off / On · unlocked / On · locked, followed by “recovery code created / no recovery code”).
+    Buttons on the right follow the state: off → “Turn on…” (`dlg-primary`); on → “Unlock…” (while locked) / “Lock now” (while unlocked), “Change…” (`dlg-outline`), “Turn off…” (`dlg-danger`). The state is always asked from the master password service, never read from the settings flag.
+  - The result of an action is written under the row (“The master password is on”, “Locked: the local encryption keys were cleared from memory”, …).
+  - “Lock after idle (minutes)”: a `NumericUpDown` 0–1440 in steps of 5, 0 = never (default); “Lock when the system locks”: a toggle, off by default, **shown only on platforms that can read the lock state** (currently Windows). Both only take effect with a master password.
+- **Master password dialog** (`MasterPasswordDialogView`, 440 wide, the same shell as the diagnostics-bundle and settings-export dialogs: `bg-surface` card, 28px title bar with `Icon.lock`, 52px button bar). One view model switches between modes:
+  - **Unlock**: description + a “Master password” box (`SecurePasswordBox`, never copied to the clipboard or history); two links at the bottom, “Unlock with the recovery code” (when one exists; it switches to a monospaced recovery-code box and the link becomes “Unlock with the master password”) and “Forgot the master password?”; confirm “Unlock”.
+    When the header is missing / unreadable or the keychain did not open, the reason is written under the description in `VelaWarning`, and confirming only repeats it.
+  - **Turn on**: “New master password” and “Type it again”; under 12 characters a `VelaWarning` hint “Use at least 12 characters…” (not a block), “Printable English characters only”, a warning “If you forget the master password, saved passwords cannot be recovered”,
+    checkboxes “Also create a recovery code (recommended)” (ticked by default) and “I understand: … cannot be recovered” (required); confirm “Turn on” → with a recovery code, a **write down the recovery code** step follows: `XXXX-XXXX-…` in large monospaced text (selectable, never put on the clipboard automatically), with a single “I have written it down” button.
+  - **Change**: “Current master password” + the two new-password boxes; **Turn off**: “Current master password”, confirmed with the red-outlined “Turn off the master password” (the destructive button of DESIGN.md §5.1).
+  - **After unlocking with the recovery code**: switches to “Set a new master password”, with the cancel button reading “Later” (it is already unlocked).
+  - **Forget**: explains the consequences (saved secrets can no longer be read, the old files are kept as `.forgotten-<time>`, no back door), confirmed with the red-outlined “Start a new key”; afterwards a toast in the main window says where the old files are.
+  - While deriving, a spinner and “Deriving the key…” show and the buttons are disabled; after a wrong entry the red text “That master password is not correct. Try again in N s.” counts down, and the button works again at 0. Esc = cancel (ignored while busy).
+- **Start-up**: one unlock dialog after the main window appears (cancellable); there is only ever one dialog at a time, and sessions restored at start-up, plugins reading secrets, manual reconnects and other requests arriving together all wait for it.
+- The **status bar** lock entry is in §7.
 ## 15. Advanced Feature Panels (Large Standalone Panels)
 
 Open these as tabs or standalone floating windows. All can also be entered from the command palette:
