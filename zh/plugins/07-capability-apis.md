@@ -69,6 +69,8 @@ public interface IRemoteFs
 
 进度采用 64 位字节计数、单调快照序号、执行代次和明确终态。已写满仍可能正在远端收尾；只有 `Succeeded` 是成功。远端临时文件是目标同目录下的 `.vela-up-<16 位十六进制>`；开始写之前先做提交预检，要覆盖而服务端没有 `posix-rename`、不覆盖而目标已存在时直接失败（`ErrorCode` 分别为 `not-supported` / `commit-rejected`），不传完一整份才被拒，提交仍是唯一权威。覆盖上传的临时文件一建出来就按被替换普通文件的 0777 权限位新建（服务端照常减 umask；目标是个条目却读不出模式时按 0600；读不到目标就按服务端默认，提交时照旧把关），写入期间不比原文件宽；setuid / setgid / 粘滞位与属主仍由提交补上。覆盖提交把被替换普通文件的权限位带到新文件上，属主尽力而为，setuid / setgid 只在属主属组对上之后才带；带不过去又会放宽权限时拒绝提交、目标不动。取消必须指定执行代次，恢复必须重新审批、核对连接身份/源对象/检查点及最终提交结果；不能自动重传不确定副作用。新方法默认明确不支持，能力位 false 时不退回同步大文件上传。`ErrorCode` `insufficient-space`：Linux / macOS 的源快照所在卷空间不够（详见 [自动化与 AI §1.6](11-automation-and-ai.md)）。停止宽限期 30 秒；断线记 `Failed` / `session-disconnected`，表示确认停写、目标没写入。这里的契约不等于通用权限 Broker 已实现，实际可用权限与生命周期边界必须按宿主实现说明解读。
 
+只撤「还没批准」的传输用条件撤回（SDK 2.1.4）：`SupportsTransferWithdraw`（默认 false，与上传、下载能力各自独立）与 `WithdrawPendingTransferAsync(transferId, expectedGeneration, ct)`。判定与撤下由宿主同一步完成，与批准生效先到者赢，结论为 `PastApproval`（批准已生效，什么都不改）/ `Withdrawn`（撤下了，以 `Cancelled` 收尾、什么都没写）/ `AlreadyEnded`（批准之前已因别的原因收尾）；不支持的宿主明确抛 `NotSupportedException`，不退化成 `CancelTransferAsync`。当前宿主上传与下载都已支持，完整契约见 [SDK §3.3f](../sdk/sdk-reference.md#33f-条件撤回sdk-214)。
+
 ### 2.2 独立下载任务（SDK 2.1.2）
 
 `SupportsDownloadOperations`（默认 false）与 `StartDownloadAsync(sessionId, remotePath, localPath, RemoteDownloadOptions, ct)` 为独立下载入口；不支持则拒绝，不降级同步下载。复用 §2.1 的 get/wait/cancel 与原共享资源额度：上传下载合计每插件 4 实际传输、32 活动/排队、1024 生命周期回执；请求/等待取消不取消任务，`Timeout=null` 无默认执行死线，下载 `CanResume=false`。方向/阶段、64 位进度和停止确认见 [SDK §3.3c](../sdk/sdk-reference.md#33c-独立下载任务sdk-212)。

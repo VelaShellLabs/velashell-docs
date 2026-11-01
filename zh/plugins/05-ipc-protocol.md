@@ -191,6 +191,16 @@ SDK 契约、严格发送/半帧失败回归，以及正式 SDK 2.1.0 装配后�
   在途请求全部失败、触发断开、释放连接 —— 普通的 `NotifyAsync` 对单条通知仍是尽力而为，但不再带着半帧继续用这条连接（此前只有 `NotifyExecutionAsync` 这样做，§7.1）。排队等写闸的调用也响应连接关闭，以 `ObjectDisposedException` 退出
   （`RequestAsync` 里表现为 `RpcDisconnectedException`），不再一直挂着。宿主与 PluginHost 不必改代码，抬了包版本就生效。
 
+### 7.5 条件撤回（SDK 2.1.4）
+
+**契约已随 SDK 2.1.4 正式发布到 NuGet.org，宿主已接上。**
+
+- **`fs/transfer/withdraw`**（`PluginRpc.FsTransferWithdraw`，载荷 `FsTransferWithdrawRequest(TransferId, ExpectedGeneration)`，应答 `RemoteTransferWithdrawResult`）：只在这一代的批准还没生效时撤下传输，判定与撤下在宿主那边同一步完成，与批准生效先到者赢 —— 没有「插件 `get` 看到 `Approval`、再发 `cancel`」之间那一个往返的空当。结论 `RemoteTransferWithdrawOutcome` 线上按数值传，不认识的值读成 `Unknown`，不算撤下。
+- 握手 `HandshakeResponse.SupportsTransferWithdraw` 缺席时为 false。宿主按能力实例的实际支持宣告；没宣告时 PluginHost 不发这条，在插件进程里直接抛 `NotSupportedException`，也**不**改发 `fs/transfer/cancel`。
+- 与 `cancel` 同一套所有权、执行代次与撤权口径：代次不符拒绝，同一代重复请求结论不变，撤权后仍可用于清理、快照脱敏；请求帧不随调用方取消，已登记的撤回不回滚。无效或越权的 id 在进程内抛 `FileNotFoundException`；隔离进程里这类错误目前还原成 `RpcRemoteException`（`RpcErrorCodes` 不认 `FileNotFoundException`，`fs/transfer/*` 其余请求同样如此）。
+
+完整语义见 [SDK §3.3f](../sdk/sdk-reference.md#33f-条件撤回sdk-214)。
+
 ## 8. 开发计划(本分项)
 
 | 任务 | 说明 | 依赖 | 估算 |

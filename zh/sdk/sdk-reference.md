@@ -116,7 +116,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | `StartUploadAsync(sessionId, localPath, remotePath, RemoteUploadOptions, ct)` | 返回 `RemoteTransferSnapshot`，不等待传完；以宿主绑定的插件身份和 `OperationId` 幂等去重，相同 id 参数变化则拒绝 |
 | `GetTransferAsync(transferId, ct)` | 读取所属插件且当前有权访问的任务快照，不泄漏越权 id 的信息 |
 | `WaitTransferAsync(transferId, afterSequence, waitTimeout, ct)` | 等 `Sequence > afterSequence` 或终态；`afterSequence >= 0`，等待窗口 0–30 秒（`MaxTransferWaitSeconds`），到期返回当前快照 |
-| `CancelTransferAsync(transferId, expectedGeneration, ct)` | 幂等取消指定执行代次；不匹配当前 `Generation` 则拒绝，旧取消不能停止恢复后的新代次 |
+| `CancelTransferAsync(transferId, expectedGeneration, ct)` | 幂等取消指定执行代次；不匹配当前 `Generation` 则拒绝，旧取消不能停止恢复后的新代次。这是无条件的取消 —— 已经批准、正在传的也停，只撤还没批准的用下一行 |
+| `WithdrawPendingTransferAsync(transferId, expectedGeneration, ct)` | 条件撤回（SDK 2.1.4，要 `SupportsTransferWithdraw`）：只在这一代的批准还没生效时撤下，判定与撤下由宿主同一步完成；结论 `PastApproval` / `Withdrawn` / `AlreadyEnded`，见 §3.3f |
 | `ResumeTransferAsync(transferId, RemoteTransferResumeOptions, ct)` | 显式、重新审批后恢复；选项为非空 `OperationId`、正数 `ExpectedGeneration` 和非空 `TargetSessionId`，不能指定路径/偏移/源文件身份 |
 
 `RemoteUploadOptions` 只有必填非空 `OperationId`、`Overwrite`（默认否）及可空正数 `Timeout`（null 无执行死线）。无固定文件大小上限；64 位字节计数不受 32 MiB 或 `int.MaxValue` 限制，但不消除磁盘、权限、协议和网络边界。实现必须按流传输，不整体载入内存。宿主用不可预测的临时文件，校验和远端收尾成功后原子提交；无法实现所请求的原子提交/覆盖时明确失败，不能先删除目标。当前宿主的临时文件是目标同目录下的短名 `.vela-up-<16 位十六进制>`（接在目标名后面会让长文件名超出 `NAME_MAX`）。开始写之前做一次提交预检：要覆盖而服务端没有 `posix-rename`、不覆盖而目标已存在时直接失败，`ErrorCode` 分别为 `not-supported` 与 `commit-rejected`，与提交时被拒同一口径；预检查不出来不拦，之后才出现的目标照样由提交拒绝，提交仍是唯一权威。覆盖上传的临时文件一建出来就按被替换普通文件的 0777 权限位新建（服务端照常减 umask；目标是个条目却读不出模式时按 0600；读不到目标就按服务端默认，提交时照旧把关），写入期间不比原文件宽；setuid / setgid / 粘滞位与属主仍由提交补上。覆盖提交把被替换普通文件的权限位（07777）带到新文件上：属主尽力而为，setuid / setgid 只在属主属组对上之后才带；读不到目标模式，或改不了临时文件模式而它比目标宽时拒绝提交，目标原样不动（只许收窄，不许放宽）。
@@ -172,6 +173,19 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 - 宿主抛它就等于保证：任务没有登记、没有生成 transferId、没有读写任何内容、OperationId 也没有记进账本。条件变了之后可以再试（同一个 OperationId 不会撞上「参数不符」），但不要紧接着自动重试。
 - 与另外两种结局分开处理：「结果未知」只能用同一个 OperationId 去重取回执；「用户拒绝」（`PluginPermissionDeniedException`）重试没有意义。参数非法、平台不支持、会话不在、OperationId 参数冲突照旧用原来的异常类型。`IRemoteFsApi.StartUploadAsync` / `StartDownloadAsync` 补了 `<exception>` 说明。
 - 当前宿主的空间不足发生在审批后的上传源快照阶段，仍返回已登记任务的 `Failed` / `insufficient-space` 快照（§3.3b），不是登记前拒绝。`SourceInUse` 的识别限于 Windows 共享/锁冲突。
+
+### 3.3f 条件撤回（SDK 2.1.4）
+
+**契约已随 SDK 2.1.4 正式发布到 NuGet.org，宿主已接上（宿主中央依赖为 2.1.5）。** 用到它的插件要声明 `minSdkVersion: 2.1.4` —— 装着更旧 SDK 的宿主上连这个成员都不存在。只增不改，`apiLevel` 不变。
+
+- `IRemoteFsApi.SupportsTransferWithdraw` 默认 `false`，与上传、下载能力各自独立：实现了独立任务的宿主不一定实现它。不支持时 `WithdrawPendingTransferAsync` 明确抛 `NotSupportedException`，**不**退化成无条件的 `CancelTransferAsync`；插件在这样的宿主上要么照旧「先 `GetTransferAsync` 看到 `Approval`、再按代次取消」并接受那一个往返的空当，要么不撤。
+- `WithdrawPendingTransferAsync(transferId, expectedGeneration, ct)` 只在这一代的宿主批准**还没生效**时撤下传输，批准已经生效的什么都不动。判定与撤下由宿主在同一步完成，与「批准生效」放在同一个串行点上、先到者赢 —— 不会出现宿主恰在这时批准、刚批准的又被撤掉。返回 `RemoteTransferWithdrawResult`：`Outcome` 与调用之后的权威快照，`IsWithdrawn` 只认 `Withdrawn`。
+- 结论 `RemoteTransferWithdrawOutcome`（数值显式给出、只增不改，线上按数值传）按宿主记下的两件事互斥划分 —— 这一代的批准生效了没有、批准生效之前有没有登记过取消：批准已生效（含之后已到终态的）→ `PastApproval`，什么都不改，任务照常进行；否则登记过取消（本次、先前的撤回、或批准前的 `CancelTransferAsync`）→ `Withdrawn`；否则已经收尾（确认框里被拒、源不见了、断线、到期、撤权……）→ `AlreadyEnded`，什么都不改，原因看快照的 `State` / `ErrorCode`；否则本次登记取消 → `Withdrawn`。`Unknown = 0` 与不认识的值不当成撤下，也不据此改发无条件取消，接着按快照观察到终态。
+- 撤下的那一代不会再被批准：已弹出的确认框关掉，排在确认闸后面的不再弹，随后到达的批准作废；什么都不读、什么都不写，以 `Cancelled` 收尾、`RemoteStopConfirmed` 为 true，返回时可能还是 `CancelRequested`。宣告支持的宿主在批准生效的同一步把 `Phase` 移出 `Approval`（上传与下载同一口径，批准之后等传输槽的也不再报 `Approval`），所以这样的宿主报 `Approval` 就等于「这一代的批准还没生效」。
+- `expectedGeneration` 必须为正且等于当前代次，不符抛 `InvalidOperationException`；恢复产生的新代次要重新批准，旧代次的撤回碰不到它。同一代重复调用得到同一结论，回执丢了原样再调一次（或 `GetTransferAsync`）。无效或不属于本插件的 id 抛 `FileNotFoundException`；权限撤销之后与 `CancelTransferAsync` 一样仍可用于清理，快照按撤权口径脱敏。令牌只取消本次请求的等待，宿主已经登记的撤回不回滚。
+- 隔离进程：RPC `fs/transfer/withdraw`（`PluginRpc.FsTransferWithdraw`，载荷 `FsTransferWithdrawRequest(TransferId, ExpectedGeneration)`，应答即 `RemoteTransferWithdrawResult`），握手 `HandshakeResponse.SupportsTransferWithdraw`，见 [IPC §7.5](../plugins/05-ipc-protocol.md#75-条件撤回sdk-214)。测试替身：`FakeRemoteFs.SupportsTransferWithdraw`（默认否）、`WithdrawTransferHandler` 与 `TransfersWithdrawn`（请求过不代表撤下了）；没宣告支持或没有处理器时明确抛不支持，也不改走 `CancelTransferHandler`。
+
+当前宿主（2026-10-31 起）在进程内与隔离模式下都宣告支持，上传与下载同一口径：判定与撤下在任务锁里一步完成，授权闸登记批准时也经回调在同一把任务锁里推进阶段，两边谁先拿到锁谁赢。同一拍里已被断线、到期、撤权或确认框里的拒绝叫停、还没来得及发布终态的那一代，撤回照判定顺序答 `Withdrawn`，终态也记 `Cancelled` / `cancelled`（不再记成先叫停的那个原因）。AI 插件停止或拒绝时用它撤本轮还在等确认的传输，见 [自动化与 AI §1.6](../plugins/11-automation-and-ai.md#16-ai-文件上传与进度sdk-211)。
 
 ### 3.4 界面与扩展点
 
@@ -345,6 +359,7 @@ if (ctx.Ui.SupportsNotifications)
 | **2.1.1** | 独立上传任务：`SupportsTransferOperations`、`StartUploadAsync` / `GetTransferAsync` / `WaitTransferAsync` / `CancelTransferAsync` / `ResumeTransferAsync`、`RemoteTransferSnapshot` 与 `fs/transfer/*` RPC。已正式发布，见 §3.3b。 | 用到就要（`2.1.1`） |
 | **2.1.2** | 独立下载任务：`SupportsDownloadOperations`、`StartDownloadAsync` / `RemoteDownloadOptions`，快照加 `Direction` / `Phase`，`fs/transfer/startDownload` RPC。已正式发布，见 §3.3c。 | 用到就要（`2.1.2`）；AI 清单已声明 |
 | **2.1.3** | 插件协议的文件能力补口：`RemoteFileEntry.IsSymbolicLink` / `LinkTarget`、`IProtocolLastWriteTime`、`IProtocolChecksum` 与 `RemoteChecksumAlgorithm`（§3.3d）；传输启动前被拒 `PluginTransferRejectedException` 与 `transfer-rejected` 错误码（§3.3e）；往消息中心发通知 `IUiApi.PostNotificationAsync` 与 `ui/notify`（§3.7）；版本比较 `SemanticVersion`（§3.8）；`RpcConnection` 一帧要么整帧写完、要么不开始（[IPC §7.4](../plugins/05-ipc-protocol.md#74-通知启动前被拒与整帧写入sdk-213)）。已正式发布，宿主已接上；宿主当前中央依赖为 2.1.4。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.3`）；整帧写入的修正不涉及插件代码，抬包即生效 |
+| **2.1.4** | 条件撤回：`IRemoteFsApi.SupportsTransferWithdraw` / `WithdrawPendingTransferAsync`、`RemoteTransferWithdrawOutcome` / `RemoteTransferWithdrawResult`、`fs/transfer/withdraw` RPC 与 `FsTransferWithdrawRequest`、握手 `HandshakeResponse.SupportsTransferWithdraw`、测试替身 `FakeRemoteFs.WithdrawTransferHandler`（§3.3f）。已正式发布，宿主已接上。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.4`）；AI 清单声明的是 2.1.5 |
 | **2.1.5** | 工作台变体图标与连接框自定义分页：`WorkspaceVariant.Icon`（类型选择卡片图标，`null` 回落描述符 `Icon`）、`WorkspaceDescriptor.Pages`、`ProtocolSettingPage(Key, Label)`、`ProtocolSettingField.Page`（优先于 `IsAdvanced`；键不在 `Pages` 里按 `null`；与 `VisibleWhen` 为「与」）。语义见[开发指南 §5.14.1](../templates/dev-guide.md)。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.5`） |
 
 ### 2.0 迁移

@@ -159,6 +159,16 @@ The download contract is officially published in SDK 2.1.2 on NuGet.org; host ce
   in-flight requests all fail, the disconnect fires and the connection is disposed — a plain `NotifyAsync` is still best-effort per notification, but never keeps using a connection with half a frame on it (before, only `NotifyExecutionAsync` did this, §7.1). Calls waiting for the write gate also react to the connection closing and leave with `ObjectDisposedException`
   (`RpcDisconnectedException` inside `RequestAsync`) instead of hanging. The host and PluginHost need no code change; raising the package version is enough.
 
+### 7.5 Conditional withdrawal (SDK 2.1.4)
+
+**The contract is officially published in SDK 2.1.4 on NuGet.org, and the host now supports it.**
+
+- **`fs/transfer/withdraw`** (`PluginRpc.FsTransferWithdraw`, payload `FsTransferWithdrawRequest(TransferId, ExpectedGeneration)`, reply `RemoteTransferWithdrawResult`): withdraws a transfer only while this generation's approval has not taken effect; the host decides and withdraws in one step, first come first served against the approval taking effect — there is no round-trip gap between "the plugin's `get` sees `Approval`" and "it sends `cancel`". `RemoteTransferWithdrawOutcome` travels as a number; an unrecognized value reads as `Unknown` and does not count as withdrawn.
+- Handshake `HandshakeResponse.SupportsTransferWithdraw` is false when absent. The host advertises the actual capability of its capability instance; when it is not advertised PluginHost never sends this request, throws `NotSupportedException` inside the plugin process, and does **not** fall back to `fs/transfer/cancel`.
+- Same ownership, generation and revocation rules as `cancel`: a mismatched generation is rejected, repeated requests for the same generation give the same outcome, and it still works for cleanup after revocation with a redacted snapshot; the request frame is not cancelled with the caller and a registered withdrawal is not rolled back. Invalid or foreign ids throw `FileNotFoundException` in process; in an isolated process that error currently restores as `RpcRemoteException` (`RpcErrorCodes` does not map `FileNotFoundException`, the same as for the other `fs/transfer/*` requests).
+
+Full semantics in [SDK §3.3f](../sdk/sdk-reference.md#33f-conditional-withdrawal-sdk-214).
+
 ## 8. Development Plan (This Work Item)
 
 | Task | Description | Dependency | Estimate |
