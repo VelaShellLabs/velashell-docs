@@ -128,7 +128,9 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
 
-**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。其他平台退回托管 NTLM(`NegotiateAuthentication`),对接受裸 NTLM 的服务器仍可用。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
+**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 .NET 托管 NTLM(`NegotiateAuthentication`),对接受裸 NTLM 的服务器可用。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
+
+**Unix 提供程序初始化。** `Package = "NTLM"` 本身不保证纯托管实现：Linux 默认使用 GSSAPI，未安装 NTLM 提供程序时，首个 `GetOutgoingBlob` 就返回 `Unsupported`，此时服务器尚未收到认证令牌，与 TLS 1.3 或密码错误无关。引擎在创建 Unix 认证上下文前启用 `System.Net.Security.UseManagedNtlm`；主程序及隔离插件宿主的 `runtimeconfig.json` 也从进程启动时启用该开关，避免其他插件先调用认证 API 后缓存旧值。该开关是进程级的，对同进程其他 `NegotiateAuthentication` 客户端同样生效；Windows 的 SSPI 路径不变。独立嵌入引擎的应用也应在启动配置中设置它。部署时同时更新宿主与插件并完整重启，无需安装 `gss-ntlmssp` 或关闭服务器 NLA。macOS 的 .NET 默认已启用托管 NTLM，因此没有 macOS 失败日志时不能判定是同一根因；只接受 SPNEGO 或禁止 NTLM 的服务器仍超出此 NTLM 路径的能力。
 
 **降级保护。** X.224 协商是明文的,中间人可以回答「只支持 TLS」——若用户在首次连接时信任了它的证书,密码就会随 Client Info 落到它手里。因此自动模式下,某台主机(主机+端口)**一旦用 NLA 登录成功就被记住**(插件存储),之后对它要求 NLA;它若改为只提供 TLS 或拒绝 NLA,连接会在发送任何密码之前停止,并提示这可能是有人在中间强迫降级。若确实是服务器关闭了「要求 NLA」,在连接的高级设置里把安全层改为 TLS 即可。从未用 NLA 登录过的主机(例如不接受我们 NTLM 的那类)仍按下面的回退处理。
 
@@ -162,6 +164,8 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。CI 与发布只跑托管测试与打包。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
 
 ## 验证情况与剩余边界
+
+`ManagedNtlmTests` 在没有额外安装 `gss-ntlmssp` 的 Linux .NET 11 RC3 容器中验证首个令牌、NTLMv2 凭据证明、连续客户端封包、服务器回包解密与篡改签名拒绝；相关认证测试共 21 项通过。Windows 上相关安全测试 54 项通过。CI 新增 Ubuntu/macOS 认证测试作业，测试进程不预设托管 NTLM 开关，直接验证插件初始化路径；macOS 作业及真实服务器登录尚未在本次本地验证中执行。Windows 上强制 `ManagedNtlm` 类仍调用系统 SSPI 的 NTLM 包，不能代替 Unix 测试。
 
 大文件阻塞的本地根因是下载长期持有发布操作锁、焦点发布等待占据键鼠队列，以及完整虚拟通道消息长期占据发送锁；原 cliprdr 队列丢写和 worker 吞异常也会造成请求无响应。聚焦回归覆盖挂起大文件响应时本地发布仍可完成、取消挂起内容请求且不创建本地缓存、进度字节和乱序重传、工作台状态/取消/画面刷新、焦点发布与键鼠队列分离、分片间输入与同通道消息顺序、队列溢出显式失败。磁盘 DriveCapability v2 的 DeviceData 已按 UTF-16LE 编码，8 字节 PreferredDosName 仍为 ASCII，并以三个名称长度的精确报文字节测试覆盖；尚未验收真实 Windows 对该磁盘声明的接受情况。上述大文件修复未连接公网服务器，真实 Windows 双向大文件和慢网体验仍需现场复验。
 
