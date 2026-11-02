@@ -1131,6 +1131,19 @@ public async Task Refresh_ListsContainers()
    停用时释放一切(否则 ALC 无法回收,内存净增长)。
 5. **远端友好**:探测类命令合并执行(一次 exec 多个输出段),不要每秒敲远端。
 
+### 原生互操作
+
+主程序、插件、测试与 C# 脚本中的 P/Invoke 优先使用 `LibraryImport` 与 `static partial`。
+只有源生成封送确实不支持、且不能以等价的原生签名简单表达时,才使用 `DllImport`,并在声明旁说明限制;
+例如经典 COM 接口及 `STGMEDIUM.pUnkForRelease` 依赖的运行时 COM 封送。
+
+迁移须保留调用约定、结构布局、缓冲区长度、`SetLastError`、句柄及回调生命周期,
+显式指定字符串编码与 Win32 `BOOL` 封送。`LibraryImport` 不探测 `A` / `W` 后缀:
+方法名不等于真实导出名时必须填写 `EntryPoint`(例如 `QueryContextAttributesW`),
+`StringMarshalling.Utf16` 仅选择编码。输出字符串可使用有界 UTF-16 缓冲区,
+结构体中的字符串指针必须在原生调用期间保持有效。
+编译通过后还须在相关平台运行回归测试,确认实际入口点与封送行为。
+
 ## 10. 版本与兼容承诺
 
 - **apiLevel(当前 = 1)**:同代际内 SDK 只增不改不删(接口方法、DTO 字段、

@@ -1116,6 +1116,21 @@ The host is a terminal application that is extremely sensitive to memory and lat
 4. **Manage memory**: download large files to disk instead of reading them into memory; cap caches; release everything on deactivation (otherwise the ALC cannot be reclaimed and memory grows steadily).
 5. **Be friendly to remote systems**: combine probe commands into one execution (one exec with multiple output sections) instead of sending a command to the remote host every second.
 
+### Native Interop
+
+Prefer `LibraryImport` with `static partial` for P/Invoke in the host, plugins, tests, and C# scripts.
+Use `DllImport` only when source-generated marshalling genuinely does not support the case and a simple,
+equivalent native signature cannot express it. Document the limitation beside the declaration;
+examples include runtime COM marshalling for classic COM interfaces and `STGMEDIUM.pUnkForRelease`.
+
+Preserve calling conventions, structure layouts, buffer lengths, `SetLastError`, and handle/callback lifetimes.
+Specify string encoding and Win32 `BOOL` marshalling explicitly. `LibraryImport` does not probe `A` / `W`
+suffixes: set `EntryPoint` when the managed method name differs from the actual export
+(for example, `QueryContextAttributesW`); `StringMarshalling.Utf16` selects only the encoding.
+Output strings can use bounded UTF-16 buffers, and string pointers in structures must remain valid
+throughout the native call. After compiling, run regression tests on the relevant platforms to verify
+actual entry points and marshalling behavior.
+
 ## 10. Versioning and Compatibility Guarantees
 
 - **apiLevel (currently = 1)**: within a generation, the SDK only adds and never changes or removes items (interface methods, DTO fields, and manifest schema). Breaking changes raise apiLevel; the host rejects plugins from a higher generation and gives a clear message.
