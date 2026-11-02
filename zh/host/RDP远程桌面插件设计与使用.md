@@ -140,6 +140,12 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,需要重新明确批准。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 .NET 的 `NegotiateAuthentication` 做 NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
 
+## 许可协商
+
+在**许可协商**阶段出现 `RDP licensing negotiation (msg 0x01) is not supported`，表示服务器要求执行旧版引擎尚未实现的 MS-RDPELE 许可交换。该阶段位于 TLS/认证之后，与 Unix NTLM 初始化失败是不同问题。托管引擎现支持 `SERVER_LICENSE_REQUEST` → `CLIENT_NEW_LICENSE_REQUEST`、平台挑战/响应及经过认证的新许可/升级许可；服务器的 `STATUS_VALID_CLIENT` 也可完成协商。其他许可错误保留错误码与状态转移码并明确失败，不会当作授权成功。重传/重置请求有上限，已开始的许可交换不能通过提前激活绕过；等待许可时仍分发早到的虚拟通道消息。
+
+交换在已校验的 TLS 通道内使用 [MS-RDPELE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpele/88061224-4a2f-4a28-a52e-e896b75ed2d3) 规定的 RSA 预主密钥传输、密钥派生、逐 blob 重置的 RC4 与 16 字节 MAC。专有证书校验协议签名；X.509 链以 TLS 对端提供的许可根为锚进行校验，不安装根证书、不下载证书，也不替代 TLS 身份校验。无效许可证书会回复中止消息。空许可证书会明确拒绝：TLS 会话没有可按规范回退使用的 GCC 证书。暂不持久化 CAL，因此后续连接重新请求许可，实际授权仍由服务器策略决定。
+
 ## 对恶意服务器的边界
 
 引擎与宿主同进程,所以服务器发来的一切都有上限,畸形输入只结束会话(或只丢掉那一项),不会冻结界面、耗尽内存或越出映射文件夹(2026-11-01 审计后加固):
@@ -165,7 +171,9 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 
 ## 验证情况与剩余边界
 
-`ManagedNtlmTests` 在没有额外安装 `gss-ntlmssp` 的 Linux .NET 11 RC3 容器中验证首个令牌、NTLMv2 凭据证明、连续客户端封包、服务器回包解密与篡改签名拒绝；相关认证测试共 21 项通过。Windows 上相关安全测试 54 项通过。CI 新增 Ubuntu/macOS 认证测试作业，测试进程不预设托管 NTLM 开关，直接验证插件初始化路径；macOS 作业及真实服务器登录尚未在本次本地验证中执行。Windows 上强制 `ManagedNtlm` 类仍调用系统 SSPI 的 NTLM 包，不能代替 Unix 测试。
+`ManagedNtlmTests` 在没有额外安装 `gss-ntlmssp` 的环境中验证首个令牌、NTLMv2 凭据证明、连续客户端封包、服务器回包解密与篡改签名拒绝。最初的 21 项认证测试已在 Ubuntu 和 macOS CI 上通过；测试进程不预设托管 NTLM 开关，直接验证插件初始化路径。Windows 上强制 `ManagedNtlm` 类仍调用系统 SSPI 的 NTLM 包，不能代替 Unix 测试。
+
+许可修复在 Windows 和 Linux .NET 11 RC3 容器上均通过 59 项许可/认证/通道聚焦测试。`LicensingTests` 与 `LicensingExchangeTests` 使用独立服务端实现校验 RSA 解密、密钥派生、RC4/MAC，覆盖 512/2048 位专有密钥和 X.509 链的完整交换、伪造签名/MAC、畸形消息、重置/重传上限、错误回复，以及真实连接循环在 Demand Active 前发送 MCS 应答。Ubuntu 和 macOS CI 均通过全部 47 项认证/许可测试，包括旧密钥交换用例。这些是模拟交换，并非连接日志中的真实 Windows 服务器；macOS 到 Windows 的桌面互通仍需现场复验。
 
 大文件阻塞的本地根因是下载长期持有发布操作锁、焦点发布等待占据键鼠队列，以及完整虚拟通道消息长期占据发送锁；原 cliprdr 队列丢写和 worker 吞异常也会造成请求无响应。聚焦回归覆盖挂起大文件响应时本地发布仍可完成、取消挂起内容请求且不创建本地缓存、进度字节和乱序重传、工作台状态/取消/画面刷新、焦点发布与键鼠队列分离、分片间输入与同通道消息顺序、队列溢出显式失败。磁盘 DriveCapability v2 的 DeviceData 已按 UTF-16LE 编码，8 字节 PreferredDosName 仍为 ASCII，并以三个名称长度的精确报文字节测试覆盖；尚未验收真实 Windows 对该磁盘声明的接受情况。上述大文件修复未连接公网服务器，真实 Windows 双向大文件和慢网体验仍需现场复验。
 
