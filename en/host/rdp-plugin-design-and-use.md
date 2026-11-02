@@ -28,7 +28,7 @@ The **Experience** page's graphics pipeline setting (`graphicsMode`) defaults to
 
 Protocol handling, ZGFX, surfaces/caches, frame acknowledgements and colour reconstruction are C#. H.264 uses the pure-managed NuGet packages `ManagedCodecs.H264` 0.6.0 and `ManagedCodecs.Core`, without an FFmpeg installation or bundled native graphics library. AVC444/v2 main and auxiliary pictures share an H.264 prediction chain; Progressive sub-band history belongs to the surface and survives encoding-context deletion. Supported: desktop/scaled-output mappings, raw/Planar/Alpha, ClearCodec (including NSCodec/RLEX), RemoteFX RLGR1/RLGR3 and Progressive simple/first/upgrade. Progressive V2 (codec 13) and RemoteApp window mappings are unsupported.
 
-All three platforms use the same implementation; H.264 currently uses CPU software decoding. The full Windows RDP regression suite and GFX/ZGFX/Planar tests on Debian have passed locally; macOS is included in CI but has not been run locally. Offline cases cover real IDR/P prediction, AVC444 chroma layouts, cache lifetimes and framebuffer/ACK integration. They do not establish real Windows-server interoperability or 4K/video throughput.
+All three platforms use the same implementation; H.264 currently uses CPU software decoding. The full Windows RDP regression suite and GFX/ZGFX/Planar tests on Debian have passed locally; graphics tests have also passed in CI on Ubuntu and macOS. Offline cases cover real IDR/P prediction, AVC444 chroma layouts, cache lifetimes and framebuffer/ACK integration. They do not establish real Windows-server interoperability or 4K/video throughput.
 
 ## Connect and use
 

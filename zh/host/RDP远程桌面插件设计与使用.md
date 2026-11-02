@@ -28,7 +28,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 协议、ZGFX、表面与缓存、帧确认和颜色重建均为 C#。H.264 使用纯托管 NuGet `ManagedCodecs.H264` 0.6.0 与 `ManagedCodecs.Core`,无需安装 FFmpeg 或分发原生图形库。AVC444/v2 的主图与辅助图共享 H.264 参考链;Progressive 的子带差分历史随表面保留,删除编码上下文不会丢失。支持桌面及缩放输出映射、raw/Planar/Alpha、ClearCodec(含 NSCodec/RLEX)、RemoteFX RLGR1/RLGR3、Progressive simple/first/upgrade;不支持 Progressive V2(codec 13)和 RemoteApp 窗口映射。
 
-三平台使用相同实现,H.264 当前为 CPU 软件解码。Windows 完整 RDP 回归和 Debian 上的 GFX/ZGFX/Planar 测试已运行通过;macOS 纳入 CI,尚未本地实跑。离线用例包含真实 IDR/P 参考链、AVC444 色度布局、缓存生命周期和帧缓冲/ACK 链路,不能替代真实 Windows 服务器互操作及 4K/视频吞吐验收。
+三平台使用相同实现,H.264 当前为 CPU 软件解码。Windows 完整 RDP 回归和 Debian 上的 GFX/ZGFX/Planar 测试已在本地运行通过;Ubuntu 与 macOS 的 CI 图形测试也已通过。离线用例包含真实 IDR/P 参考链、AVC444 色度布局、缓存生命周期和帧缓冲/ACK 链路,不能替代真实 Windows 服务器互操作及 4K/视频吞吐验收。
 
 ## 连接与操作
 
