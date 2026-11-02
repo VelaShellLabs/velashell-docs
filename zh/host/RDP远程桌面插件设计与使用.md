@@ -2,7 +2,7 @@
 
 English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md)。
 
-`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖 FreeRDP,不捆绑原生二进制,随包只有一份托管程序集,全 RID 通用。
+`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖 FreeRDP,不捆绑原生二进制,传输代码与托管 DTLS 依赖随包分发,全 RID 通用。
 
 ## 架构与范围
 
@@ -48,6 +48,18 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 **后台长时间保持连接。** 暂停显示更新的会话在链路上完全静默,而 NAT 网关、防火墙、云负载均衡与端口转发会在空闲几分钟后悄悄丢弃连接、不通知任何一端——回到标签时先看到冻结或黑屏的桌面,过一会儿才弹出断开提示。因此库对套接字开启 TCP keep-alive(空闲 30 秒后探测,每 10 秒一次、3 次无应答即判定断开),并在显示更新暂停期间每 30 秒重发一次“暂停”状态,让用户态端口转发也能看到流量;库调用方可用 `RdpClientOptions.KeepAliveInterval` 调整(`TimeSpan.Zero` 关闭)。链路仍然断掉时,约一分钟内就在后台发现,而不是等用户回来才发现。
 
 **断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
+
+### UDP 多传输与网络适配
+
+「体验」页新增 `transport`（默认 `auto`，可选 `tcp`）和 `adaptiveNetwork`（默认 `true`）。类库分别对应 `RdpClientOptions.Transport`、`AdaptiveNetwork`。自动模式在服务器支持扩展协商和 Soft-Sync 时建立 MS-RDPEUDP v1 可靠 UDP（UDP-R/TLS）与不可靠 UDP（UDP-L/DTLS 1.2）侧隧道，通过 MS-RDPEMT 承载服务器选择迁移的动态虚拟通道；不声明 UDP v2 或 UDP Preferred。主连接、经典位图/GDI、键鼠和静态通道仍走 TCP，开启 UDP 不代表整桌面流量已切换。
+
+UDP-R 使用 `SslStream`，UDP-L 使用纯托管依赖 `BouncyCastle.Cryptography` 2.7.0；UDP/DTLS 传输不增加原生库。两种隧道都必须匹配主 TLS 连接的 SHA-256 叶证书，创建 cookie 只在加密后发送。建链失败继续使用 TCP；成功确认后隧道故障会断开主连接，由现有重连逻辑恢复，避免跨传输重放设备操作。SSH 跳板自动强制 TCP，不绕过跳板直连目标 UDP；其他 TCP-only 代理调用方应设置 `TcpTunnel = true`。
+
+**UDP-L 当前限制：** FEC 可恢复的丢包继续交付；进入应用阶段后，无法恢复的序号缺口会终止隧道并要求重连。DVC 分片没有消息标识，直接跳过缺口可能把下一消息拼入残缺消息。出站 UDP-L 动态通道消息限制为 600 字节，拒绝分片；大消息应使用 TCP/UDP-R。这不是任意残余丢包下的连续媒体播放保证。
+
+`IRdpNetworkSource` 提供网络状态及变更事件，底栏显示 TCP/UDP-R/UDP-L、建链回退、服务器提供的 RTT、带宽和质量；未收到测量时保持未知。RTT ≥250ms 或带宽 <1000kbps 判为差，RTT ≥100ms 或带宽 <5000kbps 判为受限；恶化立即生效，改善需连续三个较好样本。弱网下鼠标移动按 25/50ms 合并，点击与键盘先按序送出待发移动，不被定时器拖延。自动网络检测允许服务器覆盖手工体验选项；关闭自适应后保留手工策略和不节流输入，仍可显示服务器测量。
+
+离线验证包含乱序、重传、FEC、窗口、残余丢包保护、Soft-Sync 屏障、早期消息通道、真实环回 UDP 套接字上的 TLS/DTLS 双向通信（含 EMT 跨记录及同记录多消息）、证书不匹配拒绝及取消收尾。真实 Windows 服务端互通和 WAN 性能尚未验证。
 
 ### 远程音频播放
 
