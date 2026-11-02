@@ -57,15 +57,15 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 `rdpsnd` 按 [MS-RDPEA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpea/bea2d5cf-e3b9-4419-92e5-0e074ff9bc5b) 完成格式协商、质量模式、训练应答、WaveInfo/Wave 重组、Wave2 播放和 Wave Confirm。只接受服务器提供的 PCM:8/16 位、单/双声道、8–48 kHz;使用现有加密 RDP 通道,不额外开启 UDP 端口。不支持压缩音频编码、音调重定向或麦克风采集。音量由服务器应用和本机混音器控制。音频与桌面显示暂停独立,切换标签或最小化仍可播放。
 
-音频在独立工作任务上处理,队列限制为 128 条消息且不超过 1 MiB;确认在播放完成后发送。Linux 会重试临时写入中断并恢复 ALSA 欠载,仅保留尚未写入的样本,避免重复播放已接受的音频;设备移除或恢复失败仍会报告音频错误。关闭、取消、格式切换和断连释放设备。输出设备不可用、格式不兼容或队列溢出会停止本次会话的音频,状态栏与日志报告原因,桌面连接仍然可用;修复默认设备后重新连接。库调用方可以订阅 `IRdpAudioSource.AudioPlaybackFailed`,晚订阅会重放已有错误。仅为磁盘/端口/打印机注册的伴随声音通道,在音频关闭时回报零个音频格式且不打开输出设备。
+音频接收、连续提交和完成确认采用独立流水线:处理一个 Wave 不再等待它播放完成,后续 Wave 与训练消息可以继续处理;Wave Confirm 仍按接收顺序、在对应块实际播放完成后发送,不以“已入队”代替完成。接收队列限制为 128 条消息且不超过 1 MiB;输出层另有覆盖待提交和在途音频的 128 块、1 MiB 与 2 秒累计时长预算(空队列允许单个合法的长音频块)。原生设备最多保留 32 个在途缓冲,设备已有至少 120ms 音频时暂停追加,单块本身可以超过这个水位。Windows 复用样本与头缓冲;macOS 分别跟踪每块的回调和实际播放终点;Linux 连续填充 PCM,以设备剩余帧数确定各块是否播放完毕,请求 40ms 的 ALSA 缓冲延迟。Linux 会重试临时写入中断并恢复 ALSA 欠载,仅保留尚未写入的样本,避免重复播放已接受的音频;设备移除或恢复失败仍会报告音频错误。服务器正常关闭与格式重协商先排空在途音频;取消和断连使未完成请求失效,由输出工作任务安全回收原生缓冲。输出设备不可用、格式不兼容或队列溢出会停止本次会话的音频,状态栏与日志报告原因,桌面连接仍然可用;修复默认设备后重新连接。库调用方可以订阅 `IRdpAudioSource.AudioPlaybackFailed`,晚订阅会重放已有错误。仅为磁盘/端口/打印机注册的伴随声音通道,在音频关闭时回报零个音频格式且不打开输出设备。
 
-插件日志 `<数据根>/logs/plugins/velashell.rdp.log` 中的 `RDPSND` 行记录实际播放开关、通道注册与协商通道号、平台后端、格式协商数量、训练应答、首个音频块和首次播放完成确认。`playback=False` 表示本次连接未启用音频;通道号非零只表示通道已协商,应继续检查 `formats received` 和 `wave received`。首块 `silent=True` 表示该块 PCM 全部为数字静音;之后收到首个非静音块时会再记录 `silent=False`,不逐帧刷日志,也不记录样本或凭据。`first playback completed and confirmed` 表示本机设备报告完成且已发回确认,不能代替扬声器听音验证。库调用方通过 `RdpClientOptions.DriveRedirectionLog` 接收这些诊断。
+插件日志 `<数据根>/logs/plugins/velashell.rdp.log` 中的 `RDPSND` 行记录实际播放开关、通道注册与协商通道号、平台后端、格式协商数量、训练应答、首个音频块和首次播放完成确认。`playback=False` 表示本次连接未启用音频;通道号非零只表示通道已协商,应继续检查 `formats received` 和 `wave received`。首块 `silent=True` 表示该块 PCM 全部为数字静音;之后收到首个非静音块时会再记录 `silent=False`,不逐帧刷日志,也不记录样本或凭据。`first playback completed and confirmed` 表示本机设备报告完成且已发回确认,不能代替扬声器听音验证。持续播放时还会输出 `playout` 汇总(最多每 5 秒一次):`targetMs` 为抖动缓冲目标,`bufferedMs` 为设备与待提交音频的估算总时长,`correctionPpm` 为当前速率校正,`inFlight` 为已提交原生缓冲数。库调用方通过 `RdpClientOptions.DriveRedirectionLog` 接收这些诊断。
 
 开发者可在插件仓库设置 `VELA_RDP_AUDIO_TONE_TEST=1`,运行 `dotnet test tests/VelaShell.Plugin.Rdp.Tests/VelaShell.Plugin.Rdp.Tests.csproj --filter FullyQualifiedName~SystemDefaultOutputPlaysProtocolTone`,通过 RDPSND 协议处理与本机默认设备播放两段低音量 440 Hz 测试音。此测试不连接远端、不采集音频,用于区分本机播放问题和远端协商问题;默认跳过。
 
-若远端仍显示没有音频设备,先确认已开启音频并重新连接,再检查远端 Windows 的“允许音频和视频播放重定向”策略以及 Windows Audio 服务。自动测试验证协议、数据交付与故障处理。Linux CI 还通过进程私有的 null 设备调用真实 ALSA API,这不验证桌面音频服务或扬声器。macOS CI 通过 CoreAudio 查询默认输出设备,存在时执行 AudioQueue 静音播放、格式切换和重开测试,否则明确报告未执行实播验证。有输出设备的开发者可在任意支持平台设置 `VELA_RDP_AUDIO_TEST=1`,运行 `AudioOutputTests.SystemDefaultOutputPlaysAndReopens`。
+若远端仍显示没有音频设备,先确认已开启音频并重新连接,再检查远端 Windows 的“允许音频和视频播放重定向”策略以及 Windows Audio 服务。自动测试验证协议、数据交付与故障处理。Linux CI 还通过进程私有的 null 设备调用真实 ALSA API,这不验证桌面音频服务或扬声器。macOS CI 通过 CoreAudio 查询默认输出设备,存在时执行 AudioQueue 静音播放、格式切换和重开测试,否则明确报告未执行实播验证。有输出设备的开发者可在任意支持平台设置 `VELA_RDP_AUDIO_TEST=1`,运行 `AudioOutputTests.SystemDefaultOutputPlaysAndReopens`。连续多缓冲已在 Windows 默认输出上完成静音播放、格式切换和重开验证;自动测试还覆盖 ALSA 部分写入/欠载恢复以及十分钟虚拟时钟下的 ±1000ppm 漂移。此次改动尚未在 Linux/macOS 真机上验证连续播放。
 
-PCM 在本机不经过重新压缩,但当前逐块提交音频,等待完成后再处理下一块。即使服务器和网络不卡,设备与调度延迟也可能在块之间产生间隙。真实远端、扬声器听音、设备热插拔和长时间音画同步仍需在各平台现场验证。
+启动和欠载恢复时采用 20–80ms 自适应预缓冲,依据到达间隔与音频时长的偏差估计抖动;孤立短音效也会在有限等待后播放。持续播放时根据设备播放时钟与待播时长做慢速反馈,通过 PCM8/PCM16 线性插值与跨块的小数帧累计修正采样数量,速率修正限制为 ±0.5%,抑制发送端与输出设备时钟偏差造成的长期积压或欠载。格式切换、关闭和欠载恢复重置漂移控制状态。PCM 不重新压缩,但漂移校正会改变采样数量;这不是视频时钟同步,也不保证消除网络、服务器分块或设备自身的延迟。真实远端、扬声器听音、设备热插拔和长时间音画同步仍需在各平台现场验证。
 
 ### 远程按键悬浮球
 
