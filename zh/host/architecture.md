@@ -371,7 +371,9 @@ graph TD
 内置命令由 `QuickCommandCatalog` 提供、**不落盘**；用户对它们的改动是同一份文档里的一层覆盖（joesdu/VelaShell#555）：
 删掉的记在 `HiddenBuiltInIds`，改过的存成同标识的自定义命令，显示时由 `QuickCommandCatalog.VisibleBuiltIns` 合成。
 组内顺序存在分组的 `CommandOrder`（命令标识表，可含内置命令；空表 = 默认顺序），内置分组之间的先后沿用存档的 `SortOrder`。
-这几样在 Gist 快照里同样只是加出来的字段，schema 仍是 v2：旧客户端读到时忽略，再推一次会把它们抹掉（只丢偏好，不丢命令）。
+每条 `QuickCommand.ExecuteAfterSend`（`bool`，默认 `false`，joesdu/VelaShell#706）也由同一仓储保存并进入 Gist 快照；缺字段的旧数据与内置目录均默认关闭，内置命令的开关修改属于可恢复的同标识覆盖。
+这几样在 Gist 快照里同样只是加出来的字段，schema 仍是 v2：旧客户端可能忽略新字段，在保存或再次推送时将其丢掉（只丢偏好，不丢命令正文；`ExecuteAfterSend` 缺失后回到 `false`）。
+该字段只控制侧栏发送正文后按终端模式额外编码一次 Enter，每个目标标签一次、不经同步频道二次转发；变量与多行确认仍先完成，补全接受仍只填入。关闭开关不消除未启用括号粘贴时正文换行带来的逐行执行风险，详见[交互与界面规格 §14.4](交互与界面规格.md)。
 
 布局模板（2026-10-25 起随 Gist 同步）走的是另一条路：经 `Core/Layouts/LayoutTemplateStore`（DI 单例，界面与同步服务共用一个实例，读改写在一把锁里）读写 `layout_templates` / `layout_template_tombstones`，
 界面与同步服务都不直接碰这两个集合。Gist 里单独一个 `velashell-layouts.json`、自带 `schemaVersion`，按模板 Id 合并、墓碑保留 180 天，合并规则在 `LayoutTemplateMerge`（纯函数）。

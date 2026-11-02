@@ -1965,9 +1965,9 @@ the settings page shows up in the sidebar right away).
   Line breaks are saved as `\n`, with leading and trailing whitespace trimmed.
 - The sidebar shows only the first line followed by “+N lines”; the whole command is in the tooltip.
 - A multiline command is sent as a bracketed paste: when the remote side has bracketed paste on (bash 5.1+ by default,
-  zsh, fish) the shell puts the whole block on the command line and waits for Enter instead of running it line by line.
-  If any target terminal does not have bracketed paste on (sh, older bash, network device CLIs and the like), each line
-  would run there as soon as it arrives, so a “Send multiline command” confirmation (previewing the first five lines)
+  zsh, fish) the shell puts the whole block on the command line and waits for Enter (pressed by the user, or sent after
+  the body by “Execute after sending” below). If any target terminal does not have bracketed paste on (sh, older bash,
+  network device CLIs and the like), embedded newlines may still execute lines immediately, so a “Send multiline command” confirmation (previewing the first five lines)
   comes first. It follows the “Confirm multi-line paste” switch under Settings → Terminal; with that switch off there is
   no question.
 - A command whose only line break is at the end is not multiline and is still typed in as before.
@@ -1975,8 +1975,13 @@ the settings page shows up in the sidebar right away).
   a multiline candidate would press Enter for the user.
 - Variable placeholders (§14.2) can be combined with multiple lines: the values are asked for first, then the rendered
   block is sent by the rules above.
-- A quick command is **not** executed automatically on click (maintainer decision, #555): many commands need their
-  arguments adjusted in the terminal first, and pressing Enter yourself is a confirmation in its own right.
+
+**Execute after sending** (2026-11-02, joesdu/VelaShell#706; supersedes #555's decision not to offer automatic execution)
+
+- The add/edit form under Settings → Snippets has an “Execute after sending” switch for each command: `QuickCommand.ExecuteAfterSend` (`bool`, default `false`). Older data without the field and built-in commands default to off. Changing a built-in command's switch is also an override; “Restore Defaults” turns it off again.
+- Sending from the sidebar confirms variables first, then follows the existing single-line typing / multiline paste and confirmation paths. Cancelling either the variable prompt or multiline confirmation sends neither the body nor Enter. Enabling the switch does not bypass confirmation or interpret backslash escapes such as `\n` and `\r` in the body.
+- When enabled, Enter is encoded for the target terminal's current mode only after the body has been sent. Each selected target tab receives it once, without forwarding it again through synchronized input channels. Off means no extra Enter; it cannot prevent embedded newlines from executing lines in a terminal without bracketed paste.
+- Accepting command completion or ghost text still only inserts the body, regardless of this switch, and does not execute it. Variable confirmation and the exclusion of multiline candidates remain unchanged.
 
 **Drag to reorder** (Settings → Snippets)
 
@@ -1992,10 +1997,9 @@ the settings page shows up in the sidebar right away).
 - Reordering is mouse-only for now; there is no keyboard alternative. The sidebar panel has no drag handles (a click
   there sends the command).
 
-**Sync and older versions**: deleted built-ins, each group's command order and the order of the built-in groups travel
-with cloud sync as added fields, without a schema bump. A device that has not been updated ignores them; if it pushes
-again, deleted built-ins reappear and the order falls back to the default, but none of the user's own commands are lost
-(an edited built-in shows next to its original there).
+**Sync and older versions**: deleted built-ins, each group's command order, the order of built-in groups, and each command's `ExecuteAfterSend` travel through local saves and Gist sync as added fields; the schema stays v2.
+Older clients may ignore or drop new fields when saving / pushing again. Deleted built-ins may reappear, ordering may revert to the default, and a missing “Execute after sending” field defaults to off; the user's command bodies are not lost
+(an edited built-in shows next to its original there). Check the switch when mixing client versions.
 
 ### 14.5 Splash screen (2026-10-10)
 
