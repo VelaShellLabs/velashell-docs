@@ -12,15 +12,23 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 - **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,其他平台用 `NegotiateAuthentication`(NTLM);TSRequest 公钥绑定按 MS-CSSP v5+。
 - **MCS/GCC** —— Connect-Initial/Response、erect/attach/channel-join。
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
-- **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。
+- **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。托管 MS-RDPEGFX 管线增加 ZGFX、表面/缓存、帧确认、ClearCodec、RemoteFX/Progressive 和 H.264 AVC420/AVC444/AVC444v2。
 - **Input** —— 快速路径键盘/鼠标/Unicode。
-- **Channels** —— 剪贴板(cliprdr)、音频播放(rdpsnd)与显式选择的磁盘、端口、legacy 打印机(rdpdr)走分块静态虚拟通道。动态虚拟通道(drdynvc,MS-RDPEDYC)支持显示控制(MS-RDPEDISP)、所选摄像头(MS-RDPECAM)和所选 Windows 便携设备(MS-RDPEPNP)。未注册通道（含 GFX 图形管线）被拒绝，桌面仍走经典位图路径。
+- **Channels** —— 剪贴板(cliprdr)、音频播放(rdpsnd)与显式选择的磁盘、端口、legacy 打印机(rdpdr)走分块静态虚拟通道。动态虚拟通道(drdynvc,MS-RDPEDYC)支持显示控制(MS-RDPEDISP)、所选摄像头(MS-RDPECAM)和所选 Windows 便携设备(MS-RDPEPNP)。默认注册 GFX 图形管线(MS-RDPEGFX);未注册通道被拒绝。服务器未开启 GFX 时保留经典位图路径。
 
 库里的 `RdpManagedSession` 以 SDK 无关的 `ConnectAsync(RdpClientOptions, …)` 实现 `IRdpSession` / `IRdpClipboardTransport` 契约;插件引用该库,提供桌面视图、输入队列、剪贴板桥接与编解码,并负责把宿主的连接请求映射成库的 `RdpClientOptions`、把库抛出的异常翻译成宿主协议异常。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
-范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。不协商麦克风采集、多显示器或图形管线(RemoteFX/GFX/H.264);服务器以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
+范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。不协商麦克风采集、多显示器或 RemoteApp 窗口映射。图形默认自动协商 GFX;不支持 GFX 的服务器仍以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
 
 **绘图指令与位图缓存。** 客户端接受 DstBlt、PatBlt、OpaqueRect、MultiOpaqueRect、ScrBlt 与 MemBlt(移植自 FreeRDP 的 `Orders.cs`),并声明 600/600/2048 项的第 2 版位图缓存:服务器可以用一次屏幕内拷贝完成滚动、用缓存引用重绘重复的图块,而不必重发像素。xrdp 整个桌面都以缓存 MemBlt 绘制;较新的 Windows 服务器无论如何都只发位图。指令在帧缓冲上按画面与边界裁剪,屏幕内拷贝在重叠时安全,三元光栅运算(ROP3)按真值表求值。默认开启,库调用方可用 `RdpClientOptions.DrawingOrders = false` 关闭;重激活(调整分辨率)时保留缓存、重置指令状态。
+
+## 托管 GFX 与 H.264
+
+「体验」页的图形管线设置(`graphicsMode`)默认 `auto`,注册 `Microsoft::Windows::RDS::Graphics`,公告 RDPGFX 8.0–10.7。选择 `classic` 并重连可强制经典位图/GDI。库调用方对应 `RdpClientOptions.EnableGraphicsPipeline`(默认 `true`),诊断回调为 `GraphicsLog`。服务器未开启 GFX 时保留经典路径;已经协商后的畸形图形流会结束会话,不在连接中途重放到另一条路径。
+
+协议、ZGFX、表面与缓存、帧确认和颜色重建均为 C#。H.264 使用纯托管 NuGet `ManagedCodecs.H264` 0.6.0 与 `ManagedCodecs.Core`,无需安装 FFmpeg 或分发原生图形库。AVC444/v2 的主图与辅助图共享 H.264 参考链;Progressive 的子带差分历史随表面保留,删除编码上下文不会丢失。支持桌面及缩放输出映射、raw/Planar/Alpha、ClearCodec(含 NSCodec/RLEX)、RemoteFX RLGR1/RLGR3、Progressive simple/first/upgrade;不支持 Progressive V2(codec 13)和 RemoteApp 窗口映射。
+
+三平台使用相同实现,H.264 当前为 CPU 软件解码。Windows 完整 RDP 回归和 Debian 上的 GFX/ZGFX/Planar 测试已运行通过;macOS 纳入 CI,尚未本地实跑。离线用例包含真实 IDR/P 参考链、AVC444 色度布局、缓存生命周期和帧缓冲/ACK 链路,不能替代真实 Windows 服务器互操作及 4K/视频吞吐验收。
 
 ## 连接与操作
 
@@ -40,6 +48,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | SSH 跳板机（`jumpSession`） | 无,由宿主 SSH 会话选择器提供 |
 | 已信任 SHA-256（`trustedThumbprint`） | 隐藏设置,由证书批准流程提供,精确叶证书 pin |
 | 颜色深度（`colorDepth`,「体验」页） | `32` 最高质量(默认,与 mstsc 一致);`24` 真彩色;`16` 增强色(最省带宽,渐变有色带) |
+| 图形管线（`graphicsMode`,「体验」页） | `auto` 默认协商托管 GFX/H.264;`classic` 强制经典位图/GDI,重连生效 |
 
 远程桌面默认跟随工作台标签页:连接后、窗口缩放稳定时(350ms 防抖)以及窗口移到另一 DPI 的显示器时,插件通过显示控制通道请求服务器把桌面调整到视口的**设备像素**,同时带上本机显示缩放(150% 屏幕 → 远端界面 150%,deviceScaleFactor 取 100/140/180 中最近的一档),CS_CORE 里也带同样的缩放,远端文字不再只有本机的三分之二大。远程桌面与视图在设备像素上相差无几时(动态分辨率之后的常态),按 **1 个设备像素对 1 个远端像素** 绘制、原点对齐像素网格、不做插值;只有服务器跟不上窗口、尺寸确实不符时才按比例缩放(高质量插值)。显示控制只要求宽度为偶数。新会话直接按上一个视图的尺寸与缩放连接,省掉「先按设置尺寸全屏绘制、立刻调整再绘制一次」;`width`/`height` 是还没有任何视图时、以及服务器不支持动态调整时的回退尺寸。
 
@@ -189,7 +198,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 ## 构建与独立交付
 
-保持仓库的 .NET 11、SDK 与 Avalonia 设置,不改依赖。**只有托管构建,没有原生步骤**:
+保持仓库的 .NET 11、SDK 与 Avalonia 设置;GFX 新增纯托管 `ManagedCodecs.H264` 0.6.0 依赖。**只有托管构建,没有原生步骤**:
 
 ```bash
 dotnet build plugins/VelaShell.Plugin.Rdp -c Release
@@ -198,7 +207,7 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 
 Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 OLE/user32/kernel32。另一平台相关处是 `UnixClipboardFile`:它在 Unix 上 P/Invoke 系统 `libc` 的 `open`/`fstat`,以 `O_NONBLOCK|O_NOFOLLOW` 安全打开用于本地→远程传输的剪贴板文件(避免 FIFO 阻塞、拒绝符号链接),Windows 用 .NET 文件 API。系统 libc 随操作系统提供,不是捆绑的原生库。
 
-不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。CI 与发布只跑托管测试与打包。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
+不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。包内包含 `ManagedCodecs.H264.dll`、`ManagedCodecs.Core.dll` 和 `VelaShell.Rdp.THIRD-PARTY-NOTICES.txt`,保留 MIT/Apache-2.0 与依赖版权声明。CI 与发布只跑托管测试与打包。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
 
 ## 验证情况与剩余边界
 
