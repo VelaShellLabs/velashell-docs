@@ -53,6 +53,8 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 在连接的「体验」页勾选「远程音频」(`audio`,默认 `false`),保存并重新连接。声音输出到本机系统默认设备,不需要勾选磁盘映射。Windows 使用 WinMM、macOS 使用 AudioToolbox AudioQueue、Linux 使用 ALSA 的 `default` PCM;Linux 需要 `libasound.so.2` 和可用的默认播放配置,使用 PipeWire/PulseAudio 的桌面需要相应 ALSA 插件。没有本机输出设备的无头会话不能播放。
 
+开启远程音频时同时注册 `rdpsnd` 与 `rdpdr`,即使没有映射磁盘、端口或打印机也完成空设备列表的 RDPDR 握手。MS-RDPEA §2.1 的 Windows 实现说明明确指出:没有 `rdpdr` 时,服务器不会在 `rdpsnd` 上发出数据。这不共享任何未选择的本机设备。诊断中应看到两个通道号均非零,随后出现音频格式协商。
+
 `rdpsnd` 按 [MS-RDPEA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpea/bea2d5cf-e3b9-4419-92e5-0e074ff9bc5b) 完成格式协商、质量模式、训练应答、WaveInfo/Wave 重组、Wave2 播放和 Wave Confirm。只接受服务器提供的 PCM:8/16 位、单/双声道、8–48 kHz;使用现有加密 RDP 通道,不额外开启 UDP 端口。不支持压缩音频编码、音调重定向或麦克风采集。音量由服务器应用和本机混音器控制。音频与桌面显示暂停独立,切换标签或最小化仍可播放。
 
 音频在独立工作任务上处理,队列限制为 128 条消息且不超过 1 MiB;确认在播放完成后发送。关闭、取消、格式切换和断连释放设备。输出设备不可用、格式不兼容或队列溢出会停止本次会话的音频,状态栏与日志报告原因,桌面连接仍然可用;修复默认设备后重新连接。库调用方可以订阅 `IRdpAudioSource.AudioPlaybackFailed`,晚订阅会重放已有错误。仅为磁盘/端口/打印机注册的伴随声音通道,在音频关闭时回报零个音频格式且不打开输出设备。
