@@ -6,7 +6,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 ## 架构与范围
 
-协议栈是独立的 C# 类库 `VelaShell.Rdp`(MIT 许可,随仓库发布):它 UI 无关、不依赖插件 SDK,实现本插件所需的 MS-RDPBCGR / MS-RDPELE / MS-RDPECLIP / MS-RDPEDISP / MS-RDPEFS 子集。插件引用该库,库 DLL 随插件签名 `.vpx` 一起分发,不单独出 NuGet 包。分层:
+协议栈是独立的 C# 类库 `VelaShell.Rdp`(MIT 许可,随仓库发布):它 UI 无关、不依赖插件 SDK,实现本插件所需的 MS-RDPBCGR / MS-RDPELE / MS-RDPECLIP / MS-RDPEDISP / MS-RDPEFS / MS-RDPEA 子集。音频播放调用系统音频库,不捆绑原生二进制。插件引用该库,库 DLL 随插件签名 `.vpx` 一起分发,不单独出 NuGet 包。分层:
 
 - **Wire** —— TPKT/X.224 分帧、快速路径帧、ASN.1 PER/BER。
 - **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,其他平台用 `NegotiateAuthentication`(NTLM);TSRequest 公钥绑定按 MS-CSSP v5+。
@@ -14,11 +14,11 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。
 - **Input** —— 快速路径键盘/鼠标/Unicode。
-- **Channels** —— 剪贴板(cliprdr)与显式选择的磁盘、端口、legacy 打印机(rdpdr)走分块静态虚拟通道。动态虚拟通道(drdynvc,MS-RDPEDYC)支持显示控制(MS-RDPEDISP)、所选摄像头(MS-RDPECAM)和所选 Windows 便携设备(MS-RDPEPNP)。未注册通道（含 GFX 图形管线）被拒绝，桌面仍走经典位图路径。
+- **Channels** —— 剪贴板(cliprdr)、音频播放(rdpsnd)与显式选择的磁盘、端口、legacy 打印机(rdpdr)走分块静态虚拟通道。动态虚拟通道(drdynvc,MS-RDPEDYC)支持显示控制(MS-RDPEDISP)、所选摄像头(MS-RDPECAM)和所选 Windows 便携设备(MS-RDPEPNP)。未注册通道（含 GFX 图形管线）被拒绝，桌面仍走经典位图路径。
 
 库里的 `RdpManagedSession` 以 SDK 无关的 `ConnectAsync(RdpClientOptions, …)` 实现 `IRdpSession` / `IRdpClipboardTransport` 契约;插件引用该库,提供桌面视图、输入队列、剪贴板桥接与编解码,并负责把宿主的连接请求映射成库的 `RdpClientOptions`、把库抛出的异常翻译成宿主协议异常。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
-范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹)。不协商音频播放/采集、多显示器或图形管线(RemoteFX/GFX/H.264);服务器以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
+范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。不协商麦克风采集、多显示器或图形管线(RemoteFX/GFX/H.264);服务器以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
 
 **绘图指令与位图缓存。** 客户端接受 DstBlt、PatBlt、OpaqueRect、MultiOpaqueRect、ScrBlt 与 MemBlt(移植自 FreeRDP 的 `Orders.cs`),并声明 600/600/2048 项的第 2 版位图缓存:服务器可以用一次屏幕内拷贝完成滚动、用缓存引用重绘重复的图块,而不必重发像素。xrdp 整个桌面都以缓存 MemBlt 绘制;较新的 Windows 服务器无论如何都只发位图。指令在帧缓冲上按画面与边界裁剪,屏幕内拷贝在重叠时安全,三元光栅运算(ROP3)按真值表求值。默认开启,库调用方可用 `RdpClientOptions.DrawingOrders = false` 关闭;重激活(调整分辨率)时保留缓存、重置指令状态。
 
@@ -34,6 +34,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | 连接超时（`timeout`） | 15 秒;1–120 |
 | 安全层（`security`,高级） | `auto` 自动(默认);`nla` 仅 NLA;`tls` 仅 TLS,见[认证与证书策略](#认证与证书策略) |
 | 双向剪贴板（`clipboard`） | `false`;明确开启后支持文本、图像与文件 |
+| 远程音频（`audio`,「体验」页） | `false`;开启并重连后通过本机默认设备播放远端 PCM 音频 |
 | 本机磁盘（`drive:<盘>`,「磁盘映射」页） | 每块本机磁盘一个复选框,全部默认不勾选 |
 | 自定义文件夹（`drives`,「磁盘映射」页） | 空;`名称=绝对路径`,多条用分号分隔 |
 | SSH 跳板机（`jumpSession`） | 无,由宿主 SSH 会话选择器提供 |
@@ -47,6 +48,16 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 **后台长时间保持连接。** 暂停显示更新的会话在链路上完全静默,而 NAT 网关、防火墙、云负载均衡与端口转发会在空闲几分钟后悄悄丢弃连接、不通知任何一端——回到标签时先看到冻结或黑屏的桌面,过一会儿才弹出断开提示。因此库对套接字开启 TCP keep-alive(空闲 30 秒后探测,每 10 秒一次、3 次无应答即判定断开),并在显示更新暂停期间每 30 秒重发一次“暂停”状态,让用户态端口转发也能看到流量;库调用方可用 `RdpClientOptions.KeepAliveInterval` 调整(`TimeSpan.Zero` 关闭)。链路仍然断掉时,约一分钟内就在后台发现,而不是等用户回来才发现。
 
 **断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
+
+### 远程音频播放
+
+在连接的「体验」页勾选「远程音频」(`audio`,默认 `false`),保存并重新连接。声音输出到本机系统默认设备,不需要勾选磁盘映射。Windows 使用 WinMM、macOS 使用 AudioToolbox AudioQueue、Linux 使用 ALSA 的 `default` PCM;Linux 需要 `libasound.so.2` 和可用的默认播放配置,使用 PipeWire/PulseAudio 的桌面需要相应 ALSA 插件。没有本机输出设备的无头会话不能播放。
+
+`rdpsnd` 按 [MS-RDPEA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpea/bea2d5cf-e3b9-4419-92e5-0e074ff9bc5b) 完成格式协商、质量模式、训练应答、WaveInfo/Wave 重组、Wave2 播放和 Wave Confirm。只接受服务器提供的 PCM:8/16 位、单/双声道、8–48 kHz;使用现有加密 RDP 通道,不额外开启 UDP 端口。不支持压缩音频编码、音调重定向或麦克风采集。音量由服务器应用和本机混音器控制。音频与桌面显示暂停独立,切换标签或最小化仍可播放。
+
+音频在独立工作任务上处理,队列限制为 128 条消息且不超过 1 MiB;确认在播放完成后发送。关闭、取消、格式切换和断连释放设备。输出设备不可用、格式不兼容或队列溢出会停止本次会话的音频,状态栏与日志报告原因,桌面连接仍然可用;修复默认设备后重新连接。库调用方可以订阅 `IRdpAudioSource.AudioPlaybackFailed`,晚订阅会重放已有错误。仅为磁盘/端口/打印机注册的伴随声音通道,在音频关闭时回报零个音频格式且不打开输出设备。
+
+若远端仍显示没有音频设备,先确认已开启音频并重新连接,再检查远端 Windows 的“允许音频和视频播放重定向”策略以及 Windows Audio 服务。自动测试验证协议、数据交付与故障处理;真实远端、扬声器听音、设备热插拔和长时间音画同步仍需在各平台现场验证。
 
 ### 远程按键悬浮球
 
