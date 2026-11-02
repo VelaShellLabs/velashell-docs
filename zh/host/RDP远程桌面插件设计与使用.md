@@ -30,6 +30,12 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 三平台使用相同实现,H.264 当前为 CPU 软件解码。Windows 完整 RDP 回归和 Debian 上的 GFX/ZGFX/Planar 测试已在本地运行通过;Ubuntu 与 macOS 的 CI 图形测试也已通过。离线用例包含真实 IDR/P 参考链、AVC444 色度布局、缓存生命周期和帧缓冲/ACK 链路,不能替代真实 Windows 服务器互操作及 4K/视频吞吐验收。
 
+缓存导入只用于跨连接保存的持久化位图。当前实现保留会话内表面/位图缓存,不发送空的 `CACHE_IMPORT_OFFER`,也不等待缓存导入回复。真实 Windows 服务器对照验证中,空请求触发了首帧后的 `0x112F` 断开;移除该请求后仍保持 GFX 10.6 并持续接收登录界面画面。此验证未发送账号密码,不代表登录后桌面或视频性能验收。
+
+动态通道 v3 接收 `DATA_FIRST_COMPRESSED` / `DATA_COMPRESSED`,按每个通道独立保存 ZGFX 历史,先解压再按消息总长度重组;关闭或复用通道 ID 会丢弃历史。该层与 GFX 消息自身的 ZGFX 压缩相互独立,在 TCP 与已迁移的 UDP 通道上都适用,并遵守通道消息上限和剩余分片预算。
+
+**连接诊断。** `managed graphics pipeline ready` 仅说明本地解码器已准备好。后续 `graphics DVC opened`、`server confirmed graphics capabilities`、`graphics reset`、`first graphics frame decoded` 分别标记通道打开、服务器能力确认、画面尺寸重置与首帧解码,不代表已验证所有 AVC 模式。`0x112D/0x112E/0x112F` 分别表示服务器不支持图形模式、无法重置图形子系统、图形子系统失败;仅凭 `0x112F` 不能判断是客户端协议兼容还是服务器编码器问题。排查时可选择 `classic` 后重连作对照,这不是根本修复。若日志已记录 NLA 拒绝后成功回退 TLS,不要把那次 NLA 拒绝当成后续断开的原因。UDP 建连前会把双栈 TCP 返回的 `::ffff:a.b.c.d` 规范化为 IPv4 地址,真正的 IPv6 地址保持不变;必要时选择 TCP 传输单独隔离 UDP 问题。
+
 ## 连接与操作
 
 通过宿主插件管理页安装插件 Release 中已签名的 `velashell.rdp-<版本>.vpx`,新建 RDP 连接,填写服务器、端口(默认 3389)、用户名和密码。域为独立的可选字段。需要跳板时,在“SSH 跳板机”选择已有 SSH 会话;隧道由宿主管理,证书仍核验原始目标身份。
@@ -57,6 +63,8 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 **后台长时间保持连接。** 暂停显示更新的会话在链路上完全静默,而 NAT 网关、防火墙、云负载均衡与端口转发会在空闲几分钟后悄悄丢弃连接、不通知任何一端——回到标签时先看到冻结或黑屏的桌面,过一会儿才弹出断开提示。因此库对套接字开启 TCP keep-alive(空闲 30 秒后探测,每 10 秒一次、3 次无应答即判定断开),并在显示更新暂停期间每 30 秒重发一次“暂停”状态,让用户态端口转发也能看到流量;库调用方可用 `RdpClientOptions.KeepAliveInterval` 调整(`TimeSpan.Zero` 关闭)。链路仍然断掉时,约一分钟内就在后台发现,而不是等用户回来才发现。
 
 **断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
+
+本地文字与输入法提交以 Unicode 发送。可打印按键缺少 `KeySymbol` 时,即使尚未收到首个预编辑更新,也交给本地文字输入处理,避免输入法首字母或普通文字重复发送。标记为 `ImeProcessed` 或 `DeadCharProcessed` 的按键保留在本地,包括输入法候选选择快捷键。其他 Ctrl/Alt/Meta 快捷键及导航键继续成对发送物理扫描码;NumLock 关闭时的小键盘导航按逻辑导航键处理。
 
 ### UDP 多传输与网络适配
 
