@@ -57,6 +57,10 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 音频在独立工作任务上处理,队列限制为 128 条消息且不超过 1 MiB;确认在播放完成后发送。关闭、取消、格式切换和断连释放设备。输出设备不可用、格式不兼容或队列溢出会停止本次会话的音频,状态栏与日志报告原因,桌面连接仍然可用;修复默认设备后重新连接。库调用方可以订阅 `IRdpAudioSource.AudioPlaybackFailed`,晚订阅会重放已有错误。仅为磁盘/端口/打印机注册的伴随声音通道,在音频关闭时回报零个音频格式且不打开输出设备。
 
+插件日志 `<数据根>/logs/plugins/velashell.rdp.log` 中的 `RDPSND` 行记录实际播放开关、通道注册与协商通道号、平台后端、格式协商数量、训练应答、首个音频块和首次播放完成确认。`playback=False` 表示本次连接未启用音频;通道号非零只表示通道已协商,应继续检查 `formats received` 和 `wave received`。首块 `silent=True` 表示该块 PCM 全部为数字静音;之后收到首个非静音块时会再记录 `silent=False`,不逐帧刷日志,也不记录样本或凭据。`first playback completed and confirmed` 表示本机设备报告完成且已发回确认,不能代替扬声器听音验证。库调用方通过 `RdpClientOptions.DriveRedirectionLog` 接收这些诊断。
+
+开发者可在插件仓库设置 `VELA_RDP_AUDIO_TONE_TEST=1`,运行 `dotnet test tests/VelaShell.Plugin.Rdp.Tests/VelaShell.Plugin.Rdp.Tests.csproj --filter FullyQualifiedName~SystemDefaultOutputPlaysProtocolTone`,通过 RDPSND 协议处理与本机默认设备播放两段低音量 440 Hz 测试音。此测试不连接远端、不采集音频,用于区分本机播放问题和远端协商问题;默认跳过。
+
 若远端仍显示没有音频设备,先确认已开启音频并重新连接,再检查远端 Windows 的“允许音频和视频播放重定向”策略以及 Windows Audio 服务。自动测试验证协议、数据交付与故障处理;真实远端、扬声器听音、设备热插拔和长时间音画同步仍需在各平台现场验证。
 
 ### 远程按键悬浮球
