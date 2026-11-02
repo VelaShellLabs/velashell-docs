@@ -173,7 +173,7 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 
 `ManagedNtlmTests` 在没有额外安装 `gss-ntlmssp` 的环境中验证首个令牌、NTLMv2 凭据证明、连续客户端封包、服务器回包解密与篡改签名拒绝。最初的 21 项认证测试已在 Ubuntu 和 macOS CI 上通过；测试进程不预设托管 NTLM 开关，直接验证插件初始化路径。Windows 上强制 `ManagedNtlm` 类仍调用系统 SSPI 的 NTLM 包，不能代替 Unix 测试。
 
-许可修复在 Windows 和 Linux .NET 11 RC3 容器上均通过 59 项许可/认证/通道聚焦测试。`LicensingTests` 与 `LicensingExchangeTests` 使用独立服务端实现校验 RSA 解密、密钥派生、RC4/MAC，覆盖 512/2048 位专有密钥和 X.509 链的完整交换、伪造签名/MAC、畸形消息、重置/重传上限、错误回复，以及真实连接循环在 Demand Active 前发送 MCS 应答。Ubuntu/macOS CI 作业也纳入许可测试。这些是模拟交换，并非连接日志中的真实 Windows 服务器；macOS 到 Windows 的桌面互通仍需现场复验。
+许可修复在 Windows 和 Linux .NET 11 RC3 容器上均通过 59 项许可/认证/通道聚焦测试。`LicensingTests` 与 `LicensingExchangeTests` 使用独立服务端实现校验 RSA 解密、密钥派生、RC4/MAC，覆盖 512/2048 位专有密钥和 X.509 链的完整交换、伪造签名/MAC、畸形消息、重置/重传上限、错误回复，以及真实连接循环在 Demand Active 前发送 MCS 应答。Ubuntu 和 macOS CI 均通过全部 47 项认证/许可测试，包括旧密钥交换用例。这些是模拟交换，并非连接日志中的真实 Windows 服务器；macOS 到 Windows 的桌面互通仍需现场复验。
 
 大文件阻塞的本地根因是下载长期持有发布操作锁、焦点发布等待占据键鼠队列，以及完整虚拟通道消息长期占据发送锁；原 cliprdr 队列丢写和 worker 吞异常也会造成请求无响应。聚焦回归覆盖挂起大文件响应时本地发布仍可完成、取消挂起内容请求且不创建本地缓存、进度字节和乱序重传、工作台状态/取消/画面刷新、焦点发布与键鼠队列分离、分片间输入与同通道消息顺序、队列溢出显式失败。磁盘 DriveCapability v2 的 DeviceData 已按 UTF-16LE 编码，8 字节 PreferredDosName 仍为 ASCII，并以三个名称长度的精确报文字节测试覆盖；尚未验收真实 Windows 对该磁盘声明的接受情况。上述大文件修复未连接公网服务器，真实 Windows 双向大文件和慢网体验仍需现场复验。
 
