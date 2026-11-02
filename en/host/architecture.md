@@ -455,9 +455,10 @@ an overlay in the same document (joesdu/VelaShell#555): deleted ones are listed 
 edited ones are stored as custom commands with the same id, and `QuickCommandCatalog.VisibleBuiltIns`
 combines the two for display. The order inside a group lives in the group's `CommandOrder` (a list of
 command ids that may include built-ins; empty = default order), and the order of the built-in groups
-keeps the stored `SortOrder`. In the Gist snapshot these are added fields as well and the schema stays
-v2: older clients ignore them, and pushing again from one wipes them (only preferences are lost, never
-commands).
+keeps the stored `SortOrder`.
+Each `QuickCommand.ExecuteAfterSend` (`bool`, default `false`, joesdu/VelaShell#706) is also saved by the same repository and included in Gist snapshots. Older data without the field and the built-in catalog default to off; changing a built-in's switch is a restorable override with the same id.
+These are added fields in the Gist snapshot and the schema stays v2: older clients may ignore them and drop them when saving or pushing again (only preferences are lost, not command bodies; a missing `ExecuteAfterSend` falls back to `false`).
+The field only controls sending one extra Enter, encoded for the terminal's mode, after the sidebar has sent the body: once per target tab, without forwarding it again through sync channels. Variable and multiline confirmation still come first; accepting completion still only inserts text. Turning the switch off does not remove the risk of embedded newlines executing lines without bracketed paste; see [Interaction and UI specs §14.4](interaction-and-ui-specs.md).
 
 Layout templates (synced through the Gist since 2026-10-25) take a different route: they are read and written through `Core/Layouts/LayoutTemplateStore` (a DI singleton shared by the UI and the sync service, with read-modify-write under one lock) in `layout_templates` / `layout_template_tombstones`,
 and neither the UI nor the sync service touches those collections directly. The Gist holds a separate `velashell-layouts.json` with its own `schemaVersion`, merged per template id with tombstones kept for 180 days; the merge rules are in `LayoutTemplateMerge` (a pure function).
