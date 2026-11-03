@@ -1041,6 +1041,17 @@ new WorkspaceDescriptor {
   - 只对声明了 `Pages` 的描述符有效:`ProtocolDescriptor`(文件 / 终端协议)暂无 `Pages`,那里的 `Page` 被忽略。
 - 可用版本:2.1.5。
 
+**分组复选树(`ProtocolSettingField.SelectionGroup` / `ProtocolSettingGroup`) — SDK 2.1.7**
+
+给多个 `Boolean` 字段设置相同的 `SelectionGroup = new("drives", "驱动器")`，宿主将它们绘制为可折叠的复选树。插件仍声明字段；`IWorkspaceDocument.CreateView()` 创建的是连接后的会话内容，不是连接表单。
+
+- `ProtocolSettingGroup(Key, Label)` 的键按序数比较；只有最终落在同一页且组键相同的字段才合组。组出现在第一个成员的位置，标题使用第一个成员的本地化 `Label`，叶子保持声明顺序。
+- `null`、空白组键及非 `Boolean` 字段忽略分组，保留原编辑器。没有可见成员的组隐藏。
+- 分类默认折叠，显示“已选/可见总数”；展开后列表限高并滚动。类别复选框呈现全选、未选、部分选中；点击部分选中会全选，点击全选会清空。
+- 批量操作仅作用于点击时可见的成员；条件隐藏的原值保留。折叠和切换页签不修改字段值。
+- 分组不产生新的设置键，仍按原字段键保存和回显。新出现的设备使用各字段的默认值，不继承类别的上次全选状态。
+- 契约为可选新增元数据，已随 SDK 2.1.7 正式发布，`apiLevel` 不变。使用此契约需要宿主及插件引用 SDK 2.1.7 或更高版本，插件 `minSdkVersion` 至少为 2.1.7；宿主还须实现对应的表单呈现。2.1.6 包不含此契约。
+
 ## 6. 隔离进程模式(isolated)
 
 在 manifest 里声明 `"hostMode": "isolated"`,插件即运行在独立的

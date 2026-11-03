@@ -1035,6 +1035,17 @@ new WorkspaceDescriptor {
   - Only effective on descriptors that declare `Pages`: `ProtocolDescriptor` (file / terminal protocols) has no `Pages` yet, so `Page` is ignored there.
 - Available since: 2.1.5.
 
+**Grouped checkbox trees (`ProtocolSettingField.SelectionGroup` / `ProtocolSettingGroup`) — SDK 2.1.7**
+
+Give several `Boolean` fields the same `SelectionGroup = new("drives", "Drives")` to have the host render a collapsible checkbox tree. The plugin still declares fields; `IWorkspaceDocument.CreateView()` creates the connected session content, not the connection form.
+
+- `ProtocolSettingGroup(Key, Label)` keys use ordinal comparison. Fields share a group only when their resolved page and group key both match. The group occupies its first member's position, uses that member's localized group `Label`, and preserves declaration order for leaves.
+- `null`, whitespace group keys and non-`Boolean` fields retain their existing editors. Groups without visible members are hidden.
+- Categories start collapsed and show selected/visible counts. Expanded lists have bounded height and scroll. Category checkboxes show all, none or partial selection; clicking partial selects all, while clicking all clears the selection.
+- Bulk actions affect only members visible at click time, preserving conditionally hidden values. Collapsing or switching pages does not change values.
+- Groups introduce no saved settings keys: original field keys still handle saving and reopening. Newly discovered devices use their field defaults rather than inheriting a previous category selection.
+- This is optional additive metadata, officially published in SDK 2.1.7; `apiLevel` is unchanged. Using this contract requires host/plugin references to SDK 2.1.7 or later and a plugin `minSdkVersion` of at least 2.1.7; the host must also implement the corresponding form rendering. The 2.1.6 packages do not contain this contract.
+
 ## 6. Isolated Process Mode (`isolated`)
 
 Declare `"hostMode": "isolated"` in the manifest and the plugin runs in a separate

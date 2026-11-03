@@ -361,6 +361,7 @@ if (ctx.Ui.SupportsNotifications)
 | **2.1.3** | 插件协议的文件能力补口：`RemoteFileEntry.IsSymbolicLink` / `LinkTarget`、`IProtocolLastWriteTime`、`IProtocolChecksum` 与 `RemoteChecksumAlgorithm`（§3.3d）；传输启动前被拒 `PluginTransferRejectedException` 与 `transfer-rejected` 错误码（§3.3e）；往消息中心发通知 `IUiApi.PostNotificationAsync` 与 `ui/notify`（§3.7）；版本比较 `SemanticVersion`（§3.8）；`RpcConnection` 一帧要么整帧写完、要么不开始（[IPC §7.4](../plugins/05-ipc-protocol.md#74-通知启动前被拒与整帧写入sdk-213)）。已正式发布，宿主已接上；宿主当前中央依赖为 2.1.5。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.3`）；整帧写入的修正不涉及插件代码，抬包即生效 |
 | **2.1.4** | 条件撤回：`IRemoteFsApi.SupportsTransferWithdraw` / `WithdrawPendingTransferAsync`、`RemoteTransferWithdrawOutcome` / `RemoteTransferWithdrawResult`、`fs/transfer/withdraw` RPC 与 `FsTransferWithdrawRequest`、握手 `HandshakeResponse.SupportsTransferWithdraw`、测试替身 `FakeRemoteFs.WithdrawTransferHandler`（§3.3f）。已正式发布，宿主已接上。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.4`）；AI 清单声明的是 2.1.5 |
 | **2.1.5** | 工作台变体图标与连接框自定义分页：`WorkspaceVariant.Icon`（类型选择卡片图标，`null` 回落描述符 `Icon`）、`WorkspaceDescriptor.Pages`、`ProtocolSettingPage(Key, Label)`、`ProtocolSettingField.Page`（优先于 `IsAdvanced`；键不在 `Pages` 里按 `null`；与 `VisibleWhen` 为「与」）。语义见[开发指南 §5.14.1](../templates/dev-guide.md)。只增不改，`apiLevel` 不变。 | 用到就要（`2.1.5`） |
+| **2.1.7** | `ProtocolSettingGroup(Key, Label)` 与可选 `ProtocolSettingField.SelectionGroup`：同页 Boolean 字段的分组复选树；只影响呈现，不改变设置键值。空白键及非 Boolean 字段回落原编辑器。详见[开发指南 §5.14.1](../templates/dev-guide.md)。已正式发布，`apiLevel` 不变；2.1.6 包不包含此契约。 | 用到就要（`2.1.7`）；宿主、插件包引用已升级，RDP 清单的 `minSdkVersion` 仍为 2.1.5，须同步至 2.1.7。 |
 
 ### 2.0 迁移
 
