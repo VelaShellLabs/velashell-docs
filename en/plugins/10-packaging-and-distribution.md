@@ -1,9 +1,9 @@
 # 10 · Packaging, Signing, and Distribution
 
 > **The operational handbook is [publishing.md](../templates/publishing.md)** (build → pack → sign → submit).
-> Marketplace: <http://market.easilynet.top> (**browsing and search happen in a browser**; the
-> client's built-in marketplace client only checks for updates and downloads packages — see the
-> 2026-09-11 note below). This document is the long-term blueprint.
+> Marketplace: <https://market.easilynet.top>. Plugin Manager now supports **browsing, search,
+> details and direct installation**, alongside local `.vpx` installation and installed-plugin updates.
+> The implementation notes and §4 describe current behavior; the other sections retain the long-term blueprint.
 >
 > **Implementation note (2026-08)**: **packaging and signing have shipped**; **distribution
 > (registry / store) is still deferred**. Three places where the implementation departs from the
@@ -48,6 +48,17 @@
 > - **Upgrading no longer wipes plugin data**: overwriting installs now "deactivate → swap directory",
 >   keeping KV, secrets and time-series intact. Only uninstall purges — matching what
 >   `vela-plugin update` has always done.
+
+> **Current integration:** Plugin Manager has **Installed / Plugin Store** tabs. Entering the store
+> sends anonymous `GET /api/plugins/?q=…&sort=…&page=…&size=20`; selecting an entry requests
+> `GET /api/plugins/{id}`. Search, recent-update/download/rating sorting, paging, detail retries and
+> latest-stable installation are supported. Multi-source aggregation, category filters, version-history
+> selection and rollback are not implemented. Markdown descriptions disable HTML and images and
+> allow only clicked https links. Download tickets are requested only on installation; the existing
+> pipeline still enforces https, whole-package SHA-256, signatures and publisher-change confirmation.
+> Package ID, version and actual compatibility are checked before replacing an installed version;
+> rejection preserves it. Downloads show progress and support cancellation; cancelling **Update all**
+> stops subsequent downloads. Outbound fields are documented in the host's `PRIVACY.md`.
 
 ## 1. Signing and Source Trust
 
@@ -127,7 +138,9 @@ with Stage A.
 
 ## 4. In-App Plugin Management Page
 
-Add a top-level "Plugins" page to Settings:
+**Current implementation:** Plugin Manager has **Installed** and **Plugin Store** tabs. Installed cards place actions on a separate wrapping row. The store uses a list/detail split with search, sorting, paging and install/update actions; a shared footer shows progress and cancellation. Offline errors are distinct from empty results and can be retried. Local package installation remains available. UI text uses the five-language resx resources; plugin descriptions retain the server-provided language.
+
+**The following remains the long-term blueprint, not a list of fully implemented features:**
 
 - **Installed**: card list (icon/name/publisher trust badge/version/status color
   dot); inline actions: enable/disable/uninstall/restart/view logs; expanded
