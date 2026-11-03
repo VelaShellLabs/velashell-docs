@@ -18,7 +18,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 库里的 `RdpManagedSession` 以 SDK 无关的 `ConnectAsync(RdpClientOptions, …)` 实现 `IRdpSession` / `IRdpClipboardTransport` 契约;插件引用该库,提供桌面视图、输入队列、剪贴板桥接与编解码,并负责把宿主的连接请求映射成库的 `RdpClientOptions`、把库抛出的异常翻译成宿主协议异常。宿主管理连接表单、凭据、证书批准、会话标签与可选 SSH 跳板;插件提供工作台和远程桌面。连接、事件循环与收尾在会话工作任务上异步完成,由取消令牌中断。引擎在进程内运行,与宿主共享崩溃边界,不是进程隔离或文件系统沙箱。相关契约见 [SDK 参考](../sdk/sdk-reference.md)、[开发指南](../templates/dev-guide.md) 与 [当前信任边界](../plugins/12-security-threat-model.md)。
 
-范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。不协商麦克风采集、多显示器或 RemoteApp 窗口映射。图形默认自动协商 GFX;不支持 GFX 的服务器仍以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
+范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。另支持下文的 RD Gateway 传输、经典 RemoteApp/RAIL 与 PC/SC 智能卡重定向。不协商麦克风采集或多显示器。桌面图形默认自动协商 GFX;不支持 GFX 的服务器仍以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
 
 **绘图指令与位图缓存。** 客户端接受 DstBlt、PatBlt、OpaqueRect、MultiOpaqueRect、ScrBlt 与 MemBlt(移植自 FreeRDP 的 `Orders.cs`),并声明 600/600/2048 项的第 2 版位图缓存:服务器可以用一次屏幕内拷贝完成滚动、用缓存引用重绘重复的图块,而不必重发像素。xrdp 整个桌面都以缓存 MemBlt 绘制;较新的 Windows 服务器无论如何都只发位图。指令在帧缓冲上按画面与边界裁剪,屏幕内拷贝在重叠时安全,三元光栅运算(ROP3)按真值表求值。默认开启,库调用方可用 `RdpClientOptions.DrawingOrders = false` 关闭;重激活(调整分辨率)时保留缓存、重置指令状态。
 
@@ -65,6 +65,34 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 **断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
 
 本地文字与输入法提交以 Unicode 发送。可打印按键缺少 `KeySymbol` 时,即使尚未收到首个预编辑更新,也交给本地文字输入处理,避免输入法首字母或普通文字重复发送。标记为 `ImeProcessed` 或 `DeadCharProcessed` 的按键保留在本地,包括输入法候选选择快捷键。其他 Ctrl/Alt/Meta 快捷键及导航键继续成对发送物理扫描码;NumLock 关闭时的小键盘导航按逻辑导航键处理。
+
+### RD Gateway
+
+在「RD Gateway」页填写 `gatewayHost` 与 `gatewayPort`（默认 443）。原来的服务器与端口仍是内网 RDP 目标，由网关解析。客户端通过 `/remoteDesktopGateway/` 使用 MS-TSGU RDGHTTP 的 HTTPS/WebSocket 传输，需要启用 WebSocket 传输的 Windows Server 2016+ 网关。网关连接仅走 TCP，失败不会回退直连；同时配置网关与 SSH 跳板会被拒绝。
+
+`gatewayUseRdpCredentials` 默认 `true`，复用目标凭据；关闭后填写独立的 `gatewayUsername`、`gatewayPassword` 和可选 `gatewayDomain`，密码按秘密设置保存。HTTP 认证允许 Negotiate/Kerberos 与 NTLM，拒绝仅提供 Basic 的服务器和 HTTP 重定向。Linux/macOS Kerberos 需要下文的系统 Kerberos 配置，并为网关主机名配置 HTTP 服务主体。目标 RDP 的 TLS/NLA 仍单独校验原始目标身份。
+
+网关证书必须通过系统信任链、主机名与有效期检查，或匹配独立的 `gatewayCertificateSha256` 叶证书 pin（64 位十六进制）。这个 pin 仅替代网关的系统证书检查，请通过可信渠道取得。网关证书拒绝不会进入目标 RDP 的证书批准流程；应安装网关 CA 或配置网关的独立 pin。
+
+网关策略禁止当前请求的剪贴板或设备重定向时，在创建目标通道之前失败；请关闭相应重定向，或由管理员调整策略。不实现旧 RPC-over-HTTP、成对 HTTP IN/OUT 传输、网关 UDP、MFA/扩展认证、consent、NAP 与重新认证，要求这些能力的网关不受支持。测试覆盖协议报文、策略拒绝、取消及真实环回 TLS/WebSocket 传输；真实 AD HTTP 认证与生产 RD Gateway 互通尚未验证。
+
+### RemoteApp / RAIL
+
+在「RemoteApp」页的 `remoteAppProgram` 填写已发布程序别名，例如 `||notepad`。可选 `remoteAppArguments` 与 `remoteAppWorkingDirectory` 会发送给服务器，仍受其发布与参数策略约束。程序留空使用普通桌面；未填写程序但填写参数或工作目录会被拒绝。库调用方设置 `RdpClientOptions.RemoteApp`。
+
+RemoteApp 协商 INFO_RAIL 和 RAIL/window 能力，执行 RAIL 握手与程序启动交互，跟踪服务器窗口的创建、更新和删除。工作区仅绘制应用窗口区域，支持选择、焦点与输入、移动缩放和关闭。这些应用显示在标签页工作区内，不是本机系统的独立顶层窗口。远端桌面尺寸在会话内固定，并为应用选择栏保留空间；修改尺寸需要重连。
+
+RemoteApp 即使在 `graphicsMode=auto` 下也选择经典位图/GDI；不支持增强 GFX 窗口映射、本机桌面集成或托盘图标。程序启动失败会报错，不会默默改为完整桌面。协议、窗口生命周期和呈现回归已有测试；真实 Windows RDS 部署的已发布应用尚未验证。
+
+### 智能卡重定向
+
+在「磁盘映射」页开启 `smartCard` 并重连，显式允许远端会话使用本机 PC/SC 可访问的全部读卡器与卡片，默认关闭。客户端在 `rdpdr` 上注册 MS-RDPESC 智能卡设备（同时注册伴随 `rdpsnd`），并在用户登录前公告。库调用方设置 `RdpClientOptions.SmartCardRedirection`。
+
+Windows 需要 Smart Card 服务和读卡器驱动（`winscard.dll`）；Linux 需要 `libpcsclite.so.1`、运行中的 pcsc-lite 服务与读卡器驱动；macOS 使用系统 PCSC 框架与兼容驱动。缺少系统库或服务不可用时，已选择智能卡的连接会明确失败。不随插件分发读卡器驱动或原生库。
+
+核心操作包括上下文管理、读卡器/组枚举、状态变化等待与取消、连接/重连/断开、事务、状态、APDU 传输、控制和属性读取，支持 A/W 报文及会话内虚拟句柄。不支持的管理、缓存和 SetAttrib 操作返回不支持。断开会取消等待并释放上下文与卡片，不记录 PIN 或 APDU 内容。请仅对可信远端开启：此选项授予卡片操作访问权限，仍受卡片自身认证规则约束。这不增加智能卡 NLA/CredSSP 登录能力。离线协议与后端测试不能证明实体卡或 Windows RDS 互通，仍需部署验收。
+
+Windows 与 Debian x64 原生烟测已加载生产 PC/SC 后端，并确认预期的服务不可用结果（`0x8010001D`）。Debian 另与已安装 C 头文件对照验证了 native-long 结构布局。烟测未启动服务或访问卡片；macOS 运行验证仍待完成。
 
 ### UDP 多传输与网络适配
 
