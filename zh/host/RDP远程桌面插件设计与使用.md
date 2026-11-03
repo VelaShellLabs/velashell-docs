@@ -9,7 +9,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 协议栈是独立的 C# 类库 `VelaShell.Rdp`(MIT 许可,随仓库发布):它 UI 无关、不依赖插件 SDK,实现本插件所需的 MS-RDPBCGR / MS-RDPELE / MS-RDPECLIP / MS-RDPEDISP / MS-RDPEFS / MS-RDPEA 子集。音频播放调用系统音频库,不捆绑原生二进制。插件引用该库,库 DLL 随插件签名 `.vpx` 一起分发,不单独出 NuGet 包。分层:
 
 - **Wire** —— TPKT/X.224 分帧、快速路径帧、ASN.1 PER/BER。
-- **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,其他平台用 `NegotiateAuthentication`(NTLM);TSRequest 公钥绑定按 MS-CSSP v5+。
+- **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,Linux/macOS 用 `NegotiateAuthentication` 的 SPNEGO 协商系统 Kerberos 或托管 NTLM;TSRequest 公钥绑定按 MS-CSSP v5+。
 - **MCS/GCC** —— Connect-Initial/Response、erect/attach/channel-join。
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。托管 MS-RDPEGFX 管线增加 ZGFX、表面/缓存、帧确认、ClearCodec、RemoteFX/Progressive 和 H.264 AVC420/AVC444/AVC444v2。
@@ -178,17 +178,19 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
 
-**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 .NET 托管 NTLM(`NegotiateAuthentication`),对接受裸 NTLM 的服务器可用。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
+**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 `NegotiateAuthentication(Package = "Negotiate")` 的 SPNEGO 协商:优先尝试系统 GSSAPI Kerberos,不可用时由 .NET 协商托管 NTLM,无需额外安装 NTLM 提供程序。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
 
-**Unix 提供程序初始化。** `Package = "NTLM"` 本身不保证纯托管实现：Linux 默认使用 GSSAPI，未安装 NTLM 提供程序时，首个 `GetOutgoingBlob` 就返回 `Unsupported`，此时服务器尚未收到认证令牌，与 TLS 1.3 或密码错误无关。引擎在创建 Unix 认证上下文前启用 `System.Net.Security.UseManagedNtlm`；主程序及隔离插件宿主的 `runtimeconfig.json` 也从进程启动时启用该开关，避免其他插件先调用认证 API 后缓存旧值。该开关是进程级的，对同进程其他 `NegotiateAuthentication` 客户端同样生效；Windows 的 SSPI 路径不变。独立嵌入引擎的应用也应在启动配置中设置它。部署时同时更新宿主与插件并完整重启，无需安装 `gss-ntlmssp` 或关闭服务器 NLA。macOS 的 .NET 默认已启用托管 NTLM，因此没有 macOS 失败日志时不能判定是同一根因；只接受 SPNEGO 或禁止 NTLM 的服务器仍超出此 NTLM 路径的能力。
+**Unix 提供程序初始化。** 引擎在创建认证上下文前启用 `System.Net.Security.UseManagedNtlm`。在当前 .NET 中,该开关让 `Negotiate` 使用托管 SPNEGO 和 NTLM,同时保留系统 GSSAPI Kerberos,并不强制使用 NTLM。主程序及隔离插件宿主的 `runtimeconfig.json` 也从进程启动时启用它,避免其他插件先调用认证 API 后缓存旧值。该开关影响同进程的其他 `NegotiateAuthentication` 客户端;Windows SSPI 路径不变。独立嵌入引擎的应用也应在启动配置中设置它。部署时更新宿主与插件并完整重启;普通 NTLM 环境无需安装 `gss-ntlmssp`。
+
+**禁用 NTLM 的域环境。** Linux 需要可用的系统 Kerberos/GSSAPI 库(例如 Debian/Ubuntu 的 `libgssapi-krb5-2`),macOS 使用系统 GSSAPI。配置系统 Kerberos realm 与 KDC 发现(`krb5.conf` 或组织的系统配置),确保 DNS、KDC 网络连通和时钟同步。连接地址使用与服务器 `TERMSRV/<FQDN>` SPN 匹配的 DNS 名;IP、未注册的别名和重复 SPN 不能保证 Kerberos 成功。账号可用 `user@EXAMPLE.COM`,或用户名 `user` 加域/realm `EXAMPLE.COM`;不要假定 NetBIOS 短域名一定能映射到 Kerberos realm。显式账号密码通过 GSSAPI 获取服务票据;SSH 隧道仍使用原始服务器名称作为 SPN。可用 `kinit user@EXAMPLE.COM`、`kvno TERMSRV/rdp.example.com` 检查系统配置。服务器禁止 NTLM 时必须修复 Kerberos 配置;选择“仅 NLA”可明确禁止 TLS 回退。
 
 **降级保护。** X.224 协商是明文的,中间人可以回答「只支持 TLS」——若用户在首次连接时信任了它的证书,密码就会随 Client Info 落到它手里。因此自动模式下,某台主机(主机+端口)**一旦用 NLA 登录成功就被记住**(插件存储),之后对它要求 NLA;它若改为只提供 TLS 或拒绝 NLA,连接会在发送任何密码之前停止,并提示这可能是有人在中间强迫降级。若确实是服务器关闭了「要求 NLA」,在连接的高级设置里把安全层改为 TLS 即可。从未用 NLA 登录过的主机(例如不接受我们 NTLM 的那类)仍按下面的回退处理。
 
-**自动模式的回退。** 若服务器在客户端发出第一条 CredSSP 消息之后就拒绝——这条消息只是 NTLM NEGOTIATE,不含用户名,也不含任何凭据证明——表现为以 `errorCode` 0x80090302(SEC_E_UNSUPPORTED_FUNCTION)作答,或直接中止 TLS 会话(本地 SChannel 报 0x80090304「无法连接到本地安全机构」;对同一台服务器、字节完全相同的消息,两种形态会交替出现),说明服务器不接受传入的 NTLM。这是服务器策略,不是凭据问题。自动模式随即**只提供 TLS 重连一次**,证书照样校验,插件日志记一条警告。若服务器连 TLS 也拒绝(RDP_NEG_FAILURE `HYBRID_REQUIRED_BY_SERVER`),即服务器要求 NLA 却不接受 NTLM,错误会说明这是服务器端设置、与用户名和密码无关,并给出两种修法:在服务器上允许传入 NTLM(本地安全策略 › 安全选项 ›「网络安全: 限制 NTLM: 传入 NTLM 流量」设为「允许所有」),或关闭「仅允许运行使用网络级别身份验证的远程桌面的计算机连接」。密码错误(服务器在 NTLM 认证之后拒绝)仍报认证失败,**不会**触发回退。
+**自动模式的回退。** 仅当首个令牌可确认为不含凭据证明的 NTLM Type 1(裸令牌,或只提供 NTLM 的 SPNEGO 包装),且服务器在第一条回复返回错误或中止 TLS 时,自动模式才允许**只提供 TLS 重连一次**,证书照样校验。Kerberos AP-REQ 在首包就可能携带身份凭据证明;其被拒、断连、未知机制或畸形令牌都不能触发这种回退。凭据提交后的失败和旧版 CredSSP 同样不允许降级。若服务器要求 NLA 又拒绝 NTLM,应先使用正确的 FQDN/SPN 和 realm 配置 Kerberos;没有 Kerberos 的环境只能由管理员决定是否调整服务器认证策略。已记住必须 NLA 的主机和“仅 NLA”模式均不会回退。
 
 **连接失败的诊断。** 错误指明失败的阶段(TCP、安全协商、TLS、NLA、MCS、登录、许可、能力交换)和原因链,含 SChannel / 套接字错误码;TLS 握手之后的失败还附上协商出的 TLS 版本。服务器在 NLA 中拒绝登录时,按它返回的状态码给出具体原因(用户名或密码错误、密码过期、账号锁定或停用、不允许远程登录)。**连接成功后又被服务器断开**时(服务器发来 Set Error Info PDU,MS-RDPBCGR 2.2.5.1.1),按它的 errorInfo 码给出原因并显示在断开浮层与状态栏:用户被注销、会话被另一连接接管、服务器拒绝或权限不足、空闲/登录超时、没有可用的远程桌面授权(RDS 授权或宽限期过期)等;其余码回退到中性描述加十六进制码。断开日志还记录**此前是否收到过登录通知**(服务器的 Save Session Info PDU):收到说明凭据已被接受、Windows 会话已启动,随后的断开是服务器结束了一个已建立的会话(多为策略),而非认证或协议失败;未收到则说明尚未走到登录。插件日志(`velashell.rdp`)记录每次失败的完整异常;TLS 握手之后的失败再附上加密套件和服务器发来的 TLS 记录头(只记类型与长度,例如 `Alert 26 B`,从不保存载荷),用来区分「服务器中止」与本地解密问题。
 
-宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,需要重新明确批准。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 .NET 的 `NegotiateAuthentication` 做 NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
+宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,需要重新明确批准。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 Windows SSPI 或 Unix 的 .NET Negotiate 完成 Kerberos/NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
 
 ## 许可协商
 
@@ -217,11 +219,13 @@ dotnet build plugins/VelaShell.Plugin.Rdp -c Release -t:PackVpx
 
 Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 OLE/user32/kernel32。另一平台相关处是 `UnixClipboardFile`:它在 Unix 上 P/Invoke 系统 `libc` 的 `open`/`fstat`,以 `O_NONBLOCK|O_NOFOLLOW` 安全打开用于本地→远程传输的剪贴板文件(避免 FIFO 阻塞、拒绝符号链接),Windows 用 .NET 文件 API。系统 libc 随操作系统提供,不是捆绑的原生库。
 
-不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。包内包含 `ManagedCodecs.H264.dll`、`ManagedCodecs.Core.dll` 和 `VelaShell.Rdp.THIRD-PARTY-NOTICES.txt`,保留 MIT/Apache-2.0 与依赖版权声明。CI 与发布只跑托管测试与打包。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
+不再有 `rdp-native` 工作流、CMake、随包 OpenSSL/VC 运行库或六平台原生任务:插件以**一份托管 `.vpx`** 交付,全 RID 通用。包内包含 `ManagedCodecs.H264.dll`、`ManagedCodecs.Core.dll` 和 `VelaShell.Rdp.THIRD-PARTY-NOTICES.txt`,保留 MIT/Apache-2.0 与依赖版权声明。构建与打包仍为托管流程;Ubuntu 认证 CI 额外使用临时系统 MIT Kerberos KDC 做集成测试。工具链细节见 [插件构建 README](https://github.com/VelaShellLabs/velashell-plugins/blob/main/plugins/VelaShell.Plugin.Rdp/README.md)。另见 [打包与签名](../templates/publishing.md)。
 
 ## 验证情况与剩余边界
 
-`ManagedNtlmTests` 在没有额外安装 `gss-ntlmssp` 的环境中验证首个令牌、NTLMv2 凭据证明、连续客户端封包、服务器回包解密与篡改签名拒绝。最初的 21 项认证测试已在 Ubuntu 和 macOS CI 上通过；测试进程不预设托管 NTLM 开关，直接验证插件初始化路径。Windows 上强制 `ManagedNtlm` 类仍调用系统 SSPI 的 NTLM 包，不能代替 Unix 测试。
+`ManagedNtlmTests` 在没有安装 `gss-ntlmssp` 的环境中验证裸 NTLM 和 Unix 默认 SPNEGO、NTLMv2 凭据证明、机制列表 MIC、额外协商轮次及连续封包/解包。`CredSspNegotiationTests` 覆盖 Kerberos 首包被拒或断连不降级,以及立即完成的上下文只发送一次令牌并使用 v5+ 绑定。`KerberosNlaTests` 配合 `scripts/Test-RdpKerberos.sh` 启动隔离的 MIT KDC,分别使用 UPN 和用户名加 realm,明确断言实际机制为 Kerberos,经 TLS 验证 CredSSP 公钥绑定及最终凭据加密。脚本只使用临时数据库、配置、票据缓存和服务 keytab,结束时清理。
+
+本次在 Windows 与 WSL Debian/.NET 11 RC3 运行了认证回归,并在 Linux 通过两项真实 KDC 的 CredSSP 交换测试。现有测试工程另有四个与认证无关的文件无法编译(`GfxRemoteFxTests`、`DynamicChannelTests`、`RdpGfxTests`、`WpdHotplugTests`);本地验证临时排除它们,未修改这些文件。CI 的 Ubuntu/macOS 认证选择器已扩充,Ubuntu 增加隔离 KDC 步骤;本次尚未执行更新后的远程 CI、macOS Kerberos 或真实禁用 NTLM 的 Windows AD 桌面登录。
 
 许可修复在 Windows 和 Linux .NET 11 RC3 容器上均通过 59 项许可/认证/通道聚焦测试。`LicensingTests` 与 `LicensingExchangeTests` 使用独立服务端实现校验 RSA 解密、密钥派生、RC4/MAC，覆盖 512/2048 位专有密钥和 X.509 链的完整交换、伪造签名/MAC、畸形消息、重置/重传上限、错误回复，以及真实连接循环在 Demand Active 前发送 MCS 应答。Ubuntu 和 macOS CI 均通过全部 47 项认证/许可测试，包括旧密钥交换用例。这些是模拟交换，并非连接日志中的真实 Windows 服务器；macOS 到 Windows 的桌面互通仍需现场复验。
 
