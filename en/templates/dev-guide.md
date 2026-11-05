@@ -315,7 +315,7 @@ context.Log.Error("failed", ex);
 ```
 
 Writes to the host Trace pipeline, automatically adds the `[Plugin:<id>]` prefix, and is thread-safe. It also goes into this plugin's own
-log file `~/.velashell/logs/plugins/<id>.log` (rotated once at 1 MB), whose tail users can see under Plugin management → "View log". An
+daily log files `~/.velashell/logs/plugins/<id>-yyyyMMdd.log` (7 days kept by default), whose newest existing file's tail users can see under Plugin management → "View log". An
 isolated plugin's `Console.WriteLine` and the stack trace an unhandled exception writes to stderr land in that file too; `Trace.WriteLine`
 inside the plugin process is not collected, so anything users should see goes through `context.Log`.
 
@@ -1115,7 +1115,7 @@ against the local echo server, disconnect as EOF / going Faulted and recovering 
 | Disable one plugin | Place an empty `.disabled` file in the plugin directory |
 | Disable all plugins (troubleshooting) | Environment variable `VELASHELL_DISABLE_PLUGINS=1` |
 | Id conflict | First match wins according to root-directory order (application directory first); the later one is marked Invalid |
-| Logs | Debug output/Trace, with `[PluginManager]` and `[Plugin:<id>]` prefixes; each plugin also has its own `~/.velashell/logs/plugins/<id>.log` (`context.Log`, the isolated process's stdout / stderr, the activation / failure / crash entries the host records), whose tail is shown under Plugin management → "View log"; deleted on uninstall |
+| Logs | Debug output/Trace, with `[PluginManager]` and `[Plugin:<id>]` prefixes; each plugin also has daily files `~/.velashell/logs/plugins/<id>-yyyyMMdd.log` (`context.Log`, the isolated process's stdout / stderr, the activation / failure / crash entries the host records), whose newest existing file's tail is shown under Plugin management → "View log"; 7 days are kept by default and files are deleted on uninstall |
 
 ## 9. Performance and Behavior Discipline
 
