@@ -73,7 +73,7 @@ agnostic** (async methods, DTOs, opaque ids only), so the same plugin source run
 | `PluginId` / `PluginVersion` | From `plugin.json`                                                                                                                                                       |
 | `DataDirectory`              | Private directory (already created). **All local writes belong here**; it is deleted on uninstall                                                                        |
 | `Host` (`IHostInfo`)         | Host version, apiLevel, current locale. `Host.Theme` only holds the coarse `dark`/`light`/`system` value — for the actual theme identity and palette see `Theme` in §3.5 |
-| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error` into the host log pipeline (prefixed with the plugin id), and also into this plugin's own log file `~/.velashell/logs/plugins/<id>.log`, which users see through "View log" on the plugin management page |
+| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error` into the host log pipeline (prefixed with the plugin id), and also into this plugin's daily log files `~/.velashell/logs/plugins/<id>-yyyyMMdd.log`; the host keeps at most 7 days by default, and "View log" opens the newest file that exists |
 | `Shutdown`                   | Shutdown token: capability calls may start failing afterwards, so wind down                                                                                              |
 
 ### 3.2 Data

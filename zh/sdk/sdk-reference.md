@@ -69,7 +69,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 | `PluginId` / `PluginVersion` | 来自 `plugin.json`                                                                                                          |
 | `DataDirectory`              | 插件私有目录(已创建)。**一切本地写入都应限于此**,卸载时整体删除                                                             |
 | `Host` (`IHostInfo`)         | 宿主版本、apiLevel、当前语言。`Host.Theme` 只有 `dark`/`light`/`system` 三个粗粒度值,主题的实际身份与配色看 §3.5 的 `Theme` |
-| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error`,写进宿主日志管道(带插件 id 前缀),同时落到这个插件自己的日志文件 `~/.velashell/logs/plugins/<id>.log`,用户在插件管理页「查看日志」就能看到 |
+| `Log` (`IPluginLogger`)      | `Debug/Info/Warn/Error`,写进宿主日志管道(带插件 id 前缀),同时按天落到 `~/.velashell/logs/plugins/<id>-yyyyMMdd.log`;宿主默认最多保留 7 天,插件管理页「查看日志」打开实际存在的最新文件 |
 | `Shutdown`                   | 停机令牌:触发后能力调用可能开始失败,应尽快收尾                                                                              |
 
 ### 3.2 数据
