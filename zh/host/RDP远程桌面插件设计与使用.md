@@ -206,7 +206,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
 
-**跨平台 TLS 后端。** macOS 在 RDP 引擎装载时启用 .NET 的 `System.Net.Security.UseNetworkFramework`,让 `SslStream` 使用 Network.framework 而不是旧的 Secure Transport/AppleCrypto 路径；这避免了部分 Windows RDP 服务器在 NLA 应用数据后立即发送 TLS Alert 时的本地解密错误。Linux 继续使用 .NET 的 OpenSSL 后端，不启用该 macOS 开关；两个平台仍共用同一套 CredSSP/NLA 消息和回归测试。
+**跨平台 TLS 后端。** macOS 继续使用 .NET 的 Secure Transport/AppleCrypto,但 RDP TLS 客户端会排除静态 RSA-GCM 套件(包括 `TLS_RSA_WITH_AES_256_GCM_SHA384`),优先协商 TLS 1.3 或 ECDHE；这避免了部分 Windows RDP 服务器在 NLA 应用数据后立即发送 TLS Alert 时的本地解密错误,也不引入 .NET 11 RC3 的 Network.framework 回调崩溃。Linux 继续使用 .NET 的 OpenSSL 后端和系统默认套件；两个平台仍共用同一套 CredSSP/NLA 消息和回归测试。
 
 **NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 `NegotiateAuthentication(Package = "Negotiate")` 的 SPNEGO 协商:优先尝试系统 GSSAPI Kerberos,不可用时由 .NET 协商托管 NTLM,无需额外安装 NTLM 提供程序。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
 
