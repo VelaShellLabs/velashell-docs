@@ -111,6 +111,8 @@ For isolated-process negotiation, real cancellation and event integrity, see [IP
 
 ### 3.3b Independent upload jobs (SDK 2.1.1)
 
+The option list and per-job confirmation below describe released behavior; see [§3.3g](#mcp-transfer-approval) for the pending `ApprovalContext` extension and host integration boundary.
+
 **The independent upload contract is officially published in SDK 2.1.1 on NuGet.org.** Host central dependencies, the testing package and the explicit AI reference use 2.1.1; the AI manifest requires `minSdkVersion: 2.1.1` (`apiLevel: 2`). No local packages or temporary feeds are used. A published contract does not imply that every host implements an executor: callers must still check the actual capability and follow the lifecycle below.
 
 `IRemoteFsApi.SupportsTransferOperations` defaults to `false`. Default implementations of the new methods throw `NotSupportedException`, never fall back to a long-running `UploadFileAsync`. Existing interface members and RPC DTO constructor/deconstruction signatures remain unchanged, as does apiLevel. The capability flag applies only when the new contract assembly is already loaded; new plugins must still declare the officially published minimum SDK version, not assume an old SDK assembly can load the added types.
@@ -143,6 +145,8 @@ The current host enforces trusted confirmation for the new upload API through a 
 This contract does not change existing synchronous upload/download behavior, AI chat attachments or IM platform file limits. Host/AI integration uses independent jobs for visible progress, model status queries and uploads outside long requests; external MCP agents must still query explicitly, not assume server-driven model wakeups. The current host connection boundary cannot prove that server key, account and remote namespace remain identical after reconnection, so `ResumeTransferAsync` explicitly reports unsupported and `CanResume=false`. Having an interface does not mean resume is implemented; never automatically replay `Unknown`.
 
 ### 3.3c Independent download jobs (SDK 2.1.2)
+
+See [§3.3g](#mcp-transfer-approval) for the pending download `ApprovalContext` extension. Publishing the SDK contract alone does not change the host confirmation behavior below.
 
 **The independent download contract is officially published in SDK 2.1.2 on NuGet.org.** The host's central dependencies in `src/Directory.Packages.props` and `tests/Directory.Packages.props`, the testing package and the explicit AI reference use 2.1.2; the AI manifest requires `minSdkVersion: 2.1.2` (`apiLevel: 2`). No local packages or temporary feeds are used. A published contract does not imply that every host implements an executor: callers must still check `SupportsDownloadOperations`.
 
@@ -190,6 +194,25 @@ Actual length, remote metadata before/after transfer and available digests are c
 - Isolated process: RPC `fs/transfer/withdraw` (`PluginRpc.FsTransferWithdraw`, payload `FsTransferWithdrawRequest(TransferId, ExpectedGeneration)`, reply `RemoteTransferWithdrawResult`), handshake `HandshakeResponse.SupportsTransferWithdraw`; see [IPC §7.5](../plugins/05-ipc-protocol.md#75-conditional-withdrawal-sdk-214). Test double: `FakeRemoteFs.SupportsTransferWithdraw` (default false), `WithdrawTransferHandler` and `TransfersWithdrawn` (requested, not necessarily withdrawn); without support or a handler it throws not-supported and never routes to `CancelTransferHandler`.
 
 The current host (since 2026-10-31) advertises support both in process and in isolated mode, for uploads and downloads alike: deciding and withdrawing happen in one step under the job lock, and when the authorization gate records an approval it advances the phase under the same job lock through a callback, so whichever takes the lock first wins. A generation already stopped by a disconnect, deadline, revocation or a denial in the confirmation whose terminal state has not been published yet still answers `Withdrawn` by the outcome order, and its terminal state is recorded as `Cancelled` / `cancelled` too (not as the earlier stop reason). The AI plugin uses it to withdraw the round's transfers still awaiting confirmation when stopped or denied; see [Automation and AI §1.6](../plugins/11-automation-and-ai.md#16-ai-file-uploads-and-progress-sdk-211).
+
+<a id="mcp-transfer-approval"></a>
+
+### 3.3g Transfer approval origin (pending release)
+
+**SDK version TBD (replace at release).** This adds an unpublished contract. VelaShell host and AI plugin integration will continue after the official SDK package is published; this does not mean current releases can automatically approve MCP transfers.
+
+`RemoteUploadOptions` and `RemoteDownloadOptions` gain an init property, `ApprovalContext`, of type `RemoteTransferApprovalContext`:
+
+| Value | Meaning |
+| --- | --- |
+| `Default = 0` | Per-job confirmation by default; legacy requests missing the field deserialize to this value |
+| `ExternalMcp = 1` | An external MCP entry-point hint, not an authorization credential |
+
+The host must decide independently using its bound plugin identity and the user's saved policy. Automatic approval requires a recognized AI plugin, an external MCP origin and explicit opt-in for that direction. Missing policy, disabled switches, default or unknown origin values must not grant permission to skip approval. Uploads and downloads require separate authorization; a plugin sending `ExternalMcp` is insufficient. RPC preserves the field, including unknown numeric values, for conservative handling by the host.
+
+The subsequent integration contract is described in [Collaboration §2.3c](../plugins/collaboration.md#mcp-transfer-auto-approval): both switches default off. Automatic approval includes explicitly requested overwrite, while preserving default `Overwrite=false`, path validation, server scope, job ownership, cancellation and revocation. It does not enable currently unsupported transfer resume.
+
+This change does not alter the SDK version, `apiLevel`, method signatures or RPC request constructor signatures. After publication, update the host src/tests `Directory.Packages.props`, the AI plugin's explicit SDK reference and its `minSdkVersion` as needed; do not use temporary packages or cross-repository project references. New plugins must still declare a minimum SDK version containing these types rather than assuming an old SDK assembly can load them.
 
 ### 3.4 UI and extension points
 

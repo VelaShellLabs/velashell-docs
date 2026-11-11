@@ -116,6 +116,8 @@ Provider model lists in the settings sidebar are collapsed by default, regardles
 
 ### 1.6 AI file uploads and progress (SDK 2.1.1)
 
+> This section and §1.7 describe released default approval flows. Independent external MCP upload/download auto-approval switches await SDK version TBD (replace at release) and host integration. Both default off and do not affect desktop AI, remote-link saves or IM. See [Collaboration §2.3c](collaboration.md#mcp-transfer-auto-approval) for the integration contract.
+
 This section concerns only `upload_local_file`: streaming a file from the user's **local machine** to an authorized SSH session through SFTP. It does not put arbitrary large files into model context, change chat attachments or bypass IM platform `send_file` limits. Removal of the two download-entry size caps is covered separately in §1.7. Uploads have no fixed AI file-size cap, but local/remote storage, authorization, protocol and connection constraints still apply.
 
 | Tool | Behavior |
