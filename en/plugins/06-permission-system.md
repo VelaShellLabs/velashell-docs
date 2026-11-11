@@ -1,6 +1,6 @@
 # 06 · Permission System
 
-> **Pending MCP transfer policy:** SDK version TBD (replace at release) adds an approval-origin hint, not a permission grant. Host integration will continue after official package publication; the text below still describes released default confirmation behavior. Subsequent integration permits separate user opt-ins for external MCP uploads/downloads, both off by default, with independent host checks of identity and saved policy. Leases, cancellation and revocation remain. See [Collaboration §2.3c](collaboration.md#mcp-transfer-auto-approval).
+> **MCP transfer policy (SDK 2.1.9):** The published approval-origin hint is not a permission grant. Integration is on the host development branch; the text below describes default confirmation when auto-approval is off. External MCP alone permits separate upload/download opt-ins, both off by default, with independent host checks of identity, origin and saved policy for each job. Leases, cancellation and revocation remain. Users need a host version containing the feature. See [Collaboration §2.3c](collaboration.md#mcp-transfer-auto-approval).
 
 Design goal: give users Android-level transparency and control over “what this plugin can touch”, with declaration first, a prompt on first use of dangerous permissions, narrowing of scope, revocation at any time, and an audit trail.
 

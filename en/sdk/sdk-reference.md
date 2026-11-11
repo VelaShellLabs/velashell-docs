@@ -111,7 +111,7 @@ For isolated-process negotiation, real cancellation and event integrity, see [IP
 
 ### 3.3b Independent upload jobs (SDK 2.1.1)
 
-The option list and per-job confirmation below describe released behavior; see [§3.3g](#mcp-transfer-approval) for the pending `ApprovalContext` extension and host integration boundary.
+The option list below describes the original SDK 2.1.1 contract; per-job confirmation remains the default. See [§3.3g](#mcp-transfer-approval) for the SDK 2.1.9 `ApprovalContext` addition, the MCP auto-approval exception and current dependency versions.
 
 **The independent upload contract is officially published in SDK 2.1.1 on NuGet.org.** Host central dependencies, the testing package and the explicit AI reference use 2.1.1; the AI manifest requires `minSdkVersion: 2.1.1` (`apiLevel: 2`). No local packages or temporary feeds are used. A published contract does not imply that every host implements an executor: callers must still check the actual capability and follow the lifecycle below.
 
@@ -146,7 +146,7 @@ This contract does not change existing synchronous upload/download behavior, AI 
 
 ### 3.3c Independent download jobs (SDK 2.1.2)
 
-See [§3.3g](#mcp-transfer-approval) for the pending download `ApprovalContext` extension. Publishing the SDK contract alone does not change the host confirmation behavior below.
+See [§3.3g](#mcp-transfer-approval) for the SDK 2.1.9 download `ApprovalContext` addition and MCP auto-approval exception. Per-job confirmation below remains the default.
 
 **The independent download contract is officially published in SDK 2.1.2 on NuGet.org.** The host's central dependencies in `src/Directory.Packages.props` and `tests/Directory.Packages.props`, the testing package and the explicit AI reference use 2.1.2; the AI manifest requires `minSdkVersion: 2.1.2` (`apiLevel: 2`). No local packages or temporary feeds are used. A published contract does not imply that every host implements an executor: callers must still check `SupportsDownloadOperations`.
 
@@ -197,9 +197,9 @@ The current host (since 2026-10-31) advertises support both in process and in is
 
 <a id="mcp-transfer-approval"></a>
 
-### 3.3g Transfer approval origin (pending release)
+### 3.3g Transfer approval origin (SDK 2.1.9)
 
-**SDK version TBD (replace at release).** This adds an unpublished contract. VelaShell host and AI plugin integration will continue after the official SDK package is published; this does not mean current releases can automatically approve MCP transfers.
+**The contract is officially published in SDK 2.1.9, with VelaShell host and AI plugin integration on the development branch.** Users need a host version containing the feature and must explicitly enable the relevant switch; upgrading the SDK alone does not authorize transfers. Focused automated tests have passed; real SSH / GUI end-to-end acceptance is not claimed.
 
 `RemoteUploadOptions` and `RemoteDownloadOptions` gain an init property, `ApprovalContext`, of type `RemoteTransferApprovalContext`:
 
@@ -210,9 +210,9 @@ The current host (since 2026-10-31) advertises support both in process and in is
 
 The host must decide independently using its bound plugin identity and the user's saved policy. Automatic approval requires a recognized AI plugin, an external MCP origin and explicit opt-in for that direction. Missing policy, disabled switches, default or unknown origin values must not grant permission to skip approval. Uploads and downloads require separate authorization; a plugin sending `ExternalMcp` is insufficient. RPC preserves the field, including unknown numeric values, for conservative handling by the host.
 
-The subsequent integration contract is described in [Collaboration §2.3c](../plugins/collaboration.md#mcp-transfer-auto-approval): both switches default off. Automatic approval includes explicitly requested overwrite, while preserving default `Overwrite=false`, path validation, server scope, job ownership, cancellation and revocation. It does not enable currently unsupported transfer resume.
+Configuration and integrated behavior are described in [Collaboration §2.3c](../plugins/collaboration.md#mcp-transfer-auto-approval): both switches default off. Automatic approval includes explicitly requested overwrite, while preserving default `Overwrite=false`, path validation, server scope, job ownership, cancellation and revocation. It does not enable currently unsupported transfer resume.
 
-This change does not alter the SDK version, `apiLevel`, method signatures or RPC request constructor signatures. After publication, update the host src/tests `Directory.Packages.props`, the AI plugin's explicit SDK reference and its `minSdkVersion` as needed; do not use temporary packages or cross-repository project references. New plugins must still declare a minimum SDK version containing these types rather than assuming an old SDK assembly can load them.
+`apiLevel`, method signatures and RPC request constructor signatures are unchanged. The host src/tests `Directory.Packages.props`, the AI plugin's explicit SDK reference and its `minSdkVersion` now use the official 2.1.9 release, without temporary packages or cross-repository project references. New plugins must declare a minimum SDK version containing these types rather than assuming an old SDK assembly can load them.
 
 ### 3.4 UI and extension points
 
