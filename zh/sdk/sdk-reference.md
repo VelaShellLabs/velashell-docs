@@ -107,7 +107,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ### 3.3b 独立上传任务（SDK 2.1.1）
 
-本节的选项列表和逐任务确认描述已发布的行为；待发布的 `ApprovalContext` 扩展及宿主接入边界见 [§3.3g](#mcp-transfer-approval)。
+本节的选项列表描述 SDK 2.1.1 初始契约，逐任务确认是默认行为；SDK 2.1.9 新增的 `ApprovalContext` 与 MCP 自动批准例外见 [§3.3g](#mcp-transfer-approval)，其中也列出当前依赖版本。
 
 **独立上传任务契约已随 SDK 2.1.1 正式发布到 NuGet.org。** 宿主中央依赖、测试替身及 AI 插件显式引用统一使用 2.1.1，AI 清单要求 `minSdkVersion: 2.1.1`（`apiLevel: 2`）；不使用本地包或临时包源。契约发布不等于所有宿主具备执行器，调用方仍须检查实际能力并遵守下面的任务生命周期。
 
@@ -142,7 +142,7 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ### 3.3c 独立下载任务（SDK 2.1.2）
 
-待发布的下载 `ApprovalContext` 扩展见 [§3.3g](#mcp-transfer-approval)。仅发布 SDK 契约不会改变本节的宿主确认行为。
+SDK 2.1.9 新增的下载 `ApprovalContext` 与 MCP 自动批准例外见 [§3.3g](#mcp-transfer-approval)。下文的逐任务确认仍是默认行为。
 
 **独立下载任务契约已随 SDK 2.1.2 正式发布到 NuGet.org。** 宿主 `src/Directory.Packages.props` 与 `tests/Directory.Packages.props` 的中央依赖、测试替身及 AI 插件显式引用统一使用 2.1.2，AI 清单要求 `minSdkVersion: 2.1.2`（`apiLevel: 2`）；不使用本地包或临时包源。契约发布不等于所有宿主具备执行器，调用方仍须检查 `SupportsDownloadOperations`。
 
@@ -193,9 +193,9 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 <a id="mcp-transfer-approval"></a>
 
-### 3.3g 传输审批入口（待发布）
+### 3.3g 传输审批入口（SDK 2.1.9）
 
-**SDK 版本 TBD（发版时替换）。** 本次新增契约，尚未发布；VelaShell 宿主与 AI 插件接入留待正式 SDK 包发布后继续，不能据此认为当前版本已能自动批准 MCP 传输。
+**契约已随 SDK 2.1.9 正式发布，VelaShell 宿主与 AI 插件已在开发分支接入。** 用户需安装包含该功能的主程序版本并显式开启对应开关；仅升级 SDK 不会自动授权传输。已通过定向自动化测试，尚未宣称真实 SSH / GUI 整链验收通过。
 
 `RemoteUploadOptions` 与 `RemoteDownloadOptions` 新增 init 属性 `ApprovalContext`，类型为 `RemoteTransferApprovalContext`：
 
@@ -206,9 +206,9 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 宿主必须用真实绑定的插件身份与用户保存的策略独立裁决。只有认可的 AI 插件从对外 MCP 发起、且用户显式开启对应方向时，才可自动批准；缺失策略、关闭开关、默认或未知入口值均不得授予免审批权限。上传和下载应分别授权，不能仅凭插件传入 `ExternalMcp` 放行。RPC 保留该字段及未知数值，由宿主按保守规则处理。
 
-后续接入约定见 [协作接入 §2.3c](../plugins/协作接入.md#mcp-transfer-auto-approval)：两个开关默认关闭，自动批准包括调用方明确请求的覆盖，但不改变默认 `Overwrite=false`、路径校验、服务器范围、任务归属、取消或撤权。它也不启用当前不支持的断点恢复。
+配置与接入行为见 [协作接入 §2.3c](../plugins/协作接入.md#mcp-transfer-auto-approval)：两个开关默认关闭，自动批准包括调用方明确请求的覆盖，但不改变默认 `Overwrite=false`、路径校验、服务器范围、任务归属、取消或撤权。它也不启用当前不支持的断点恢复。
 
-本变更不修改 SDK 版本或 `apiLevel`，也不更改方法与 RPC 请求的构造签名。发布后再更新宿主 src/tests 的 `Directory.Packages.props`、AI 插件的显式 SDK 引用及必要的 `minSdkVersion`；不使用临时包或跨仓库项目引用。新插件仍须声明包含这些新类型的最低 SDK 版本，不能假定旧 SDK 程序集能加载它们。
+`apiLevel`、方法与 RPC 请求的构造签名不变。宿主 src/tests 的 `Directory.Packages.props`、AI 插件的显式 SDK 引用及 `minSdkVersion` 已统一更新到正式 2.1.9；不使用临时包或跨仓库项目引用。新插件须声明包含这些新类型的最低 SDK 版本，不能假定旧 SDK 程序集能加载它们。
 
 ### 3.4 界面与扩展点
 

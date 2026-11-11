@@ -191,7 +191,7 @@ this. HTTP only asks the user to paste one address into their agent's configurat
 
 ### 2.3 Security
 
-The following describes released default approval behavior. Independent upload/download auto-approval options await SDK publication and host integration; see [§2.3c](#mcp-transfer-auto-approval).
+The following and §2.3a/§2.3b describe default approval behavior. Independent upload/download auto-approval using SDK 2.1.9 is integrated on the host development branch; see [§2.3c](#mcp-transfer-auto-approval) for the opt-in exception.
 
 - **Binds `127.0.0.1` only**, with no option to bind anything else.
 - **Every request must carry the token**, which is generated randomly and cannot be turned off.
@@ -202,7 +202,7 @@ The following describes released default approval behavior. Independent upload/d
 - **There is no approval UI on this route** — an external agent runs in another process, so VelaShell
   cannot show it an approval card. "Ask every time" refuses ordinary writes requiring plugin approval.
   "Read-only auto" automatically permits only commands matching its read-only rules; ordinary writes require
-  explicit "bypass". Root commands follow the next point; pending transfer-specific options are described in §2.3c.
+  explicit "bypass". Root commands follow the next point; transfer-specific options are described in §2.3c.
 - **Commands that need root are the exception** (since 2026-11-01): in Agent mode, a `run_command` with `elevated=true`
   is no longer refused at the plugin layer. Under every approval option it goes to the host, which shows its own root
   confirmation on your desktop (source plugin, real target and full command filled in by the host; NOPASSWD is confirmed too)
@@ -240,17 +240,17 @@ Safe commit supports Windows fixed local NTFS and local filesystems on Linux/mac
 
 <a id="mcp-transfer-auto-approval"></a>
 
-### 2.3c Automatic upload and download approval (pending integration)
+### 2.3c Automatic upload and download approval (SDK 2.1.9)
 
-**Requires SDK version TBD (replace at release); host integration, dependency updates and end-to-end validation will continue after the official SDK release.** The following is the integration contract, not a statement that current versions offer these options.
+**SDK 2.1.9 is published, with integration on the host development branch and the AI plugin's minimum SDK version raised to 2.1.9.** Users need a host version containing the feature. Focused automated tests have passed; real SSH / GUI end-to-end acceptance remains unverified.
 
-Add independent "Auto-approve downloads" (`AutoApproveDownloads`) and "Auto-approve uploads" (`AutoApproveUploads`) switches under **AI: Collaboration → External MCP**. Both default off. In Agent mode, enabling a direction and saving removes per-transfer plugin approval and host confirmation for that direction's MCP transfers, even with the general approval mode set to Ask or Read-only auto. Plan/Chat mode does not gain transfer tools, and disabled tools remain disabled.
+Select the independent "Automatically approve MCP downloads" (`AutoApproveDownloads`) and "Automatically approve MCP uploads" (`AutoApproveUploads`) switches under **AI: Collaboration → External MCP**. Both default off. In Agent mode, enabling a direction and saving removes per-transfer plugin approval and host confirmation for that direction's MCP transfers, even with the general approval mode set to Ask or Read-only auto. Plan/Chat mode does not gain transfer tools, and disabled tools remain disabled.
 
 Automatic approval includes explicitly requested `overwrite=true`; it does not change the no-overwrite default. It applies only to this external MCP entry point: desktop AI, remote-link saves, IM and other plugins are unaffected. Ordinary commands, root confirmation, server scope and path validation retain their rules. Turning a direction off and saving restores the original approval flow for new jobs. General `Bypass` alone still cannot skip host transfer confirmation.
 
-The host must check the bound AI plugin identity, transfer origin and saved direction switch together, rather than trust a request claiming approval. Jobs retain separate leases, ownership checks, explicit cancellation and plugin-management revocation. Revocation requests cancellation of pending/active jobs without promising rollback of committed files. It does not clear the persistent switches; turn a switch off and save to stop subsequent automatic approvals.
+The host rereads saved policy for each job and checks the bound AI plugin identity, transfer origin and direction switch together, rather than trust a request claiming approval. Jobs retain separate leases, ownership checks, explicit cancellation and plugin-management revocation. Cancellation approval uses the direction of a job registered to the current run, so revoked metadata-read authorization does not block cleanup. Revocation requests cancellation of pending/active jobs without promising rollback of committed files. It does not clear the persistent switches; turn a switch off and save to stop subsequent automatic approvals.
 
-See [SDK §3.3g](../sdk/sdk-reference.md#mcp-transfer-approval) for the contract and release order.
+See [SDK §3.3g](../sdk/sdk-reference.md#mcp-transfer-approval) for the contract and dependency versions.
 
 ### 2.4 Configuring "Allowed servers" (reworked 2026-09-05)
 
