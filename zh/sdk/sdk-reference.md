@@ -107,6 +107,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 
 ### 3.3b 独立上传任务（SDK 2.1.1）
 
+本节的选项列表和逐任务确认描述已发布的行为；待发布的 `ApprovalContext` 扩展及宿主接入边界见 [§3.3g](#mcp-transfer-approval)。
+
 **独立上传任务契约已随 SDK 2.1.1 正式发布到 NuGet.org。** 宿主中央依赖、测试替身及 AI 插件显式引用统一使用 2.1.1，AI 清单要求 `minSdkVersion: 2.1.1`（`apiLevel: 2`）；不使用本地包或临时包源。契约发布不等于所有宿主具备执行器，调用方仍须检查实际能力并遵守下面的任务生命周期。
 
 `IRemoteFsApi.SupportsTransferOperations` 默认 `false`；新方法的默认实现抛 `NotSupportedException`，不退回长时间的 `UploadFileAsync`。现有接口和 RPC DTO 的构造/解构签名不变，apiLevel 不变。能力开关仅适用于新契约程序集已加载的宿主；新插件仍需声明正式新版本的最低 SDK 依赖，不能假定旧 SDK 程序集能加载新类型。
@@ -139,6 +141,8 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 此契约不改变现有同步上传/下载、AI 对话附件或 IM 平台发文件上限。宿主与 AI 的接线使用独立任务提供可见进度、模型任务查询及脱离长请求的上传；外部 MCP Agent 仍须主动查询，不能假定有服务端模型唤醒。当前宿主连接边界不能证明重连后的服务器密钥、账户与远端命名空间一致，因此 `ResumeTransferAsync` 明确报不支持、`CanResume=false`；接口存在不代表恢复已实现，`Unknown` 不自动重传。
 
 ### 3.3c 独立下载任务（SDK 2.1.2）
+
+待发布的下载 `ApprovalContext` 扩展见 [§3.3g](#mcp-transfer-approval)。仅发布 SDK 契约不会改变本节的宿主确认行为。
 
 **独立下载任务契约已随 SDK 2.1.2 正式发布到 NuGet.org。** 宿主 `src/Directory.Packages.props` 与 `tests/Directory.Packages.props` 的中央依赖、测试替身及 AI 插件显式引用统一使用 2.1.2，AI 清单要求 `minSdkVersion: 2.1.2`（`apiLevel: 2`）；不使用本地包或临时包源。契约发布不等于所有宿主具备执行器，调用方仍须检查 `SupportsDownloadOperations`。
 
@@ -186,6 +190,25 @@ DTO 与不透明 id),所以同一份插件源码在 `inProcess` 与 `isolated` �
 - 隔离进程：RPC `fs/transfer/withdraw`（`PluginRpc.FsTransferWithdraw`，载荷 `FsTransferWithdrawRequest(TransferId, ExpectedGeneration)`，应答即 `RemoteTransferWithdrawResult`），握手 `HandshakeResponse.SupportsTransferWithdraw`，见 [IPC §7.5](../plugins/05-ipc-protocol.md#75-条件撤回sdk-214)。测试替身：`FakeRemoteFs.SupportsTransferWithdraw`（默认否）、`WithdrawTransferHandler` 与 `TransfersWithdrawn`（请求过不代表撤下了）；没宣告支持或没有处理器时明确抛不支持，也不改走 `CancelTransferHandler`。
 
 当前宿主（2026-10-31 起）在进程内与隔离模式下都宣告支持，上传与下载同一口径：判定与撤下在任务锁里一步完成，授权闸登记批准时也经回调在同一把任务锁里推进阶段，两边谁先拿到锁谁赢。同一拍里已被断线、到期、撤权或确认框里的拒绝叫停、还没来得及发布终态的那一代，撤回照判定顺序答 `Withdrawn`，终态也记 `Cancelled` / `cancelled`（不再记成先叫停的那个原因）。AI 插件停止或拒绝时用它撤本轮还在等确认的传输，见 [自动化与 AI §1.6](../plugins/11-automation-and-ai.md#16-ai-文件上传与进度sdk-211)。
+
+<a id="mcp-transfer-approval"></a>
+
+### 3.3g 传输审批入口（待发布）
+
+**SDK 版本 TBD（发版时替换）。** 本次新增契约，尚未发布；VelaShell 宿主与 AI 插件接入留待正式 SDK 包发布后继续，不能据此认为当前版本已能自动批准 MCP 传输。
+
+`RemoteUploadOptions` 与 `RemoteDownloadOptions` 新增 init 属性 `ApprovalContext`，类型为 `RemoteTransferApprovalContext`：
+
+| 值 | 语义 |
+| --- | --- |
+| `Default = 0` | 默认逐任务确认；旧请求缺少字段时反序列化为此值 |
+| `ExternalMcp = 1` | 对外 MCP 的入口提示；不是授权凭据 |
+
+宿主必须用真实绑定的插件身份与用户保存的策略独立裁决。只有认可的 AI 插件从对外 MCP 发起、且用户显式开启对应方向时，才可自动批准；缺失策略、关闭开关、默认或未知入口值均不得授予免审批权限。上传和下载应分别授权，不能仅凭插件传入 `ExternalMcp` 放行。RPC 保留该字段及未知数值，由宿主按保守规则处理。
+
+后续接入约定见 [协作接入 §2.3c](../plugins/协作接入.md#mcp-transfer-auto-approval)：两个开关默认关闭，自动批准包括调用方明确请求的覆盖，但不改变默认 `Overwrite=false`、路径校验、服务器范围、任务归属、取消或撤权。它也不启用当前不支持的断点恢复。
+
+本变更不修改 SDK 版本或 `apiLevel`，也不更改方法与 RPC 请求的构造签名。发布后再更新宿主 src/tests 的 `Directory.Packages.props`、AI 插件的显式 SDK 引用及必要的 `minSdkVersion`；不使用临时包或跨仓库项目引用。新插件仍须声明包含这些新类型的最低 SDK 版本，不能假定旧 SDK 程序集能加载它们。
 
 ### 3.4 界面与扩展点
 

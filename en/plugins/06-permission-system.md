@@ -1,5 +1,7 @@
 # 06 · Permission System
 
+> **Pending MCP transfer policy:** SDK version TBD (replace at release) adds an approval-origin hint, not a permission grant. Host integration will continue after official package publication; the text below still describes released default confirmation behavior. Subsequent integration permits separate user opt-ins for external MCP uploads/downloads, both off by default, with independent host checks of identity and saved policy. Leases, cancellation and revocation remain. See [Collaboration §2.3c](collaboration.md#mcp-transfer-auto-approval).
+
 Design goal: give users Android-level transparency and control over “what this plugin can touch”, with declaration first, a prompt on first use of dangerous permissions, narrowing of scope, revocation at any time, and an audit trail.
 
 > Trust-model premise (read first): Broker is a **logical enforcement point**. It fully constrains “all access through the host capability APIs” (SSH sessions, credentials, terminal, and host UI, resources that exist only in the host process and therefore cannot be bypassed by a plugin). However, the plugin process itself is an ordinary OS process, and **direct local-file and network OS calls cannot be physically intercepted by Broker in v1**.
