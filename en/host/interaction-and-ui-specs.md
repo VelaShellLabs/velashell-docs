@@ -782,7 +782,7 @@ Opened from the multi-select in §3 (exactly two connections): one file tab with
 
 ### Disconnected State (`ZufZw`)
 
-When a session disconnects, dim the terminal canvas and center a disconnection notice (red status + “Connection disconnected” + “Reconnect” button + reason/time). The corresponding tab dot turns red, the status bar connection icon turns red, and the host dot in the sidebar turns red. Support an automatic reconnect toggle with exponential backoff.
+When a session disconnects, dim the terminal canvas and center a disconnection notice (red status + “Connection disconnected” + “Reconnect”, “Dismiss Notice” and “Close Tab” buttons + reason/time). “Dismiss Notice” hides only the overlay, preserving the tab and terminal history; the tab's normal close actions and `Enter`/`Ctrl+R` reconnection remain available. The corresponding tab dot turns red, the status bar connection icon turns red, and the host dot in the sidebar turns red. Support an automatic reconnect toggle with exponential backoff.
 
 **Automatic reconnect only rescues disconnects nobody asked for** — dropped links, timeouts, a server that
 died. The five cases below never reconnect on their own; the notice still shows, and coming back is the

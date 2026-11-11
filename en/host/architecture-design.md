@@ -291,7 +291,7 @@ Owner: `VelaShell.Terminal` (rendering augmentation layer).
 | Tab bar `nunbT` | `TerminalTabStrip` / `TerminalTab` / `TabOverflowControls` (`pZGS4`) | Overflow scrolling `◀▶`, `▾` dropdown, drag reordering, hover-triggered resource panel (§4B) |
 | Terminal toolbar `BdPtF` | `TerminalInfoBar` | Read-only session information (root@host, uptime, latency) |
 | Terminal canvas `QzoMC` | `VelaTerminalControl` (Terminal, already exists, to be revised per §4.1) | Custom-rendered VT |
-| Disconnected state `ZufZw` | `DisconnectedOverlay` | Disconnection message + reconnect button + automatic reconnect switch (§4.3/§7) |
+| Disconnected state `ZufZw` | `DisconnectedOverlay` | Disconnection message + reconnect/dismiss/close-tab buttons + automatic reconnect switch (§4.3/§7) |
 | File area `dyuii` | `SftpBrowserPanel` / `FileRow` / `PathBreadcrumb` | SFTP browser (§6/§4.8) |
 | Status bar `gzmsb` | `StatusBarView` (App, already exists; the early `StatusMetricChip` control has been removed) | Connection/latency/size/encoding/lightweight metrics (§7) |
 | Command palette `FN5dM` | `CommandPalette` (already exists, to be registry-driven) | Ctrl+P/K (§8) |
