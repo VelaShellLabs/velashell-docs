@@ -7,6 +7,14 @@ Design goal: give users Android-level transparency and control over “what this
 
 > **Current download enforcement (SDK 2.1.2):** The universal Broker flow on this page remains a blueprint, not a guarantee for all file access. New `StartDownloadAsync` uses a separate `DownloadPermissionLease` checking remote read/local write with trusted per-job confirmation of plugin, actual session, source, final destination and overwrite policy. Default no-overwrite and explicit replacement approval apply; upload/terminal/session-opening grants do not carry over. Choosing a save path or AI Bypass cannot replace host confirmation; missing prompt/window means rejection. Plugin-management revocation synchronously invalidates pending/active leases and requests cancellation, with a pre-commit recheck and redacted subsequent reads, without promising rollback of committed files. Legacy synchronous file APIs do not acquire universal authorization. A real SSH / GUI end-to-end flow has not been accepted yet; see [Capability APIs §2.2](07-capability-apis.md#22-independent-download-jobs-sdk-212) for the platforms and filesystems where safe commit is available (Windows fixed local NTFS, local filesystems on Linux / macOS).
 
+### Current AI Plugin Tool Scope
+
+Desktop AI local-file tools use `LocalPathScope` to constrain access to the authorized workspace selected for the parent turn. Read-only Subagents inherit that scope and the current `ISessionScope` without creating or switching SSH sessions. They receive no writing, deletion, movement, process startup, approval management or further delegation tools. Inherited MCP tools must pass both the parent turn's tool filtering and the read-only filter, retaining their approval wrappers; server read-only annotations do not prove the implementation has no side effects.
+
+`delegate_subagent` can select a configured chat model, defaulting to the parent model at delegation time. Changing models does not expand tool permissions. Credentials are resolved and revalidated through the target provider configuration; task results do not record keys. Prompts and tool-read results may be sent to the selected model's provider, so model configuration also determines the data recipient.
+
+These are plugin-level tool constraints, not a completed universal Broker or OS sandbox. MCP workspace binding sets only the process working directory. Minimal/None environment policies reduce environment inheritance without isolating filesystem, network or same-user privileges. See [Automation and AI](11-automation-and-ai.md) and [Actual threat boundaries](12-security-threat-model.md#13-actual-boundaries-of-read-only-subagents-and-external-mcp) for implementation and validation scope.
+
 ## 1. Permission Manifest (apiLevel 1)
 
 ### Normal Permissions (Granted on Installation, Listed on the Details Page)
