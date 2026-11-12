@@ -206,7 +206,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 安全层由 `security` 决定:**自动**(默认)同时提供 TLS 与 NLA,由服务器选择(支持 NLA 的服务器会选 NLA);**仅 NLA** 要求服务器选 NLA,绝不回退;**仅 TLS** 只提供 TLS,凭据在已校验的 TLS 通道内随 Client Info 发送,由服务器自己完成登录(相当于服务器关闭了「要求 NLA」)。TLS 最低 1.2;禁用旧式 RDP 安全及“忽略所有证书”,各模式的证书校验完全相同。没有 pin 时,核验系统信任链、服务器用途、有效期和主机名/IP,由 .NET 的 `SslStream` 用各平台的 OS 信任存储完成。
 
-**跨平台 TLS 后端。** macOS 继续使用 .NET 的 Secure Transport/AppleCrypto,但 RDP TLS 客户端会排除静态 RSA-GCM 套件(包括 `TLS_RSA_WITH_AES_256_GCM_SHA384`),优先协商 TLS 1.3 或 ECDHE；这避免了部分 Windows RDP 服务器在 NLA 应用数据后立即发送 TLS Alert 时的本地解密错误,也不引入 .NET 11 RC3 的 Network.framework 回调崩溃。Linux 继续使用 .NET 的 OpenSSL 后端和系统默认套件；两个平台仍共用同一套 CredSSP/NLA 消息和回归测试。
+**三平台同一套 TLS 策略。** Windows、macOS、Linux 都提供 TLS 1.2 与 1.3,使用各平台 TLS 后端的默认密码套件,不按操作系统限制协议版本或套件(实际能协商到的版本取决于平台后端,例如 macOS 的 Secure Transport 不支持 TLS 1.3)。部分服务器协商到 TLS 1.3 后会在 CredSSP 交换中中止 TLS(致命告警如 internal_error,或记录无法解密);TLS 1.3 下这种中止与服务器拒绝 NTLM 的表现相同。因此,在 TLS 1.3 下 NLA 阶段出现 TLS 层故障时(无论被判为连接失败,还是未带错误码的拒绝),客户端会**用新的 TCP 连接、只提供 TLS 1.2 重试一次**,再以这次的结果为准:成功、带错误码的认证结论,或继续走下文的拒绝/回退流程。重试会重新校验证书,凭据只会发给同一个已验证的服务器。只有重试成功(说明问题确实出在 TLS 1.3)时,本进程才记住该端点,之后直接用 TLS 1.2 连接;插件日志会记录一条警告。
 
 **NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 `NegotiateAuthentication(Package = "Negotiate")` 的 SPNEGO 协商:优先尝试系统 GSSAPI Kerberos,不可用时由 .NET 协商托管 NTLM,无需额外安装 NTLM 提供程序。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
 
@@ -220,7 +220,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 **连接失败的诊断。** 错误指明失败的阶段(TCP、安全协商、TLS、NLA、MCS、登录、许可、能力交换)和原因链,含 SChannel / 套接字错误码;TLS 握手之后的失败还附上协商出的 TLS 版本。服务器在 NLA 中拒绝登录时,按它返回的状态码给出具体原因(用户名或密码错误、密码过期、账号锁定或停用、不允许远程登录)。**连接成功后又被服务器断开**时(服务器发来 Set Error Info PDU,MS-RDPBCGR 2.2.5.1.1),按它的 errorInfo 码给出原因并显示在断开浮层与状态栏:用户被注销、会话被另一连接接管、服务器拒绝或权限不足、空闲/登录超时、没有可用的远程桌面授权(RDS 授权或宽限期过期)等;其余码回退到中性描述加十六进制码。断开日志还记录**此前是否收到过登录通知**(服务器的 Save Session Info PDU):收到说明凭据已被接受、Windows 会话已启动,随后的断开是服务器结束了一个已建立的会话(多为策略),而非认证或协议失败;未收到则说明尚未走到登录。插件日志(`velashell.rdp`)记录每次失败的完整异常;TLS 握手之后的失败再附上加密套件和服务器发来的 TLS 记录头(只记类型与长度,例如 `Alert 26 B`,从不保存载荷),用来区分「服务器中止」与本地解密问题。
 
-宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,需要重新明确批准。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 Windows SSPI 或 Unix 的 .NET Negotiate 完成 Kerberos/NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
+宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,并以「证书已变更」的提示重新请求明确批准(Windows 会自动续期自签名 RDP 证书,用户需要能分辨这与首次信任不同);只有证书本身被拒绝时才会弹出信任提示,握手通过后的超时或断线按普通连接错误报告。NLA 公钥绑定直接取证书 SubjectPublicKeyInfo 中的 subjectPublicKey 字节,RSA 与 ECDSA 证书都支持。本地 NLA 令牌失败在两个平台上分类一致:凭据类原因(密码错误、凭据未知、密码过期等)报告为认证失败并附状态码,其余(找不到 SPN、KDC 不可达、缺少 GSSAPI 等)报告为需要检查配置的协议错误。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 Windows SSPI 或 Unix 的 .NET Negotiate 完成 Kerberos/NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
 
 ## 许可协商
 
