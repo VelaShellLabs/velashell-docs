@@ -47,7 +47,7 @@ Install the signed `velashell.rdp-<version>.vpx` from the plugin release using t
 | Desktop height (`height`) | 1080; 200–8192 (initial size and fallback; follows the window once connected) |
 | Connect timeout (`timeout`) | 15 seconds; 1–120 |
 | Security layer (`security`, advanced) | `auto` (default); `nla` NLA only; `tls` TLS only — see [Authentication and certificate policy](#authentication-and-certificate-policy) |
-| Bidirectional clipboard (`clipboard`) | `false`; explicit opt-in for text, images and files |
+| Bidirectional clipboard (`clipboard`) | `true`; text, images and files — turn it off for a session that should not share clipboard data |
 | Remote audio (`audio`, **Experience** page) | `false`; enable and reconnect to play remote PCM through the local default output |
 | Local disks (`drive:<disk>`, **Drive mapping** page) | One checkbox per local disk, all unchecked by default |
 | Custom folders (`drives`, **Drive mapping** page) | Empty; `name=absolute-path`, several separated by semicolons |
@@ -137,7 +137,7 @@ The plugin installs no global keyboard hook, so combinations the local OS takes 
 
 ### Clipboard and file transfer
 
-Clipboard sharing is off by default. Once authorized, ordinary Ctrl+C / Ctrl+V is used; text and images still synchronize automatically, without Send/Receive buttons.
+Clipboard sharing is on by default (turn it off in the connection settings for a session that should not share clipboard data); ordinary Ctrl+C / Ctrl+V is used; text and images still synchronize automatically, without Send/Receive buttons.
 
 - **Windows remote→local:** remote Ctrl+C publishes only file/directory descriptors through OLE. Pasting in the chosen local Explorer directory requests indexed IStream content; RDP FILECONTENTS reads start only on those requests. Explorer selects the destination and writes files. There are no global key hooks, destination inference, or prefetched download cache.
 - **Local→remote:** focus, activation and remote Ctrl+V publish formats and name/size metadata. Enumeration and safe source-handle preparation read no file content. The remote shell requests FILECONTENTS on paste and owns its destination directory. Ctrl+V still waits for the format-list ACK; descriptor-only preparation shows Ready with zero transferred bytes.

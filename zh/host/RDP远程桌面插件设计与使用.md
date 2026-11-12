@@ -47,7 +47,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 | 桌面高度（`height`） | 1080;200–8192（初值与回退,连上后跟随窗口) |
 | 连接超时（`timeout`） | 15 秒;1–120 |
 | 安全层（`security`,高级） | `auto` 自动(默认);`nla` 仅 NLA;`tls` 仅 TLS,见[认证与证书策略](#认证与证书策略) |
-| 双向剪贴板（`clipboard`） | `false`;明确开启后支持文本、图像与文件 |
+| 双向剪贴板（`clipboard`） | `true`;支持文本、图像与文件,不应共享剪贴板的会话请关闭 |
 | 远程音频（`audio`,「体验」页） | `false`;开启并重连后通过本机默认设备播放远端 PCM 音频 |
 | 本机磁盘（`drive:<盘>`,「磁盘映射」页） | 每块本机磁盘一个复选框,全部默认不勾选 |
 | 自定义文件夹（`drives`,「磁盘映射」页） | 空;`名称=绝对路径`,多条用分号分隔 |
@@ -137,7 +137,7 @@ UDP-R 使用 `SslStream`，UDP-L 使用纯托管依赖 `BouncyCastle.Cryptograph
 
 ### 剪贴板与文件传输
 
-剪贴板默认关闭；授权开启后使用普通 Ctrl+C / Ctrl+V，保留文本和图像的自动同步，不提供手动发送/接收按钮。
+剪贴板默认开启(不应共享剪贴板数据的会话请在连接设置中关闭)；使用普通 Ctrl+C / Ctrl+V，保留文本和图像的自动同步，不提供手动发送/接收按钮。
 
 - **Windows 远端→本机**：远端 Ctrl+C 只读取文件/目录描述并发布 OLE 虚拟文件。用户在本机 Explorer 的目标目录按 Ctrl+V，Explorer 请求对应 IStream 时才通过 RDP FILECONTENTS 读取内容；目标目录与落盘完全由 Explorer 管理。插件不监听全局快捷键、不猜目标路径、不预下载缓存。
 - **本机→远端**：焦点、窗口激活和远端 Ctrl+V 发布格式与名称/大小描述；目录枚举及安全源句柄准备不读文件内容。远端 Explorer 粘贴时发出 FILECONTENTS 请求才读取并发送字节，远端自行选择目标目录。Ctrl+V 仍等待格式列表 ACK；仅准备描述显示“等待粘贴”，字节数为零。
