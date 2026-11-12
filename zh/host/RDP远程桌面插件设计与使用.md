@@ -76,6 +76,12 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 网关策略禁止当前请求的剪贴板或设备重定向时，在创建目标通道之前失败；请关闭相应重定向，或由管理员调整策略。不实现旧 RPC-over-HTTP、成对 HTTP IN/OUT 传输、网关 UDP、MFA/扩展认证、consent、NAP 与重新认证，要求这些能力的网关不受支持。测试覆盖协议报文、策略拒绝、取消及真实环回 TLS/WebSocket 传输；真实 AD HTTP 认证与生产 RD Gateway 互通尚未验证。
 
+### RD 连接代理(服务器重定向)
+
+连接 RD 连接代理(Connection Broker)或会话主机场时,服务器会在许可协商阶段发来 Server Redirection PDU,指定要连接的会话主机和路由令牌(MS-RDPBCGR 3.1.5.2.1)。客户端会自动跟随:目标依次取 TargetFqdn、TargetNetAddress、TargetNetAddresses 中的第一个,端口沿用原端口;带 NoRedirect 标志或没有目标时,带着路由令牌重新连接原服务器。新连接在 X.224 请求中以路由令牌(LoadBalanceInfo)代替 `mstshash` cookie,并在客户端 Cluster 数据中填入代理指定的会话 ID,使用户回到代理分配的会话。最多跟随 3 次。
+
+重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话建立之后收到的重定向仍按断开处理并报出原因。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
+
 ### RemoteApp / RAIL
 
 在「RemoteApp」页的 `remoteAppProgram` 填写已发布程序别名，例如 `||notepad`。可选 `remoteAppArguments` 与 `remoteAppWorkingDirectory` 会发送给服务器，仍受其发布与参数策略约束。程序留空使用普通桌面；未填写程序但填写参数或工作目录会被拒绝。库调用方设置 `RdpClientOptions.RemoteApp`。
