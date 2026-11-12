@@ -473,7 +473,12 @@ loop: `vela-plugin dev init` → F5, see the [CLI Manual](../cli/cli.md).
    and third-party packages whose name starts with `Avalonia` cannot be used.
 3. **Development plugins load from a shadow copy** (`~/.velashell/dev-shadow/<id>/gen-N`), so
    the running host does not lock your `bin` and Reload on the manager page picks up a rebuild.
-   The production path does not use shadow copies.
+   **Installed in-process plugins also load from a shadow copy** (`~/.velashell/plugin-shadow/<id>/gen-N`):
+   when a plugin leaks a reference and its ALC cannot be collected (even just because an exception stack
+   trace was formatted and the runtime cached its `.pdb` reader), the copy stays locked instead of the
+   installation directory, so updating and uninstalling no longer require restarting the host. A copy
+   is deleted once its ALC is collected; uncollectable ones are swept on exit or at the next start.
+   Isolated and bundled plugins still load in place.
 
 ---
 

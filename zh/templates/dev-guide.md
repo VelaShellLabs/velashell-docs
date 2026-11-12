@@ -214,7 +214,9 @@ dotnet build
 Windows 上这一步过去做不到:ALC 用 `LoadFromAssemblyPath` 装载,插件活着就锁着入口 dll,
 于是内环退化成"关掉宿主 → 重编 → 再启动"。现在**开发期插件从影子副本装载**
 (`~/.velashell/dev-shadow/<id>/gen-N`,每次装载换一代目录,旧代能删则删),
-工程 `bin` 随时可以重编。生产路径不走影子拷贝,行为分文不动。
+工程 `bin` 随时可以重编。已安装的进程内插件也从影子副本装载(`~/.velashell/plugin-shadow/<id>/gen-N`),
+所以插件即便漏了引用,也不会把安装目录锁到宿主退出 —— 但漏引用仍然意味着内存要到重启才回得来,
+宿主日志里那行「load context is still alive」照样值得去查。
 
 想连按钮都省掉:`vela-plugin dev init --watch`(即 `--dev-watch`),宿主监视开发根,
 入口程序集的写入时间一变就自动重载(去抖 1.5 秒,等构建写完)。默认关 ——

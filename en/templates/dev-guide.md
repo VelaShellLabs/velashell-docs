@@ -198,8 +198,10 @@ On Windows this used to be impossible: the ALC loads through `LoadFromAssemblyPa
 the entry DLL open for as long as the plugin lives, which degraded the inner loop into
 "close the host → rebuild → start again". Development plugins now **load from a shadow copy**
 (`~/.velashell/dev-shadow/<id>/gen-N`, a new generation per load, old ones removed when
-possible), so the project's `bin` can be rebuilt at any time. The production path does not use
-shadow copies and behaves exactly as before.
+possible), so the project's `bin` can be rebuilt at any time. Installed in-process plugins also load
+from a shadow copy (`~/.velashell/plugin-shadow/<id>/gen-N`), so a plugin that leaks a reference no
+longer locks its installation directory until the host exits — but the leak still keeps its memory
+until restart, and the host log line "load context is still alive" is still worth chasing.
 
 To skip even the button: `vela-plugin dev init --watch` (i.e. `--dev-watch`) makes the host
 watch the development roots and reload whenever the entry assembly's timestamp changes
