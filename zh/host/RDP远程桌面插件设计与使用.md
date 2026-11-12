@@ -64,7 +64,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 **断网自动重连。** 网络层断开(`RdpConnectionLostException`:连接被重置、keep-alive 超时、服务器未给原因就关闭 TCP)后,标签像 mstsc 一样自行重连:最多 20 次,间隔 1、2、4、8、15 秒,之后每 30 秒一次,浮层显示“正在自动重新连接(第 n/20 次)”,手动“重新连接”按钮在等待期间同样可用。远端 Windows 会话在断开状态下保留,重连后桌面与程序保持原样;标签在后台时重连的新会话一开始就暂停显示更新。重连后一分钟内再次断开的会话沿用同一轮计数,链路持续失败时会放弃而不是无限循环。以下情况不自动重连:服务器带原因结束会话(注销、被接管、空闲时限、许可证等——Set Error Info 优先于其后的 TCP 关闭)、协议或通道错误、重连时服务器因凭据或证书拒绝。断开时正在进行的复制不会续传。所有断开(包括普通断网)都在插件日志里记录原因。
 
-本地文字与输入法提交以 Unicode 发送。可打印按键缺少 `KeySymbol` 时,即使尚未收到首个预编辑更新,也交给本地文字输入处理,避免输入法首字母或普通文字重复发送。标记为 `ImeProcessed` 或 `DeadCharProcessed` 的按键保留在本地,包括输入法候选选择快捷键。其他 Ctrl/Alt/Meta 快捷键及导航键继续成对发送物理扫描码;NumLock 关闭时的小键盘导航按逻辑导航键处理。
+本地文字与输入法提交以 Unicode 发送。可打印按键缺少 `KeySymbol` 时,即使尚未收到首个预编辑更新,也交给本地文字输入处理,避免输入法首字母或普通文字重复发送。标记为 `ImeProcessed` 或 `DeadCharProcessed` 的按键保留在本地,包括输入法候选选择快捷键。其他 Ctrl/Alt/Meta 快捷键及导航键继续成对发送物理扫描码;NumLock 关闭时的小键盘导航按逻辑导航键处理。**macOS 上 Command 键按 Ctrl 发送**:Cmd+C/V/Z/A 在远端就是复制/粘贴/撤销/全选,Cmd+V 也会先推送本机剪贴板;远端的 Windows 键可通过远程按键悬浮球发送。能输出可打印字符的修饰组合按文字发送,不按快捷键发送:macOS 的 Option(如德语 Mac 上 Option+L 输出 `@`)和 Windows 的 AltGr(系统报告为 Ctrl+Alt);Linux 的 AltGr 本就是独立修饰键,Ctrl+Alt 仍是快捷键。macOS 在按住 Command 时不投递其他键的抬起事件,所以松开 Command 时会一并释放仍按下的普通键,避免远端出现粘键。
 
 ### RD Gateway
 
@@ -178,6 +178,8 @@ FORMAT_DATA_RESPONSE 没有线上 request-id；本地附带的格式号不能作
 
 ### COM / LPT 端口（Windows）
 
+仅 Windows 支持。macOS / Linux 不显示此设置;从 Windows 同步过来的已保存选择会被忽略,不会导致连接失败。
+
 在「磁盘映射」页的「COM / LPT 端口」明确填写名称，例如 `COM3;LPT1`，默认留空。最多选择 32 个唯一名称，允许 `COM1`–`COM9999` 或 `LPT1`–`LPT9999`，拒绝路径、冒号、前导零别名。库调用方使用 `RdpClientOptions.Ports` 和 `PortMapping`。只有远程请求打开时才独占打开所选本地端口；其他程序占用时可能返回共享冲突。远程会话能读写和配置这些端口，服务器必须允许端口重定向；远程应用访问重定向的 COM/LPT 设备，而非文件共享。
 
 串口和并口均遵循 [MS-RDPESP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpesp/04ae8f6b-a2fe-4989-9314-09bff11fa086)，使用 `rdpdr` 及兼容性配套 `rdpsnd`。端口公告不含设备专属数据。内部可复用 `IRdpdrDevice` 契约将非磁盘设备分发与文件系统处理分开。读写要求零偏移，单次最多 256 KiB，同时最多 64 个非磁盘请求。串口控制通过精确长度和值校验的允许清单：波特率、队列、线路格式、超时、字符、流控、break、DTR/RTS、XON/XOFF、即时字符、purge、事件掩码及等待、modem/通信状态与属性。并口支持打开、读写、关闭、查询信息及 INIT。未知、厂商专属和其余控制明确失败，不伪造成功。原生串口结构按定义的线上布局传输，包括去除 SERIAL_STATUS 对齐填充。
@@ -186,6 +188,8 @@ Windows 使用重叠 I/O，在关闭或断开时调用 `CancelIoEx`。读、写�
 
 ### Legacy 打印机（Windows）
 
+仅 Windows 支持。macOS / Linux 不显示此设置;从 Windows 同步过来的已保存选择会被忽略,不会导致连接失败。
+
 「磁盘映射」页为每个本地已安装打印队列提供独立勾选项，全部默认关闭。激活时及每分钟在后台只读查询队列元数据；队列变化后重新打开连接表单。最多选择 16 个队列。所选队列缺失时连接设置明确失败，不会改选其他打印机。排除 FILE:/PORTPROMPT: 输出端口及嵌套 TS 重定向队列。库调用方可在 UI 线程外调用 `WindowsPrinterCatalog.GetPrinters()`，把明示选择的 `PrinterMapping` 传入 `RdpClientOptions.Printers`。
 
 实现 [MS-RDPEPC legacy 打印重定向](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpepc/993fd26f-b31b-4524-90ec-3efb59445f2a)。远端服务器必须允许打印机重定向，并安装匹配驱动。**不支持 Easy Print、XPS、驱动安装或驱动配置缓存。** 公告使用 PRINT=4、PRN数字 DOS 名及 UTF-16 零终止字符串，仅声明真实的默认/网络属性。远端 CREATE 打开明示选择的已安装队列并创建固定文档名的 RAW 任务；WRITE 补齐 spooler 短写；CLOSE 完成并释放任务。不向 Winspool 透传远端路径、文档名、驱动安装或任意 IOCTL。
@@ -193,6 +197,8 @@ Windows 使用重叠 I/O，在关闭或断开时调用 `CancelIoEx`。读、写�
 每队列最多 4 个任务、单次写入 1 MiB、单任务 64 MiB；请求按到达顺序处理，畸形写入、异常及断线会中止未完成任务。Winspool 可能阻塞在驱动内部：reset/断线立即使旧请求失效并后台清理，但无法强制打断卡住的原生调用，须待其返回才能释放任务。测试使用假任务验证协议字节、限制、顺序及清理；本机仅实际执行过只读队列枚举，没有提交真实打印任务，也未验证真实服务器到打印机的端到端互通。
 
 ### 便携设备 / WPD（Windows）
+
+仅 Windows 支持。macOS / Linux 不显示此设置;从 Windows 同步过来的已保存选择会被忽略,不会导致连接失败。
 
 「磁盘映射」页逐项列出 Windows Portable Device 接口，默认均不勾选。选择后允许远程会话通过 WPD 读取和修改该设备。此能力**不是通用 USB 重定向**：不接收任意 USB 设备、原生控制码或服务器指定的文件系统路径。激活时及每五秒在后台通过 SetupAPI 只枚举元数据，不打开设备。库调用方把 `RdpWpdDevices.Enumerate()` 返回的元数据 ID 填入 `RdpClientOptions.WpdDevices`，默认空集合。即使桌面分辨率固定，选择 WPD 仍会启用所需动态通道。连接时所选设备缺失会明确报错，不会替换成其他设备。
 
@@ -279,6 +285,8 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 NLA/CredSSP 除离线 ASN.1 单测外,对强制 NLA 的测试服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
 
 ### 摄像头（Windows）
+
+仅 Windows 支持。macOS / Linux 不显示此设置;从 Windows 同步过来的已保存选择会被忽略,不会导致连接失败。
 
 「磁盘映射」页提供摄像头单选项，默认「关闭」。激活时及每分钟在后台通过 Media Foundation 只枚举元数据；设备变化后重新打开表单。已保存选择只匹配该设备，缺失时不会回退到默认摄像头。库调用方可使用 `RdpCameraDevices.Enumerate()` 并设置 `RdpClientOptions.Camera`，null 表示关闭。固定桌面分辨率不影响摄像头通道。
 
