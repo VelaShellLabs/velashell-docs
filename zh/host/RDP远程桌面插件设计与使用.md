@@ -80,7 +80,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 连接 RD 连接代理(Connection Broker)或会话主机场时,服务器会在许可协商阶段发来 Server Redirection PDU,指定要连接的会话主机和路由令牌(MS-RDPBCGR 3.1.5.2.1)。客户端会自动跟随:目标依次取 TargetFqdn、TargetNetAddress、TargetNetAddresses 中的第一个,端口沿用原端口;带 NoRedirect 标志或没有目标时,带着路由令牌重新连接原服务器。新连接在 X.224 请求中以路由令牌(LoadBalanceInfo)代替 `mstshash` cookie,并在客户端 Cluster 数据中填入代理指定的会话 ID,使用户回到代理分配的会话。最多跟随 3 次。
 
-重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。与 mstsc 一致,不限制代理可以指向的目标主机(例如不要求与原主机同属一个 DNS 后缀):信任来自代理本身和目标证书的完整校验。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话建立之后收到的重定向仍按断开处理并报出原因。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
+重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。与 mstsc 一致,不限制代理可以指向的目标主机(例如不要求与原主机同属一个 DNS 后缀):信任来自代理本身和目标证书的完整校验。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话进行中收到的重定向(例如代理把会话迁到另一台会话主机)也像 mstsc 一样立即跟随:断开当前连接,按上述同样的规则连接新目标,不等待自动重连的间隔,原会话的自动重连 cookie 不再使用;新目标暂时连不上时,后续自动重连回到配置的服务器,由代理重新分配。短时间内连续收到重定向时最多跟随 3 次,之后按断开处理。库调用方可把 `Disconnected` 报出的 `RdpServerRedirectionException` 交给 `RdpManagedSession.ConnectRedirectedAsync` 跟随。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
 
 ### RemoteApp / RAIL
 
@@ -94,7 +94,7 @@ RemoteApp 即使在 `graphicsMode=auto` 下也选择经典位图/GDI；不支持
 
 在「磁盘映射」页开启 `smartCard` 并重连，显式允许远端会话使用本机 PC/SC 可访问的全部读卡器与卡片，默认关闭。客户端在 `rdpdr` 上注册 MS-RDPESC 智能卡设备（同时注册伴随 `rdpsnd`），并在用户登录前公告。库调用方设置 `RdpClientOptions.SmartCardRedirection`。
 
-Windows 需要 Smart Card 服务和读卡器驱动（`winscard.dll`）；Linux 需要 `libpcsclite.so.1`、运行中的 pcsc-lite 服务与读卡器驱动；macOS 使用系统 PCSC 框架与兼容驱动。缺少系统库或服务不可用时，已选择智能卡的连接会明确失败。不随插件分发读卡器驱动或原生库。
+Windows 需要 Smart Card 服务和读卡器驱动（`winscard.dll`）；Linux 需要 `libpcsclite.so.1`、运行中的 pcsc-lite 服务与读卡器驱动；macOS 使用系统 PCSC 框架与兼容驱动。缺少系统库或服务不可用时，与 mstsc 一致，本次连接不注册智能卡设备、照常连接，插件日志记录原因（库调用方可读 `RdpManagedSession.SmartCardUnavailable`）。不随插件分发读卡器驱动或原生库。
 
 核心操作包括上下文管理、读卡器/组枚举、状态变化等待与取消、连接/重连/断开、事务、状态、APDU 传输、控制和属性读取，支持 A/W 报文及会话内虚拟句柄。不支持的管理、缓存和 SetAttrib 操作返回不支持。断开会取消等待并释放上下文与卡片，不记录 PIN 或 APDU 内容。请仅对可信远端开启：此选项授予卡片操作访问权限，仍受卡片自身认证规则约束。这不增加智能卡 NLA/CredSSP 登录能力。离线协议与后端测试不能证明实体卡或 Windows RDS 互通，仍需部署验收。
 
@@ -232,7 +232,9 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 **连接失败的诊断。** 错误指明失败的阶段(TCP、安全协商、TLS、NLA、MCS、登录、许可、能力交换)和原因链,含 SChannel / 套接字错误码;TLS 握手之后的失败还附上协商出的 TLS 版本。服务器在 NLA 中拒绝登录时,按它返回的状态码给出具体原因(用户名或密码错误、密码过期、账号锁定或停用、不允许远程登录)。**连接成功后又被服务器断开**时(服务器发来 Set Error Info PDU,MS-RDPBCGR 2.2.5.1.1),按它的 errorInfo 码给出原因并显示在断开浮层与状态栏:用户被注销、会话被另一连接接管、服务器拒绝或权限不足、空闲/登录超时、没有可用的远程桌面授权(RDS 授权或宽限期过期)等;其余码回退到中性描述加十六进制码。断开日志还记录**此前是否收到过登录通知**(服务器的 Save Session Info PDU):收到说明凭据已被接受、Windows 会话已启动,随后的断开是服务器结束了一个已建立的会话(多为策略),而非认证或协议失败;未收到则说明尚未走到登录。插件日志(`velashell.rdp`)记录每次失败的完整异常;TLS 握手之后的失败再附上加密套件和服务器发来的 TLS 记录头(只记类型与长度,例如 `Alert 26 B`,从不保存载荷),用来区分「服务器中止」与本地解密问题。
 
-宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,并以「证书已变更」的提示重新请求明确批准(Windows 会自动续期自签名 RDP 证书,用户需要能分辨这与首次信任不同);只有证书本身被拒绝时才会弹出信任提示,握手通过后的超时或断线按普通连接错误报告。NLA 公钥绑定直接取证书 SubjectPublicKeyInfo 中的 subjectPublicKey 字节,RSA 与 ECDSA 证书都支持。本地 NLA 令牌失败在两个平台上分类一致:凭据类原因(密码错误、凭据未知、密码过期等)报告为认证失败并附状态码,其余(找不到 SPN、KDC 不可达、缺少 GSSAPI 等)报告为需要检查配置的协议错误。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 Windows SSPI 或 Unix 的 .NET Negotiate 完成 Kerberos/NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
+宿主批准的 pin 是叶证书 DER 字节的精确 SHA-256(64 位十六进制)。**pin 替代 CA/名称/有效期验证**,只做叶证书身份的定时比较,不是在上述检查之上附加一道条件。叶证书变化会拒绝连接,并以「证书已变更」的提示重新请求明确批准(Windows 会自动续期自签名 RDP 证书,用户需要能分辨这与首次信任不同);只有证书本身被拒绝时才会弹出信任提示,握手通过后的超时或断线按普通连接错误报告。
+
+**吊销检查,三平台一致,按 mstsc 处理。** 未 pin 时完整校验证书链并联机检查吊销。链中任一证书**已被吊销**时直接拒绝连接,不提供信任选项;**唯一的问题是无法确定吊销状态**(CRL 或 OCSP 响应方不可达,例如只发布了 LDAP 分发点)时,弹出信任提示并明确说明是吊销状态无法检查;还有其他问题(不受信任的根、名称不符等)时按普通证书确认处理。NLA 公钥绑定直接取证书 SubjectPublicKeyInfo 中的 subjectPublicKey 字节,RSA 与 ECDSA 证书都支持。本地 NLA 令牌失败在两个平台上分类一致:凭据类原因(密码错误、凭据未知、密码过期等)报告为认证失败并附状态码,其余(找不到 SPN、KDC 不可达、缺少 GSSAPI 等)报告为需要检查配置的协议错误。SSH 转发不会把预期服务器名称改成回环地址。密码通过 API 传递,不进入命令行参数。NLA/CredSSP 用 Windows SSPI 或 Unix 的 .NET Negotiate 完成 Kerberos/NTLM 与消息密封,TSRequest 公钥绑定按 MS-CSSP 实现。
 
 ## 许可协商
 
