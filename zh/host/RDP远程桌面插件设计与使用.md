@@ -80,7 +80,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 连接 RD 连接代理(Connection Broker)或会话主机场时,服务器会在许可协商阶段发来 Server Redirection PDU,指定要连接的会话主机和路由令牌(MS-RDPBCGR 3.1.5.2.1)。客户端会自动跟随:目标依次取 TargetFqdn、TargetNetAddress、TargetNetAddresses 中的第一个,端口沿用原端口;带 NoRedirect 标志或没有目标时,带着路由令牌重新连接原服务器。新连接在 X.224 请求中以路由令牌(LoadBalanceInfo)代替 `mstshash` cookie,并在客户端 Cluster 数据中填入代理指定的会话 ID,使用户回到代理分配的会话。最多跟随 3 次。
 
-重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话建立之后收到的重定向仍按断开处理并报出原因。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
+重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。与 mstsc 一致,不限制代理可以指向的目标主机(例如不要求与原主机同属一个 DNS 后缀):信任来自代理本身和目标证书的完整校验。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话建立之后收到的重定向仍按断开处理并报出原因。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
 
 ### RemoteApp / RAIL
 
@@ -102,13 +102,13 @@ Windows 与 Debian x64 原生烟测已加载生产 PC/SC 后端，并确认预�
 
 ### UDP 多传输与网络适配
 
-「体验」页新增 `transport`（默认 `auto`，可选 `tcp`）和 `adaptiveNetwork`（默认 `true`）。类库分别对应 `RdpClientOptions.Transport`、`AdaptiveNetwork`。自动模式在服务器支持扩展协商和 Soft-Sync 时建立 MS-RDPEUDP v1 可靠 UDP（UDP-R/TLS）与不可靠 UDP（UDP-L/DTLS 1.2）侧隧道，通过 MS-RDPEMT 承载服务器选择迁移的动态虚拟通道；不声明 UDP v2 或 UDP Preferred。主连接、经典位图/GDI、键鼠和静态通道仍走 TCP，开启 UDP 不代表整桌面流量已切换。
+「体验」页新增 `transport`（默认 `auto`，可选 `tcp`）和 `adaptiveNetwork`（默认 `true`）。类库分别对应 `RdpClientOptions.Transport`、`AdaptiveNetwork`。自动模式在服务器支持扩展协商和 Soft-Sync 时建立 MS-RDPEUDP v1 可靠 UDP（UDP-R/TLS）侧隧道，通过 MS-RDPEMT 承载服务器选择迁移的动态虚拟通道；不声明 UDP v2 或 UDP Preferred。主连接、经典位图/GDI、键鼠和静态通道仍走 TCP，开启 UDP 不代表整桌面流量已切换。
 
-UDP-R 使用 `SslStream`，UDP-L 使用纯托管依赖 `BouncyCastle.Cryptography` 2.7.0；UDP/DTLS 传输不增加原生库。两种隧道都必须匹配主 TLS 连接的 SHA-256 叶证书，创建 cookie 只在加密后发送。建链失败继续使用 TCP；成功确认后隧道故障会断开主连接，由现有重连逻辑恢复，避免跨传输重放设备操作。SSH 跳板自动强制 TCP，不绕过跳板直连目标 UDP；其他 TCP-only 代理调用方应设置 `TcpTunnel = true`。
+UDP-R 使用 `SslStream`，不增加原生库。隧道必须匹配主 TLS 连接的 SHA-256 叶证书，创建 cookie 只在加密后发送。建链失败继续使用 TCP；成功确认后隧道故障会断开主连接，由现有重连逻辑恢复，避免跨传输重放设备操作。SSH 跳板自动强制 TCP，不绕过跳板直连目标 UDP；其他 TCP-only 代理调用方应设置 `TcpTunnel = true`。
 
-**UDP-L 当前限制：** FEC 可恢复的丢包继续交付；进入应用阶段后，无法恢复的序号缺口会终止隧道并要求重连。DVC 分片没有消息标识，直接跳过缺口可能把下一消息拼入残缺消息。出站 UDP-L 动态通道消息限制为 600 字节，拒绝分片；大消息应使用 TCP/UDP-R。这不是任意残余丢包下的连续媒体播放保证。
+**不使用不可靠 UDP（UDP-L）：** 客户端只声明可靠 UDP（TRANSPORTTYPE_UDPFECR 与 Soft-Sync），服务器若仍请求 UDP-L 会被拒绝，相应流量留在 TCP。原因是动态通道要求完整交付：UDP-L 上 FEC 无法恢复的丢包只能终止隧道并断开会话，在有丢包的网络上反而比 TCP 更差。库中的 DTLS（`BouncyCastle.Cryptography`）实现保留，待动态通道能容忍丢包后再启用。
 
-`IRdpNetworkSource` 提供网络状态及变更事件，底栏显示 TCP/UDP-R/UDP-L、建链回退、服务器提供的 RTT、带宽和质量；未收到测量时保持未知。RTT ≥250ms 或带宽 <1000kbps 判为差，RTT ≥100ms 或带宽 <5000kbps 判为受限；恶化立即生效，改善需连续三个较好样本。弱网下鼠标移动按 25/50ms 合并，点击与键盘先按序送出待发移动，不被定时器拖延。自动网络检测允许服务器覆盖手工体验选项；关闭自适应后保留手工策略和不节流输入，仍可显示服务器测量。
+`IRdpNetworkSource` 提供网络状态及变更事件，底栏显示 TCP/UDP-R、建链回退、服务器提供的 RTT、带宽和质量；未收到测量时保持未知。RTT ≥250ms 或带宽 <1000kbps 判为差，RTT ≥100ms 或带宽 <5000kbps 判为受限；恶化立即生效，改善需连续三个较好样本。弱网下鼠标移动按 25/50ms 合并，点击与键盘先按序送出待发移动，不被定时器拖延。自动网络检测允许服务器覆盖手工体验选项；关闭自适应后保留手工策略和不节流输入，仍可显示服务器测量。
 
 离线验证包含乱序、重传、FEC、窗口、残余丢包保护、Soft-Sync 屏障、早期消息通道、真实环回 UDP 套接字上的 TLS/DTLS 双向通信（含 EMT 跨记录及同记录多消息）、证书不匹配拒绝及取消收尾。真实 Windows 服务端互通和 WAN 性能尚未验证。
 
@@ -151,7 +151,7 @@ UDP-R 使用 `SslStream`，UDP-L 使用纯托管依赖 `BouncyCastle.Cryptograph
 - 下载/上传全部放在现有**固定 24px 分辨率状态栏**内，每个方向在右侧占一组：方向 · 已传/总大小 · 当前文件名、3px 进度条、状态（传输中显示百分比，其余显示状态文字，按状态着色），以及与宿主传输面板相同的 10px “×”取消按钮（只在仍可取消的传输上出现）。无传输、单向或双向活动都不改变桌面可用高度；空间不足时先截断文件名、再截断状态文字，进度条和“×”不会被挤出；悬停提示给出精确字节数与完整状态。仅发布来源显示“可粘贴”；全部唯一区间交付后显示“文件内容已交付／已发送”，这是无需继续等待的终态，提示说明目标尚未报告复制结果，不代表目标磁盘持久化。远端上传协议没有最终复制确认；零内容来源在描述成功发送后即可进入“已发送”。本机 Shell 的成功 EndOperation（复制/移动效果）或非零 Paste Succeeded 才显示“复制完成（Shell 已确认）”；普通 DropEffect/TargetCLSID 不算完成确认。零字节、目录及 EOF 不要求额外内容块，未收到反馈仍可停留在“内容已交付”；失败/取消独立显示，新操作重置进度，迟到进度不会把终态改回“传输中”。状态结束不释放消费方持有的 IStream。
 - 新 Ctrl+C 或剪贴板换主只撤换后续粘贴的来源；已取得的流持有独立租约。协商 CAN_LOCK_CLIPDATA 后，通过 LOCK/UNLOCK 和 FILECONTENTS 的 clipDataId 保留远端源版本；对端锁定的本机源句柄也跨新复制保留。撤换的版本等流及数据对象消费完成/释放后解锁；当前仍发布的版本保留用于再次粘贴。显式取消、断开或释放视图会取消活动流。对端不支持锁时，不能保证跨远端源更换继续传输；源程序退出或提供者失效即使有锁也可能失败，关闭源文件夹的真实行为仍需现场验证。
 - 已发送的文件块请求单次响应等待 30 秒；只有响应超时才最多额外重试 2 次，分别可取消地退避 500/1000ms。重试保持同一源版本、文件索引、offset 与 length，每次使用新 streamId，迟到响应直接忽略；底栏显示“重试中”，只有成功交付的唯一区间计入进度。明确的 CB_RESPONSE_FAIL 没有瞬态分类，不重试；发送错误、显式取消、断开连接或无锁源版本变化也不重试。TCP 已提供可靠传输，服务器拒绝不是丢包证据；不承诺跨重连续传，不重传整文件、不重复写目标。
-- 仅未锁定的本机上传源句柄闲置 30 秒后释放，下次远端 Ctrl+V 重新准备。双向生产文件路径均不创建磁盘缓存、中转或临时文件，也不累积整文件内存；原生 IStream 用最多 256 KiB 块直接填入目标应用提供的缓冲区。进度是插件取得/提供的字节，不是目标落盘确认。目标文件未显示不能证明用了缓存，也不能断言 Explorer 会读完整个流后才创建文件；创建、刷新、半成品清理及目标应用自己的临时文件均由目标应用控制。旧版本 DataDirectory 下的 rdp-clipboard 缓存不会主动删除，以免破坏仍被引用的文件。
+- 仅未锁定的本机上传源句柄闲置 60 秒后释放，下次在本窗口按 Ctrl+V 时重新准备（在远端用右键菜单粘贴不会触发重新准备）；正在进行的传输 30 秒没有进展才判为超时。双向生产文件路径均不创建磁盘缓存、中转或临时文件，也不累积整文件内存；原生 IStream 用最多 256 KiB 块直接填入目标应用提供的缓冲区。进度是插件取得/提供的字节，不是目标落盘确认。目标文件未显示不能证明用了缓存，也不能断言 Explorer 会读完整个流后才创建文件；创建、刷新、半成品清理及目标应用自己的临时文件均由目标应用控制。旧版本 DataDirectory 下的 rdp-clipboard 缓存不会主动删除，以免破坏仍被引用的文件。
 - **Linux/macOS**：当前 Avalonia 集成没有可用的远端虚拟文件 provider，状态栏明确显示“远端文件粘贴仅支持 Windows”；不自动下载、不改成手动接收。文本、图像以及本机→远端按需文件传输不受影响。
 
 Avalonia 12.1.4 的 `DataTransferItem.Set(format, Func<T>)` 支持延迟取值，但公开文件类型是 `IStorageItem`；应用自定义格式标识会转换，无法表达 Windows 原生 `FileContents` 的 `FORMATETC.lindex` 与 `TYMED_ISTREAM`。因此 Windows 使用独立 `WindowsVirtualFileClipboard`：OLE `IDataObject` 提供 `FileGroupDescriptorW`、带索引的内容流及复制效果。专用 STA 线程泵消息，流读取不阻塞 Avalonia UI 或 RDP 接收泵；关闭时不调用会强制物化内容的 OleFlushClipboard。所有权通过 OLE 身份和剪贴板所有者窗口检查；序列号用于避免发布时覆盖新的本地复制，不能把延迟渲染导致的序列号变化误判为换主。
