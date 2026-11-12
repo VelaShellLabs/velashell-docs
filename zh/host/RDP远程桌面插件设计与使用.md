@@ -76,6 +76,12 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 网关策略禁止当前请求的剪贴板或设备重定向时，在创建目标通道之前失败；请关闭相应重定向，或由管理员调整策略。不实现旧 RPC-over-HTTP、成对 HTTP IN/OUT 传输、网关 UDP、MFA/扩展认证、consent、NAP 与重新认证，要求这些能力的网关不受支持。测试覆盖协议报文、策略拒绝、取消及真实环回 TLS/WebSocket 传输；真实 AD HTTP 认证与生产 RD Gateway 互通尚未验证。
 
+### RD 连接代理(服务器重定向)
+
+连接 RD 连接代理(Connection Broker)或会话主机场时,服务器会在许可协商阶段发来 Server Redirection PDU,指定要连接的会话主机和路由令牌(MS-RDPBCGR 3.1.5.2.1)。客户端会自动跟随:目标依次取 TargetFqdn、TargetNetAddress、TargetNetAddresses 中的第一个,端口沿用原端口;带 NoRedirect 标志或没有目标时,带着路由令牌重新连接原服务器。新连接在 X.224 请求中以路由令牌(LoadBalanceInfo)代替 `mstshash` cookie,并在客户端 Cluster 数据中填入代理指定的会话 ID,使用户回到代理分配的会话。最多跟随 3 次。
+
+重定向 PDU 来自已校验的 TLS 通道;新目标的证书仍完整校验,凭据始终是用户自己输入的。证书 pin 只属于一台主机:目标主机不同时不沿用原主机的 pin,改用系统信任链加主机名校验,自签名的会话主机会触发证书确认。经 SSH 隧道连接时只能回到同一台服务器,指向其他主机的重定向会以明确的错误结束;经 RD Gateway 时网关会按新主机名连接。会话建立之后收到的重定向仍按断开处理并报出原因。库调用方可从 `RdpManagedSession.RedirectedTo` 得知实际连接的主机。
+
 ### RemoteApp / RAIL
 
 在「RemoteApp」页的 `remoteAppProgram` 填写已发布程序别名，例如 `||notepad`。可选 `remoteAppArguments` 与 `remoteAppWorkingDirectory` 会发送给服务器，仍受其发布与参数策略约束。程序留空使用普通桌面；未填写程序但填写参数或工作目录会被拒绝。库调用方设置 `RdpClientOptions.RemoteApp`。
@@ -240,7 +246,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 - **画面**:位图矩形先按目标矩形与画面裁剪再解码,单边 ≤8192,每个更新的像素总量 ≤4 个桌面面积;解码在锁外完成;短的 RLE 流剩余部分涂黑,不会把别处内存残留画到屏幕上。服务器可强加的桌面面积 ≤8K UHD。绘图指令每个更新的绘制量 ≤16 个桌面面积,位图缓存总量 ≤256 MiB,单个缓存位图边长 ≤4096;未声明的指令类型结束会话(指令流无法跳过未知指令)。
 - **通道与消息**:静态虚拟通道重组以第一块声明的总长为准(≤32 MB),实际缓冲不得超过它;rdpdr 队列另有 64 MB 字节上限;动态通道只为已打开的显示控制通道缓冲,消息 ≤64 KB;CredSSP 消息 ≤1 MB。
-- **磁盘映射**:单次读取 ≤1 MiB,同时打开的文件 ≤4096,写入起点最多超过文件末尾 256 MB,每个请求都有应答;路径逐段校验——拒绝 `.`/`..`、控制字符,Windows 上再拒绝备用数据流(`:`)、设备名(CON、NUL、COM¹ 等)与结尾的点/空格;映射根之下的符号链接/联接在打开、创建与重命名目标时一律拒绝(映射根本身可以是链接;OneDrive 占位文件不算链接);非 Windows 上前缀比较区分大小写。目录查询只在模式匹配时列出 `.`/`..`,首次查询没有匹配时返回 STATUS_NO_SUCH_FILE(而不是把不存在的文件报成目录);设置文件结尾或分配大小会真正截断或扩展文件,FileBasicInformation 会应用时间戳与只读/隐藏等属性(Linux 文件系统没有可设置的创建时间,此项跳过);重命名只在服务器设置 ReplaceIfExists 时覆盖已有文件,从不覆盖目录,允许仅改大小写,已打开的句柄随文件改名。只有请求了数据写入(GENERIC_WRITE/ALL、FILE_WRITE_DATA/APPEND_DATA)或要创建/截断时才以可写方式打开;只读文件按只读请求打开不会再被拒绝,MAXIMUM_ALLOWED 在不可写时降为只读。macOS / Linux 上只打开普通文件:FIFO、套接字和设备文件一律拒绝访问,避免一个 FIFO 卡住整个磁盘通道,也避免映射 `/` 时读写 `/dev`。设置删除时立即检查:非空目录返回 STATUS_DIRECTORY_NOT_EMPTY,只读文件返回 STATUS_CANNOT_DELETE,DeletePending 为 0 时撤销删除。卷信息按映射目录所在的卷报告容量(macOS / Linux 不再总是报告根分区),卷序列号由映射名称和路径得出、保持不变,最大文件名长度为 255。macOS 上以分解形式(NFD)存储的文件名按组合形式(NFC)发给服务器,远端显示和比较都与 Windows 一致;APFS/HFS+ 查找时不区分规范化形式,远端用这个名字仍能打开原文件。Linux 文件名是字节序列,按原样发送。
+- **磁盘映射**:单次读取 ≤1 MiB,同时打开的文件 ≤4096,写入起点最多超过文件末尾 256 MB,每个请求都有应答;路径逐段校验——拒绝 `.`/`..`、控制字符,Windows 上再拒绝备用数据流(`:`)、设备名(CON、NUL、COM¹ 等)与结尾的点/空格;映射根之下的符号链接/联接在打开、创建与重命名目标时一律拒绝(映射根本身可以是链接;OneDrive 占位文件不算链接);非 Windows 上前缀比较区分大小写。目录查询只在模式匹配时列出 `.`/`..`,首次查询没有匹配时返回 STATUS_NO_SUCH_FILE(而不是把不存在的文件报成目录);设置文件结尾或分配大小会真正截断或扩展文件,FileBasicInformation 会应用时间戳与只读/隐藏等属性(Linux 文件系统没有可设置的创建时间,此项跳过);重命名只在服务器设置 ReplaceIfExists 时覆盖已有文件,从不覆盖目录,允许仅改大小写,已打开的句柄随文件改名。只有请求了数据写入(GENERIC_WRITE/ALL、FILE_WRITE_DATA/APPEND_DATA)或要创建/截断时才以可写方式打开;只读文件按只读请求打开不会再被拒绝,MAXIMUM_ALLOWED 在不可写时降为只读。macOS / Linux 上只打开普通文件:FIFO、套接字和设备文件一律拒绝访问,避免一个 FIFO 卡住整个磁盘通道,也避免映射 `/` 时读写 `/dev`。设置删除时立即检查:非空目录返回 STATUS_DIRECTORY_NOT_EMPTY,只读文件返回 STATUS_CANNOT_DELETE,DeletePending 为 0 时撤销删除。卷信息按映射目录所在的卷报告容量(macOS / Linux 不再总是报告根分区),卷序列号由映射名称和路径得出、保持不变,最大文件名长度为 255。macOS 上以分解形式(NFD)存储的文件名按组合形式(NFC)发给服务器,远端显示和比较都与 Windows 一致;APFS/HFS+ 查找时不区分规范化形式,远端用这个名字仍能打开原文件。Linux 文件名是字节序列,按原样发送。文件名按 Windows 的规则不区分大小写:目录查询在三个平台都不区分大小写地匹配;在区分大小写的文件系统(Linux、区分大小写的 APFS)上,路径中精确名称不存在的部分会不区分大小写地查找,恰好一个匹配时使用它(例如 `README.TXT` 打开 `readme.txt`,在 `\docs\` 下新建的文件进入已有的 `Docs`),精确名称始终优先,同时存在只差大小写的多个条目时不猜测;重命名只这样解析目录,新文件名按原样,仅改大小写的重命名照常生效。
 - **剪贴板文件名**:拒绝 Unicode 格式字符(如 U+202E 可把 `.exe` 伪装成 `.txt`)、`CONIN$`/`CONOUT$`、`COM¹–³`/`LPT¹–³`;文件/目录冲突检查为线性复杂度。
 - X.224 明文 cookie 只放可打印 ASCII 且限长。
 
