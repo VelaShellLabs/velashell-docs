@@ -2,7 +2,7 @@
 
 English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md)。
 
-`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖 FreeRDP,不捆绑原生二进制,传输代码与托管 DTLS 依赖随包分发,全 RID 通用。
+`velashell.rdp` 位于 [velashell-plugins](https://github.com/VelaShellLabs/velashell-plugins/tree/main/plugins/VelaShell.Plugin.Rdp),是进程内工作台插件,在 Windows、Linux、macOS 的 Avalonia 标签页中显示远程桌面。引擎是**纯托管 C# 的 RDP 客户端**,不依赖原生 RDP 库,不捆绑原生二进制,传输代码与托管 DTLS 依赖随包分发,全 RID 通用。
 
 ## 架构与范围
 
@@ -20,7 +20,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 
 范围包括桌面分辨率跟随窗口(动态分辨率,按本机缩放发送 DPI,1:1 锐利绘制)、16/24/32 位颜色深度、远端鼠标形状、键鼠/Unicode、[远程按键悬浮球](#远程按键悬浮球)(Ctrl+Alt+Delete 等本机会截走的组合键与键入剪贴板)、断开后在桌面上就地重连、文本/图像/文件剪贴板、目录传输及仿 mstsc 的磁盘映射(勾选本机磁盘或填写自定义文件夹),以及可选的远程音频播放。另支持下文的 RD Gateway 传输、经典 RemoteApp/RAIL 与 PC/SC 智能卡重定向。不协商麦克风采集或多显示器。桌面图形默认自动协商 GFX;不支持 GFX 的服务器仍以经典位图更新(交错 RLE,32 位色时为 RDP 6.0 planar)和 GDI 绘图指令呈现,弱网时启用 MPPC 流压缩降低带宽。
 
-**绘图指令与位图缓存。** 客户端接受 DstBlt、PatBlt、OpaqueRect、MultiOpaqueRect、ScrBlt 与 MemBlt(移植自 FreeRDP 的 `Orders.cs`),并声明 600/600/2048 项的第 2 版位图缓存:服务器可以用一次屏幕内拷贝完成滚动、用缓存引用重绘重复的图块,而不必重发像素。xrdp 整个桌面都以缓存 MemBlt 绘制;较新的 Windows 服务器无论如何都只发位图。指令在帧缓冲上按画面与边界裁剪,屏幕内拷贝在重叠时安全,三元光栅运算(ROP3)按真值表求值。默认开启,库调用方可用 `RdpClientOptions.DrawingOrders = false` 关闭;重激活(调整分辨率)时保留缓存、重置指令状态。
+**绘图指令与位图缓存。** 客户端接受 DstBlt、PatBlt、OpaqueRect、MultiOpaqueRect、ScrBlt 与 MemBlt(`Orders.cs`),并声明 600/600/2048 项的第 2 版位图缓存:服务器可以用一次屏幕内拷贝完成滚动、用缓存引用重绘重复的图块,而不必重发像素。xrdp 整个桌面都以缓存 MemBlt 绘制;较新的 Windows 服务器无论如何都只发位图。指令在帧缓冲上按画面与边界裁剪,屏幕内拷贝在重叠时安全,三元光栅运算(ROP3)按真值表求值。默认开启,库调用方可用 `RdpClientOptions.DrawingOrders = false` 关闭;重激活(调整分辨率)时保留缓存、重置指令状态。
 
 ## 托管 GFX 与 H.264
 
@@ -141,7 +141,7 @@ UDP-R 使用 `SslStream`，UDP-L 使用纯托管依赖 `BouncyCastle.Cryptograph
 
 - **Windows 远端→本机**：远端 Ctrl+C 只读取文件/目录描述并发布 OLE 虚拟文件。用户在本机 Explorer 的目标目录按 Ctrl+V，Explorer 请求对应 IStream 时才通过 RDP FILECONTENTS 读取内容；目标目录与落盘完全由 Explorer 管理。插件不监听全局快捷键、不猜目标路径、不预下载缓存。
 - **本机→远端**：焦点、窗口激活和远端 Ctrl+V 发布格式与名称/大小描述；目录枚举及安全源句柄准备不读文件内容。远端 Explorer 粘贴时发出 FILECONTENTS 请求才读取并发送字节，远端自行选择目标目录。Ctrl+V 仍等待格式列表 ACK；仅准备描述显示“等待粘贴”，字节数为零。
-- 两个方向的文件描述都带 FD_SHOWPROGRESSUI（0x4000，MS-RDPECLIP 2.2.5.2.3.1，与 FreeRDP 一致），接收端的 Windows Shell 因此显示它自己的复制进度对话框；不带时大文件粘贴期间目标 Explorer 没有任何反馈，看起来像卡住。复制是否放到后台、目标 Explorer 窗口在复制期间能否继续操作由接收端 Shell 决定：远端取决于服务器 rdpclip 的数据对象；本机数据对象实现 IDataObjectAsyncCapability，允许 Explorer 在后台提取。插件状态栏的进度照常显示。
+- 两个方向的文件描述都带 FD_SHOWPROGRESSUI（0x4000，MS-RDPECLIP 2.2.5.2.3.1），接收端的 Windows Shell 因此显示它自己的复制进度对话框；不带时大文件粘贴期间目标 Explorer 没有任何反馈，看起来像卡住。复制是否放到后台、目标 Explorer 窗口在复制期间能否继续操作由接收端 Shell 决定：远端取决于服务器 rdpclip 的数据对象；本机数据对象实现 IDataObjectAsyncCapability，允许 Explorer 在后台提取。插件状态栏的进度照常显示。
 - 下载/上传全部放在现有**固定 24px 分辨率状态栏**内，每个方向在右侧占一组：方向 · 已传/总大小 · 当前文件名、3px 进度条、状态（传输中显示百分比，其余显示状态文字，按状态着色），以及与宿主传输面板相同的 10px “×”取消按钮（只在仍可取消的传输上出现）。无传输、单向或双向活动都不改变桌面可用高度；空间不足时先截断文件名、再截断状态文字，进度条和“×”不会被挤出；悬停提示给出精确字节数与完整状态。仅发布来源显示“可粘贴”；全部唯一区间交付后显示“文件内容已交付／已发送”，这是无需继续等待的终态，提示说明目标尚未报告复制结果，不代表目标磁盘持久化。远端上传协议没有最终复制确认；零内容来源在描述成功发送后即可进入“已发送”。本机 Shell 的成功 EndOperation（复制/移动效果）或非零 Paste Succeeded 才显示“复制完成（Shell 已确认）”；普通 DropEffect/TargetCLSID 不算完成确认。零字节、目录及 EOF 不要求额外内容块，未收到反馈仍可停留在“内容已交付”；失败/取消独立显示，新操作重置进度，迟到进度不会把终态改回“传输中”。状态结束不释放消费方持有的 IStream。
 - 新 Ctrl+C 或剪贴板换主只撤换后续粘贴的来源；已取得的流持有独立租约。协商 CAN_LOCK_CLIPDATA 后，通过 LOCK/UNLOCK 和 FILECONTENTS 的 clipDataId 保留远端源版本；对端锁定的本机源句柄也跨新复制保留。撤换的版本等流及数据对象消费完成/释放后解锁；当前仍发布的版本保留用于再次粘贴。显式取消、断开或释放视图会取消活动流。对端不支持锁时，不能保证跨远端源更换继续传输；源程序退出或提供者失效即使有锁也可能失败，关闭源文件夹的真实行为仍需现场验证。
 - 已发送的文件块请求单次响应等待 30 秒；只有响应超时才最多额外重试 2 次，分别可取消地退避 500/1000ms。重试保持同一源版本、文件索引、offset 与 length，每次使用新 streamId，迟到响应直接忽略；底栏显示“重试中”，只有成功交付的唯一区间计入进度。明确的 CB_RESPONSE_FAIL 没有瞬态分类，不重试；发送错误、显式取消、断开连接或无锁源版本变化也不重试。TCP 已提供可靠传输，服务器拒绝不是丢包证据；不承诺跨重连续传，不重传整文件、不重复写目标。
@@ -162,7 +162,7 @@ FORMAT_DATA_RESPONSE 没有线上 request-id；本地附带的格式号不能作
 
 ### 磁盘映射
 
-**树形资源选择（依赖 SDK 2.1.7 及配套宿主）：**「磁盘映射」页按驱动器、打印机、便携设备分为可折叠的复选树，分类默认折叠并显示已选/总数。点击分类可全选或全不选，部分选中时显示半选状态，再点击会全选；展开长列表时在树内滚动。没有设备的类别不显示。摄像头仍为单选下拉，COM/LPT 端口与自定义文件夹仍使用文本输入。只改变选择界面，原保存键值、默认关闭和各类映射数量限制不变；已有选择可回显，后来插入的设备不会自动勾选。该界面依赖的 `SelectionGroup` 契约已随 SDK 2.1.7 发布，2.1.6 不含此契约；宿主及插件包引用已升级至 2.1.7，但 RDP 清单的 `minSdkVersion` 仍为 2.1.5，发布插件前须同步至 2.1.7 并完成配套宿主联调。
+**树形资源选择（依赖 SDK 2.1.7 及配套宿主）：**「磁盘映射」页按驱动器、打印机、便携设备分为可折叠的复选树，分类默认折叠并显示已选/总数。点击分类可全选或全不选，部分选中时显示半选状态，再点击会全选；展开长列表时在树内滚动。没有设备的类别不显示。摄像头仍为单选下拉，COM/LPT 端口与自定义文件夹仍使用文本输入。只改变选择界面，原保存键值、默认关闭和各类映射数量限制不变；已有选择可回显，后来插入的设备不会自动勾选。该界面依赖的 `SelectionGroup` 契约已随 SDK 2.1.7 发布，2.1.6 不含此契约；宿主及插件包引用已升级至 2.1.7，RDP 清单的 `minSdkVersion` 已同步为 2.1.7；发布前仍须完成配套宿主联调。
 
 连接对话框的「磁盘映射」页仿照 mstsc「本地资源 → 驱动器」,每块本机磁盘一个复选框。Windows 列出全部盘符,按类型命名,如「本地磁盘 (C:)」「可移动磁盘 (E:)」「网络驱动器 (Z:)」「光盘驱动器 (F:)」;Linux / macOS 列出根目录(`/`)、主目录(`~`)以及 `/media`、`/run/media`、`/mnt`、`/Volumes` 下的挂载点。全部**默认不勾选**。
 
@@ -234,7 +234,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 - **画面**:位图矩形先按目标矩形与画面裁剪再解码,单边 ≤8192,每个更新的像素总量 ≤4 个桌面面积;解码在锁外完成;短的 RLE 流剩余部分涂黑,不会把别处内存残留画到屏幕上。服务器可强加的桌面面积 ≤8K UHD。绘图指令每个更新的绘制量 ≤16 个桌面面积,位图缓存总量 ≤256 MiB,单个缓存位图边长 ≤4096;未声明的指令类型结束会话(指令流无法跳过未知指令)。
 - **通道与消息**:静态虚拟通道重组以第一块声明的总长为准(≤32 MB),实际缓冲不得超过它;rdpdr 队列另有 64 MB 字节上限;动态通道只为已打开的显示控制通道缓冲,消息 ≤64 KB;CredSSP 消息 ≤1 MB。
-- **磁盘映射**:单次读取 ≤1 MiB,同时打开的文件 ≤4096,写入起点最多超过文件末尾 256 MB,每个请求都有应答;路径逐段校验——拒绝 `.`/`..`、控制字符,Windows 上再拒绝备用数据流(`:`)、设备名(CON、NUL、COM¹ 等)与结尾的点/空格;映射根之下的符号链接/联接在打开、创建与重命名目标时一律拒绝(映射根本身可以是链接;OneDrive 占位文件不算链接);非 Windows 上前缀比较区分大小写。
+- **磁盘映射**:单次读取 ≤1 MiB,同时打开的文件 ≤4096,写入起点最多超过文件末尾 256 MB,每个请求都有应答;路径逐段校验——拒绝 `.`/`..`、控制字符,Windows 上再拒绝备用数据流(`:`)、设备名(CON、NUL、COM¹ 等)与结尾的点/空格;映射根之下的符号链接/联接在打开、创建与重命名目标时一律拒绝(映射根本身可以是链接;OneDrive 占位文件不算链接);非 Windows 上前缀比较区分大小写。目录查询只在模式匹配时列出 `.`/`..`,首次查询没有匹配时返回 STATUS_NO_SUCH_FILE(而不是把不存在的文件报成目录);设置文件结尾或分配大小会真正截断或扩展文件,FileBasicInformation 会应用时间戳与只读/隐藏等属性(Linux 文件系统没有可设置的创建时间,此项跳过);重命名只在服务器设置 ReplaceIfExists 时覆盖已有文件,从不覆盖目录,允许仅改大小写,已打开的句柄随文件改名。
 - **剪贴板文件名**:拒绝 Unicode 格式字符(如 U+202E 可把 `.exe` 伪装成 `.txt`)、`CONIN$`/`CONOUT$`、`COM¹–³`/`LPT¹–³`;文件/目录冲突检查为线性复杂度。
 - X.224 明文 cookie 只放可打印 ASCII 且限长。
 
@@ -274,9 +274,9 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 - **远端指针**:实测收到并解码服务器的 32×32 I 形光标(热点 15,16)。
 - **绘图指令**:开启与关闭绘图指令各连一次 xrdp,桌面、以及滚动 2000 行之后的终端(xterm)逐像素一致;xrdp 每次发约 70 个指令更新、300–500 次缓存 MemBlt。xrdp 的 Xorg 后端不发 ScrBlt、填充与图案画刷,这几类只由单元测试覆盖(`OrderDecoderTests`:每种指令与缓存格式、边界、增量坐标、截断与 2000 次随机变异;`RdpDrawingOrderTests`:重叠拷贝、ROP3 真值表、画刷原点、裁剪、两条更新路径)。
 
-加固与画质相关行为另有离线测试:`RdpHardeningTests`(含真实目录联接,以及发送超大 TSRequest、CredSSP v3 的假服务器)、`RdpRenderingTests`(1:1 绘制、DPI、Suppress Output、颜色深度设置)、`RdpBackgroundSessionTests`(TCP keep-alive、断开原因区分、自动重连及后台重连暂停更新)、`PlanarTests`(FreeRDP 测试向量与模糊测试)、`RdpPointerAndInputTests`(指针掩码规则、缓存、批量键入)。
+加固与画质相关行为另有离线测试:`RdpHardeningTests`(含真实目录联接,以及发送超大 TSRequest、CredSSP v3 的假服务器)、`RdpRenderingTests`(1:1 绘制、DPI、Suppress Output、颜色深度设置)、`RdpBackgroundSessionTests`(TCP keep-alive、断开原因区分、自动重连及后台重连暂停更新)、`PlanarTests`(参考测试向量与模糊测试)、`RdpPointerAndInputTests`(指针掩码规则、缓存、批量键入)。
 
-NLA/CredSSP 除离线 ASN.1 单测外,对 FreeRDP shadow 服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
+NLA/CredSSP 除离线 ASN.1 单测外,对强制 NLA 的测试服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
 
 ### 摄像头（Windows）
 
