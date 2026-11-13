@@ -292,6 +292,22 @@ Hardening and picture-quality behaviour also has offline tests: `RdpHardeningTes
 
 Besides offline ASN.1 tests, NLA/CredSSP is verified live against an NLA-enforcing test server (`/sec:nla`, gated on `VELA_RDP_TEST_NLA_TARGET`): **both the native SSPI (SPNEGO) path and the managed NTLM fallback reach the desktop** (both are exercised on Windows); a wrong password reported as an authentication failure without fallback; TLS only refused by an NLA-only server with `HYBRID_REQUIRED_BY_SERVER`. The security-layer fallback and a first NLA reply that is a refusal (error code or TLS abort) are covered by in-process fake-server tests; every TLS 1.2 cipher suite a Windows server may pick (ECDHE/RSA × AES-GCM/AES-CBC) was exercised against xrdp. On real Windows servers, the behaviour of one that refuses incoming NTLM was confirmed (0x80090302 or a TLS abort on the first message); **a successful NLA logon against a real Windows server is still outstanding**. Interleaved-RLE / MPPC decode, MCS/GCC, capability exchange and the channel wire formats follow MS-RDPBCGR and the related published specs. These checks are not an all-platform or real-Windows-endpoint certification.
 
+### Manual macOS NLA CI
+
+The plugin repository's **RDP macOS NLA** workflow (`.github/workflows/rdp-macos-nla.yml`) connects to a real Windows server independently of releases. Ordinary CI excludes `RdpNlaInteropTests` and receives no live-server credentials. Configure these repository Actions secrets:
+
+| Secret | Value |
+| --- | --- |
+| `VELA_RDP_TEST_NLA_TARGET` | DNS name or IPv4 address plus port, e.g. `rdp.example.com:3389`; no URI prefix or IPv6 literal |
+| `VELA_RDP_TEST_USER` | Dedicated Windows local test account allowed to use Remote Desktop |
+| `VELA_RDP_TEST_PASS` | Its actual password, not a Windows Hello PIN |
+
+Require NLA on the server and allow TCP access from the GitHub-hosted runner. Once the workflow exists on the default branch, open **Actions → RDP macOS NLA → Run workflow**, select a trusted branch, and choose `macos-latest` (ARM64) or `macos-15-intel` (x64). The default `authentication=both` runs Negotiate and explicit NTLM sequentially in separate test processes; either can also be selected alone. Both use system `SslStream` TLS and must reach a desktop frame with NLA required. Failure of the first test does not skip the second.
+
+Keep `include_negative_tests=false` for normal diagnosis. Enabling it adds TLS-only refusal and an intentionally wrong password, which can contribute to account lockout. Runs share a concurrency group, connections have bounded timeouts, and the job is limited to 20 minutes. Missing secrets, skipped tests or missing results fail the run. The tests sign in to the remote desktop and may disconnect an existing session for the same account.
+
+The job summary lists each result. The seven-day `rdp-nla-*` artifact includes OS/architecture, SDK/runtime and commit details, per-test logs and TRX reports. Before saving test artifacts, the script redacts the configured target, host, username and password, including XML/URI-escaped forms; review other server-provided details before sharing. It does not collect credentials, packet captures or memory dumps as separate diagnostics. The test learns the leaf certificate pin on a preliminary connection, including self-signed certificates: this is test-only first-use trust, not independent server-identity verification. Adding the workflow enables macOS reproduction; it does not establish that the reported macOS NLA failure is fixed.
+
 ### Camera (Windows)
 
 Windows only. macOS / Linux do not show this setting; a selection saved on Windows (for example synced to another machine) is ignored there rather than failing the connection.
