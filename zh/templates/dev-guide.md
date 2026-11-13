@@ -317,6 +317,15 @@ Discovered ──激活(启动后后台批次)──▶ Active ──宿主退�
   要求公开无参构造。
 - 停用/失败后 ALC 被 `Unload()`:不要把自己的类型塞进宿主的静态字段/长命事件,
   否则程序集无法回收。
+- **进程内插件不要往 Avalonia 的全局属性系统里登记东西**:不用 `AvaloniaProperty.Register` /
+  `RegisterAttached` / `RegisterDirect`、不用 `AddOwner`、不用 `AffectsRender` / `AffectsMeasure` /
+  `AddClassHandler` 这类静态登记。Avalonia 与宿主共用,它的属性注册表是进程级的 —— 登记进去的属性
+  经属主类型拽着整个 ALC,停用后插件程序集永远回收不掉(Windows 上还连带锁着插件目录,更新要重启宿主)。
+  自绘控件需要的状态用普通 CLR 属性 + `InvalidateVisual()` / `InvalidateMeasure()`;颜色按宿主令牌在
+  `Render` 里 `TryFindResource` 解析,并订阅自身的 `ResourcesChanged` / `ActualThemeVariantChanged` 重绘。
+  宿主在卸载 ALC 前会调用 `AvaloniaPropertyRegistry.UnregisterByModule` 清掉框架**按类型缓存**的那部分
+  (例如插件控件被渲染过之后宿主属性的元数据缓存),但插件**自己登记**的属性它放不掉。
+  隔离插件不受此限(进程整个退出)。
 
 ## 5. 能力 API 参考(`IPluginContext`)
 
