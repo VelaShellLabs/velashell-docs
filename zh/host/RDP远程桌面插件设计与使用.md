@@ -9,7 +9,7 @@ English: [RDP plugin: design and use](../../en/host/rdp-plugin-design-and-use.md
 协议栈是独立的 C# 类库 `VelaShell.Rdp`(MIT 许可,随仓库发布):它 UI 无关、不依赖插件 SDK,实现本插件所需的 MS-RDPBCGR / MS-RDPELE / MS-RDPECLIP / MS-RDPEDISP / MS-RDPEFS / MS-RDPEA 子集。音频播放调用系统音频库,不捆绑原生二进制。插件引用该库,库 DLL 随插件签名 `.vpx` 一起分发,不单独出 NuGet 包。分层:
 
 - **Wire** —— TPKT/X.224 分帧、快速路径帧、ASN.1 PER/BER。
-- **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,Linux/macOS 用 `NegotiateAuthentication` 的 SPNEGO 协商系统 Kerberos 或托管 NTLM;TSRequest 公钥绑定按 MS-CSSP v5+。
+- **Security** —— TLS 用 `SslStream`(OS 信任链,或精确的 SHA-256 叶证书 pin);NLA/CredSSP 在 Windows 上用系统原生 SSPI 的 Negotiate 包,Linux/macOS 用 `NegotiateAuthentication`:能取得 Kerberos 票据时走 SPNEGO,否则用裸托管 NTLM;TSRequest 公钥绑定按 MS-CSSP v5+。
 - **MCS/GCC** —— Connect-Initial/Response、erect/attach/channel-join。
 - **PDU** —— 客户端信息、许可、能力协商、连接终结化。
 - **Graphics** —— 交错 RLE 与 RDP 6.0 planar(32 位色)解码、MPPC 批量解压、GDI 绘图指令与位图缓存、指针(鼠标形状)解码,以及记录变化区域的 BGRA 帧缓冲;分片的快速路径更新会重组。托管 MS-RDPEGFX 管线增加 ZGFX、表面/缓存、帧确认、ClearCodec、RemoteFX/Progressive 和 H.264 AVC420/AVC444/AVC444v2。
@@ -220,7 +220,7 @@ Windows 8+ 使用 [CM_Register_Notification](https://learn.microsoft.com/en-us/w
 
 **三平台同一套 TLS 策略。** Windows、macOS、Linux 都提供 TLS 1.2 与 1.3,使用各平台 TLS 后端的默认密码套件,不按操作系统限制协议版本或套件(实际能协商到的版本取决于平台后端,例如 macOS 的 Secure Transport 不支持 TLS 1.3)。部分服务器协商到 TLS 1.3 后会在 CredSSP 交换中中止 TLS(致命告警如 internal_error,或记录无法解密);TLS 1.3 下这种中止与服务器拒绝 NTLM 的表现相同。因此,在 TLS 1.3 下 NLA 阶段出现 TLS 层故障时(无论被判为连接失败,还是未带错误码的拒绝),客户端会**用新的 TCP 连接、只提供 TLS 1.2 重试一次**,再以这次的结果为准:成功、带错误码的认证结论,或继续走下文的拒绝/回退流程。重试会重新校验证书,凭据只会发给同一个已验证的服务器。只有重试成功(说明问题确实出在 TLS 1.3)时,本进程才记住该端点,之后直接用 TLS 1.2 连接;插件日志会记录一条警告。
 
-**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 `NegotiateAuthentication(Package = "Negotiate")` 的 SPNEGO 协商:优先尝试系统 GSSAPI Kerberos,不可用时由 .NET 协商托管 NTLM,无需额外安装 NTLM 提供程序。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
+**NLA 的认证实现。** NLA/CredSSP 的认证令牌与封包在 **Windows 上走系统原生 SSPI 的 Negotiate 包**,与 mstsc 一致:主机名为 DNS 名时以 `TERMSRV/<主机>` 为服务目标,域服务器可走 Kerberos;IP 地址保持空 target(Kerberos 对它无从谈起,显式凭据下 Negotiate 实际都落到 NTLM)。Linux/macOS 使用 `NegotiateAuthentication`:主机名为 DNS 名且能取得 `TERMSRV/<主机>` 的系统 GSSAPI Kerberos 票据时,用 `Package = "Negotiate"` 走 SPNEGO;否则(IP 地址总是如此)用 `Package = "NTLM"` 发**裸托管 NTLM**,与 Windows Negotiate 包对 IP 发出的令牌相同,无需额外安装 NTLM 提供程序。**NTLM 不放进 .NET 的 SPNEGO**:MS-SPNG 3.2.5.1 要求客户端在 mechListMIC 之后的第一条封包消息沿用生成 MIC 之前的 RC4 状态,.NET 却要等校验完服务器的 mechListMIC 才恢复;CredSSP 里服务器的 MIC 与公钥回显同包到达,此时 pubKeyAuth 已用被 MIC 推进过的 RC4 状态封好,Windows 解不开,直接以 TLS internal_error 告警断开而不返回 errorCode(macOS/Linux 上「NLA 阶段 decryption failed / internal error」即此)。公钥绑定按 MS-CSSP 的 v5+ SHA-256 nonce 绑定实现;**服务器的 CredSSP 版本低于 5(CVE-2018-0886 修复之前)一律拒绝**,也不会因此回退到 TLS——mstsc 默认的「已缓解」策略同样拒绝。TLS 只用 1.2/1.3 并拒绝重协商;Client Info 与 TSCredentials 里的明文密码发送后即清零,选项记录的 `ToString` 不输出密码。
 
 **Unix 提供程序初始化。** 引擎在创建认证上下文前启用 `System.Net.Security.UseManagedNtlm`。在当前 .NET 中,该开关让 `Negotiate` 使用托管 SPNEGO 和 NTLM,同时保留系统 GSSAPI Kerberos,并不强制使用 NTLM。主程序及隔离插件宿主的 `runtimeconfig.json` 也从进程启动时启用它,避免其他插件先调用认证 API 后缓存旧值。该开关影响同进程的其他 `NegotiateAuthentication` 客户端;Windows SSPI 路径不变。独立嵌入引擎的应用也应在启动配置中设置它。部署时更新宿主与插件并完整重启;普通 NTLM 环境无需安装 `gss-ntlmssp`。
 
@@ -267,7 +267,7 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 
 ## 验证情况与剩余边界
 
-`ManagedNtlmTests` 在没有安装 `gss-ntlmssp` 的环境中验证裸 NTLM 和 Unix 默认 SPNEGO、NTLMv2 凭据证明、机制列表 MIC、额外协商轮次及连续封包/解包。`CredSspNegotiationTests` 覆盖 Kerberos 首包被拒或断连不降级,以及立即完成的上下文只发送一次令牌并使用 v5+ 绑定。`KerberosNlaTests` 配合 `scripts/Test-RdpKerberos.sh` 启动隔离的 MIT KDC,分别使用 UPN 和用户名加 realm,明确断言实际机制为 Kerberos,经 TLS 验证 CredSSP 公钥绑定及最终凭据加密。脚本只使用临时数据库、配置、票据缓存和服务 keytab,结束时清理。
+`ManagedNtlmTests` 在没有安装 `gss-ntlmssp` 的环境中验证 Unix 对 IP 发裸 NTLM 且 pubKeyAuth 从序号 0、未消耗的 RC4 状态封包,NTLMv2 凭据证明、额外协商轮次及连续封包/解包,并锁定 .NET SPNEGO/NTLM 在 mechListMIC 后的 RC4 行为(该行为若随运行时变化,测试会提醒重新评估)。`CredSspNegotiationTests` 覆盖 Kerberos 首包被拒或断连不降级,以及立即完成的上下文只发送一次令牌并使用 v5+ 绑定。`KerberosNlaTests` 配合 `scripts/Test-RdpKerberos.sh` 启动隔离的 MIT KDC,分别使用 UPN 和用户名加 realm,明确断言实际机制为 Kerberos,经 TLS 验证 CredSSP 公钥绑定及最终凭据加密。脚本只使用临时数据库、配置、票据缓存和服务 keytab,结束时清理。
 
 本次在 Windows 与 WSL Debian/.NET 11 RC3 运行了认证回归,并在 Linux 通过两项真实 KDC 的 CredSSP 交换测试。现有测试工程另有四个与认证无关的文件无法编译(`GfxRemoteFxTests`、`DynamicChannelTests`、`RdpGfxTests`、`WpdHotplugTests`);本地验证临时排除它们,未修改这些文件。CI 的 Ubuntu/macOS 认证选择器已扩充,Ubuntu 增加隔离 KDC 步骤;本次尚未执行更新后的远程 CI、macOS Kerberos 或真实禁用 NTLM 的 Windows AD 桌面登录。
 
