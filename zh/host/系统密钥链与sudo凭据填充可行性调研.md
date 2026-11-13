@@ -37,8 +37,11 @@
   放开后与原先 0600 的文件同级（本用户的进程都读得到），挡住的是「拿走数据目录」。有了稳定的 Developer ID 签名后可改回只认 VelaShell。
 - **Linux**：libsecret 的 `secret_password_lookupv_sync` / `secret_password_storev_sync`（无变参版本），schema `com.velashell.MasterKey`、属性 `key-id`，存在默认集合。
   没装 libsecret、没有会话总线、keyring 锁着且取消了解锁 → 回落到文件，记日志并在消息中心提示 —— §8 第 3 条「静默回退」按此定：**不静默**，一次性提示。
-  「取消了解锁」这一支未在真机上确认：libsecret 文档没规定锁着的集合 / 取消解锁时 lookup 返回什么；若返回 NULL 且不带 GError，
-  当前实现记成「找不到」—— 提示文案不准、多弹一次解锁框，不丢数据（2026-10-31 复审记下，待 GNOME 上手测）。
+  libsecret 的 lookup 在「条目不在」与「集合锁着、解锁框被取消或没弹出来」两种情况下都交回 NULL 且不带 GError：NULL 之后改用 `secret_service_search_sync`
+  带 `SECRET_SEARCH_ALL`（不解锁、不弹框）再搜一遍，条目在而锁着就按「用不了」处理 —— 不另起新密钥顶替、不再连弹解锁框，解锁后重启照常取回（#750）。
+  默认别名指向 gnome-keyring 的 **session 集合**（只在内存里、重启即清空）时，写进去、读回核对都没问题，重启后密钥却没了：
+  写之前先用 `secret_collection_for_alias_sync("default")` 看对象路径，以 `/collection/session` 结尾就当成用不了，回落到文件（#750）。
+  两处都只经编译与布局自检，待 GNOME 真机上核对。
 - **条目编号与清单**：数据目录里多一个 `secret.key.ref`，只列条目编号、不含密钥；编号 = 域分隔 SHA-256(密钥) 的前 128 位，迁移被打断几次都写到同一条目，读回的密钥能对着编号自证。
 - **迁移与回滚**：§3.1「迁移后保留文件副本一个版本周期」**不采用**（留着明文副本等于没迁）。迁移是「写入密钥链 → 读回核对 → 清单原子落盘 → 删文件」，
   删时先改名 `.deleting` 再清零删除；任何一步失败都停在「照旧能用」、下次启动再试。回滚安全改由**多把密钥并存**保证：解密依次试每一把（GCM 认证标签说明是不是这把），
