@@ -292,22 +292,6 @@ Windows 虚拟文件剪贴板通过 `WindowsVirtualFileClipboard` 调用系统 O
 
 NLA/CredSSP 除离线 ASN.1 单测外,对强制 NLA 的测试服务器(`/sec:nla`,门控于 `VELA_RDP_TEST_NLA_TARGET`)做了活连接验证:**原生 SSPI(SPNEGO)路径与托管 NTLM 兜底路径都能登录到桌面**(Windows 上两者都测);错误密码报认证失败且不回退;「仅 TLS」被要求 NLA 的服务器以 `HYBRID_REQUIRED_BY_SERVER` 拒绝。安全层回退与「首条 NLA 回复即被拒」(错误码、TLS 中止两种形态)由进程内假服务器测试覆盖;TLS 1.2 下 Windows 服务器可能选用的各加密套件(ECDHE/RSA × AES-GCM/AES-CBC)已逐一对 xrdp 实测。真实 Windows 服务器方面,核实过一台拒绝传入 NTLM 的服务器的行为(首条消息即回 0x80090302 或中止 TLS),**真实 Windows 服务器的 NLA 登录成功路径仍未在活连接上验收**。交错 RLE / MPPC 解码、MCS/GCC、能力协商与各通道线格式按 MS-RDPBCGR 及相关公开规范实现。这些验证不构成全平台或真实 Windows 端的最终认证。
 
-### 手动 macOS NLA CI
-
-插件仓库新增 **RDP macOS NLA** 工作流(`.github/workflows/rdp-macos-nla.yml`),可独立于发版连接真实 Windows 服务器。普通 CI 排除 `RdpNlaInteropTests`,不注入真实服务器凭据。在仓库的 Actions secrets 中配置:
-
-| Secret | 值 |
-| --- | --- |
-| `VELA_RDP_TEST_NLA_TARGET` | DNS 名称或 IPv4 地址加端口,如 `rdp.example.com:3389`;不要带 URI 前缀或 IPv6 字面地址 |
-| `VELA_RDP_TEST_USER` | 允许远程桌面登录的专用 Windows 本地测试账户 |
-| `VELA_RDP_TEST_PASS` | 账户真实密码,不是 Windows Hello PIN |
-
-服务器需强制 NLA,并允许 GitHub 托管 runner 的 TCP 连接。工作流文件进入默认分支后,打开 **Actions → RDP macOS NLA → Run workflow**,选择可信分支,再选择 `macos-latest`(ARM64)或 `macos-15-intel`(x64)。默认 `authentication=both` 在独立测试进程中依次执行 Negotiate 与显式 NTLM,也可只选其中一路。两路仍使用系统 `SslStream` TLS,都要求通过 NLA 并收到桌面帧;第一项失败不会跳过第二项。
-
-常规排障保持 `include_negative_tests=false`。开启后增加「仅 TLS 被拒」与故意使用错误密码的测试,后者可能计入账户锁定次数。各次运行共享并发组,连接有超时限制,整个 job 最长 20 分钟。缺少 secrets、测试被跳过或未产生结果均判失败。测试会实际登录远程桌面,可能断开同一账户已有的会话。
-
-运行摘要列出各项结果;保留 7 天的 `rdp-nla-*` artifact 包含系统/架构、SDK/runtime、提交信息、每项测试日志和 TRX。脚本在保存测试产物前替换已配置的目标、主机、用户名和密码,包括 XML/URI 转义形式;对外分享前仍应检查服务器返回的其他信息。不额外采集凭据、网络抓包或内存转储。测试先建立探测连接学习叶证书 pin,也接受自签证书;这是仅用于测试的首次连接信任,不等于独立核验服务器身份。新增工作流提供 macOS 复现入口,并不代表已修复所报告的 macOS NLA 故障。
-
 ### 摄像头（Windows）
 
 仅 Windows 支持。macOS / Linux 不显示此设置;从 Windows 同步过来的已保存选择会被忽略,不会导致连接失败。
